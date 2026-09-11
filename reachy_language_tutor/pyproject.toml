@@ -58,7 +58,7 @@ reachy-mini-dances-library = false
 
 [tool.setuptools.package-data]
 reachy_talk_data = [ "profiles/**/*.md",]
-reachy_language_tutor = [ "static/**/*", ".env.example",]
+reachy_language_tutor = [ "static/**/*", ".env.example", "learners/*.sql",]
 
 [tool.ruff.lint]
 select = [ "E", "F", "W", "I", "C4", "D",]

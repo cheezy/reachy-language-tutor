@@ -56,3 +56,9 @@ coverage.xml
 # Logs and scratch
 *.log
 tmp/
+
+# Learner database: per-installation runtime state holding personal data.
+# WAL mode writes -wal and -shm sidecars that contain the same data.
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

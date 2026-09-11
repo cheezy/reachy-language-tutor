@@ -1,0 +1,25 @@
+TASK_BASE_REF='3d9681cfaf89cf90bfad61c158f1ad8474c0b2ae'
+TASK_BASE_REF_TRUSTED='1'
+TASK_BASE_REF_OWNER='6640'
+TASK_BASE_REF_6640='3d9681cfaf89cf90bfad61c158f1ad8474c0b2ae'
+TASK_BASE_AT_6640='1789145145'
+TASK_OWNED_6640=''
+TASK_HEAD_REF_6640='3d9681cfaf89cf90bfad61c158f1ad8474c0b2ae'
+TASK_NARROWED_6640='no'
+AGENT_NAME='Claude Opus 5'
+BOARD_ID='285'
+BOARD_NAME='Reachy Language App'
+COLUMN_ID='578'
+COLUMN_NAME='Done'
+TASK_COMPLEXITY='medium'
+TASK_DESCRIPTION='Create the SQLite schema that backs learner profiles and lesson progress, plus seed data so the app is demonstrable before any real learner exists.
+
+Suggested tables: learners (id, display_name, created_at); languages (code, name); lessons (id, language_code, position, title, objective); lesson_results (id, learner_id, lesson_id, outcome, score, recorded_at). Order lessons explicitly so '\''the next lesson'\'' is well defined.
+
+The database file belongs under deps.instance_path, the same per-instance location tools/remember.py already uses for persistent state.'
+TASK_ID='6640'
+TASK_IDENTIFIER='W4'
+TASK_NEEDS_REVIEW='false'
+TASK_PRIORITY='high'
+TASK_STATUS='completed'
+TASK_TITLE='Design the SQLite schema and seed it with sample learner data'

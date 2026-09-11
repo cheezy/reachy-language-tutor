@@ -120,6 +120,13 @@ def run(
         except Exception as e:
             logger.warning("Failed to load startup settings: %s", e)
 
+    try:
+        from reachy_language_tutor.learners.store import ensure_learner_database
+
+        ensure_learner_database(instance_path)
+    except Exception as e:  # never block startup on learner storage
+        logger.warning("Failed to prepare the learner database: %s", e)
+
     logger.info(
         "Configured Hugging Face realtime backend, connection mode: %s",
         get_hf_connection_selection().mode,

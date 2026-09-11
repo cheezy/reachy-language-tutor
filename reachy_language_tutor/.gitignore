@@ -71,3 +71,9 @@ external_content/external_tools/*
 external_content/user_personalities/
 external_content/installed_tool_spaces.json
 external_content/profile_toolsets.json
+
+# Learner database: per-installation runtime state holding personal data.
+# WAL mode writes -wal and -shm sidecars that contain the same data.
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

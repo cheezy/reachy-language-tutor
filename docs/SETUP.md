@@ -361,7 +361,9 @@ Validate any scaffolded app with:
   OpenAI Realtime and Gemini Live.
 - **Secrets go in `reachy_language_tutor/.env`**, which is gitignored. Never commit it. Nothing
   is required there for current milestones — the Hugging Face CLI login covers it.
-- **The database is the source of truth for learner progress**, not the LLM. And tools must
+- **The database is the source of truth for learner progress**, not the LLM. Its schema, the
+  seeded sample data, and how "next lesson" is decided are documented in
+  [`learner-database.md`](learner-database.md). And tools must
   take the learner's identity from app state, never from a tool argument, so nobody can talk
   their way into someone else's profile. See `../CLAUDE.md`.
 - **Keep on-robot work light.** The deployment target is the Wireless model, whose onboard
@@ -369,23 +371,22 @@ Validate any scaffolded app with:
 
 ---
 
-## Repository layout (unresolved)
-
-Worth flagging to anyone joining: the project is **not yet in a usable repository**.
+## Repository layout
 
 ```
-learn_language/              <- not a git repository
-├── CLAUDE.md
-├── agents.local.md
-├── docs/  SETUP.md, plan.md
-├── scripts/  check-env.sh
-└── reachy_language_tutor/   <- a git repository, zero commits, no remote
+learn_language/              <- the git repository (branch main)
+├── CLAUDE.md                architecture decisions
+├── .gitignore
+├── docs/                    plan.md, SETUP.md, learner-database.md
+├── scripts/                 check-env.sh
+└── reachy_language_tutor/   the app; also the published Hugging Face Space
 ```
 
-Everything a developer needs is spread across both levels, but only the inner directory is
-under version control — and it has no commits and nowhere to push. **Step 3 of this document
-cannot actually be followed until that is resolved.**
+The project, not the app, is the repository root. The app directory doubles as the
+published Space, so anything placed inside it ships to every robot — planning notes and
+developer tooling stay above it. Publishing does not require the app to be its own
+repository: the app assistant falls back to a Hugging Face API folder upload.
 
-The likely fix is to make `learn_language/` itself the repository, with the app as a
-subdirectory, so that `CLAUDE.md`, `docs/`, `scripts/` and the app travel together. That is a
-decision for the project owner, not something to change unilaterally.
+There is no remote yet. That is why `.stride.md`'s `before_doing` hook does not pull and
+its `after_goal` hook does not publish — both would fail and block. Add those commands
+once a remote exists.
