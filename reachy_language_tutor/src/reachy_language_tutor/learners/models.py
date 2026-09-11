@@ -23,6 +23,7 @@ RECORD_REASONS: tuple[str, ...] = (
     "unknown_lesson",
     "invalid_outcome",
     "invalid_score",
+    "invalid_recorded_at",
     "rejected_by_database",
     "storage_unavailable",
 )

@@ -371,6 +371,226 @@ def test_record_result_rejects_a_non_integer_score(instance: Path, score: object
     assert _count_results(instance) == before
 
 
+@pytest.mark.parametrize(
+    "recorded_at",
+    [
+        "yesterday",
+        "1700000000000",  # coerced and stored, before this check
+        "00042",  # likewise
+        " 42",  # likewise, leading space and all
+        "1e3",  # likewise, as 1000
+        3.0,  # likewise, as 3 -- and a JSON number often arrives as a float
+        3.5,
+        True,
+        False,
+        [],
+        {"a": 1},
+        (1,),
+    ],
+)
+def test_record_result_rejects_a_non_integer_recorded_at(instance: Path, recorded_at: object) -> None:
+    """A timestamp of any type must land on a caller-error code, never a storage one.
+
+    The task framed this as a bad value coming back as storage_unavailable. Measuring
+    it showed something worse, because a STRICT column is not the type gate it looks
+    like: SQLite coerces any TEXT or REAL that converts losslessly, so "1700000000000",
+    "00042", " 42", "1e3", 3.0 and True were all silently ACCEPTED and written. Only
+    a lossy float reached rejected_by_database and only an unbindable type reached
+    storage_unavailable.
+
+    So the defect had two halves. The misleading code is the smaller one -- though it
+    still matters, because an operator who learns to ignore storage_unavailable will
+    ignore a real storage failure too. The larger half is the rows that looked
+    legitimate for ever.
+    """
+    before = _count_results(instance)
+    outcome = store.record_result(
+        "sample-learner", "es-01-greetings", "partial", recorded_at=recorded_at, instance_path=instance
+    )
+
+    assert outcome.recorded is False
+    assert outcome.reason == "invalid_recorded_at"
+    assert _count_results(instance) == before, "nothing may be written"
+
+
+def test_a_strict_column_does_not_refuse_what_it_can_coerce(instance: Path) -> None:
+    """Why the Python check is load-bearing rather than belt-and-braces.
+
+    It would be reasonable to assume STRICT made this check redundant. It does not,
+    and the assumption is the reason the gap survived W5: a value only has to convert
+    losslessly to be accepted, so a numeric string and a bool both become integers on
+    the way in. This pins the database behaviour the check exists to cover, so that if
+    a future SQLite tightens it, the reason this code is here is still on the record.
+    """
+    connection = store.connect(instance)
+    try:
+        connection.execute(
+            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("sample-learner", "es-01-greetings", "partial", None, "1700000000000"),
+        )
+        stored = connection.execute(
+            "SELECT recorded_at, typeof(recorded_at) FROM lesson_results WHERE learner_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            ("sample-learner",),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert stored[0] == 1_700_000_000_000
+    assert stored[1] == "integer", "a numeric string is coerced, not refused"
+
+
+def test_a_bool_recorded_at_was_silently_written_before_this_check(instance: Path) -> None:
+    """The worst of the shapes, because it did not fail at all.
+
+    bool is a subclass of int and the column carries no CHECK constraint, so True
+    satisfied SQLite and recorded a real attempt timestamped 1ms after the epoch --
+    a row that looks legitimate for ever. score excludes bool explicitly for the same
+    reason; this is the sibling parameter catching up.
+    """
+    before = _count_results(instance)
+
+    outcome = store.record_result(
+        "sample-learner", "es-01-greetings", "partial", recorded_at=True, instance_path=instance
+    )
+
+    assert outcome.recorded is False
+    assert outcome.reason == "invalid_recorded_at"
+    assert outcome.attempt is None
+    assert _count_results(instance) == before, "a bool must not become a timestamp of 1"
+
+
+@pytest.mark.parametrize("recorded_at", [0, -1, 1, 1_700_000_000_000, 10**18, 2**63 - 1, -(2**63)])
+def test_record_result_accepts_any_whole_number_of_milliseconds(instance: Path, recorded_at: int) -> None:
+    """The representable range is pinned at both ends; no date judgement is made.
+
+    Two different rules, and this test is where the difference shows. The 64-bit bound
+    IS checked, and 2**63-1 and -(2**63) here are its boundaries -- not a policy but
+    the column's physical extent, without which the insert raises rather than returns.
+
+    A SEMANTIC range is deliberately absent, which is why 0 and -1 are accepted. A
+    "is this a plausible date" rule invented in Python would live in one place while
+    score's lives in two, and would be invisible to the direct-SQL writers this very
+    test file uses. If one is ever wanted it belongs beside score's CHECK.
+    """
+    outcome = store.record_result(
+        "sample-learner", "es-01-greetings", "partial", recorded_at=recorded_at, instance_path=instance
+    )
+
+    assert outcome.recorded is True
+    assert outcome.attempt is not None
+    assert outcome.attempt.recorded_at == recorded_at
+
+
+@pytest.mark.parametrize("recorded_at", [2**63, -(2**63) - 1, 10**19, 10**30])
+def test_an_integer_too_large_for_the_column_is_refused_rather_than_raised(
+    instance: Path, recorded_at: int
+) -> None:
+    """The one shape that got past the type check and then ended the turn.
+
+    An int satisfies isinstance, so it reached the insert -- where sqlite3 raises
+    OverflowError while BINDING, before the database sees the statement. OverflowError
+    is neither sqlite3.Error nor ValueError, so no except clause caught it and it
+    travelled up through the conversation loop. That is the exact failure record_result
+    exists to prevent, and it survived the first version of this fix.
+
+    This is representability, not judgement about the date: -(2**63) and 2**63-1 are
+    both accepted by the test above.
+    """
+    before = _count_results(instance)
+
+    outcome = store.record_result(
+        "sample-learner", "es-01-greetings", "partial", recorded_at=recorded_at, instance_path=instance
+    )
+
+    assert outcome.recorded is False
+    assert outcome.reason == "invalid_recorded_at"
+    assert _count_results(instance) == before
+
+
+def test_an_explicitly_timestamped_attempt_reads_back_through_get_progress(instance: Path) -> None:
+    """The valid path end to end, so the new refusal cannot have narrowed it."""
+    assert store.record_result(
+        "sample-learner", "es-01-greetings", "completed", recorded_at=1_700_000_000_000, instance_path=instance
+    ).recorded is True
+
+    progress = store.get_progress("sample-learner", "es", instance_path=instance)
+
+    assert progress is not None
+    assert 1_700_000_000_000 in [attempt.recorded_at for attempt in progress.attempts]
+
+
+def test_record_result_never_raises_whatever_the_timestamp(instance: Path) -> None:
+    """The contract the whole function exists for, stated as a test rather than a docstring.
+
+    The caller is a conversation tool, so an exception here ends the turn. object() is
+    in the list on purpose: it is not JSON, but neither was the assumption that only
+    JSON arrives.
+    """
+    for recorded_at in ["x", 3.5, True, [], {}, (), object(), float("nan"), b"1700000000000", 2**63, 10**30]:
+        outcome = store.record_result(
+            "sample-learner", "es-01-greetings", "partial", recorded_at=recorded_at, instance_path=instance
+        )
+        assert outcome.recorded is False, recorded_at
+        assert outcome.reason in learners.RECORD_REASONS, recorded_at
+
+
+def test_every_reason_the_store_can_return_is_in_the_published_vocabulary() -> None:
+    """A code a caller cannot anticipate is not an interface.
+
+    RECORD_REASONS is what a caller switches on. A reason returned from the module but
+    missing from it would reach the tutor as an unknown string, and the branch that
+    turns codes into speech would have nothing to say.
+    """
+    source = Path(store.__file__).resolve().read_text(encoding="utf-8")
+
+    returned: set[str] = set()
+    unreadable: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
+        if name != "RecordResultOutcome":
+            continue
+        given = [keyword.value for keyword in node.keywords if keyword.arg == "reason"]
+        # A positional reason, or one that is not a literal, is a code this scan cannot
+        # read -- and a scan that quietly skips what it cannot read proves only that the
+        # parts it could read were fine.
+        if len(node.args) > 1:
+            unreadable.append(f"line {node.lineno}: reason passed positionally")
+        for value in given:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                returned.add(value.value)
+            else:
+                unreadable.append(f"line {node.lineno}: reason is {type(value).__name__}, not a literal")
+
+    assert returned, "the scan found no reason codes at all, so it is proving nothing"
+    assert not unreadable, unreadable
+    assert returned <= set(learners.RECORD_REASONS), sorted(returned - set(learners.RECORD_REASONS))
+
+
+def test_every_published_reason_is_documented() -> None:
+    """The other half of the same contract, and the half a reader depends on.
+
+    docs/learner-database.md's table is where a code stops being a bare string and
+    starts meaning something. Adding a code to RECORD_REASONS without a row there
+    leaves a caller able to switch on it and unable to find out what it means.
+    """
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "learner-database.md").read_text(encoding="utf-8")
+
+    # The reason table only. Scanning the whole file would count the schema tables too,
+    # and those carry rows named `outcome`, `score` and `learner_id` -- so a future
+    # reason code sharing a column name would read as documented by a row that says
+    # nothing about reason codes.
+    heading = doc.index("| `reason` | Cause |")
+    table = doc[heading : doc.index("\n\n", heading)]
+    documented = set(re.findall(r"^\| `([a-z_]+)` \|", table, re.MULTILINE))
+
+    assert "outcome" not in documented, "the slice leaked into a schema table"
+    assert set(learners.RECORD_REASONS) <= documented, sorted(set(learners.RECORD_REASONS) - documented)
+
+
 def test_store_is_available_separates_absence_from_breakage(tmp_path: Path, instance: Path) -> None:
     """Both readers answer None twice over, so a caller needs this to tell which it is.
 
@@ -1013,7 +1233,6 @@ def test_no_inline_query_touches_personal_data_unscoped() -> None:
     )
 
 
-
 # Each pair below is the same statement written unscoped and scoped, in a spelling the
 # old guard could not see at all. They are the demonstration the acceptance criteria
 # ask for: a guard that has never been shown to fail is trusted without evidence.
@@ -1114,7 +1333,6 @@ def test_a_statement_that_cannot_be_read_is_refused_rather_than_skipped(shape: s
     assert "refused" in offenders[0], offenders
 
 
-
 # Each of these binds a name that a safe module constant already holds. If the binding
 # table misses the second binding, the guard reads the safe spelling and approves the
 # dangerous one -- which is exactly what it did before _module_bindings counted every
@@ -1159,7 +1377,6 @@ def test_a_name_bound_by_an_unreadable_construct_is_refused(shape: str, source: 
 
     assert offenders, f"{shape} was not refused"
     assert "refused" in offenders[0], offenders
-
 
 
 @pytest.mark.parametrize(
@@ -1246,7 +1463,6 @@ def test_a_hole_in_the_where_clause_is_still_allowed() -> None:
     assert unverified_inline_queries(source) == []
 
 
-
 @pytest.mark.parametrize(
     ("shape", "source"),
     [
@@ -1326,7 +1542,6 @@ def test_quoting_the_interpolated_table_does_not_hide_it(shape: str, source: str
     assert offenders and "table name is interpolated" in offenders[0], (shape, offenders)
 
 
-
 def test_a_statement_passed_by_keyword_is_not_silently_skipped() -> None:
     """No positional argument is not the same as no statement.
 
@@ -1337,7 +1552,6 @@ def test_a_statement_passed_by_keyword_is_not_silently_skipped() -> None:
     offenders = unverified_inline_queries("connection.execute(sql=QUERY)")
 
     assert offenders and "by keyword" in offenders[0], offenders
-
 
 
 @pytest.mark.parametrize(
@@ -1456,7 +1670,6 @@ def test_reading_through_the_scoping_helper_stops_if_its_name_is_rebound() -> No
     assert offenders and "bound more than once" in offenders[0], offenders
 
 
-
 @pytest.mark.parametrize(
     ("shape", "source"),
     [
@@ -1510,7 +1723,6 @@ def test_a_real_marker_outside_a_comment_still_counts() -> None:
     scoped = 'connection.execute("SELECT outcome FROM lesson_results WHERE learner_id = ? -- by learner")'
 
     assert unverified_inline_queries(scoped) == []
-
 
 
 @pytest.mark.parametrize(
@@ -1584,7 +1796,6 @@ def test_every_statement_in_the_module_is_read_rather_than_skipped() -> None:
     assert unreadable == ["_schema_sql()"], (
         f"the bundled DDL should be the only statement the guard cannot read; got {unreadable}"
     )
-
 
 
 def test_the_coverage_pin_looks_through_the_same_eyes_as_the_guard() -> None:

@@ -322,6 +322,7 @@ so every failure comes back as a code:
 |---|---|
 | `invalid_outcome` | Not one of `completed`, `partial`, `skipped`. Case-sensitive — silently lowercasing a guess would record something the model did not mean. |
 | `invalid_score` | A score outside 0–100, or one that is not a whole number. Checked by type before it is compared, so a value of any shape lands here rather than raising. |
+| `invalid_recorded_at` | An explicit timestamp that is not a whole number of milliseconds, or one outside the 64-bit range a SQLite `INTEGER` can hold. No judgement is made about the date itself: `0`, a negative value and a far-future value are all accepted, because the schema puts no range on this column. |
 | `unknown_learner` | No such learner. Nothing is written. |
 | `unknown_lesson` | No such lesson. Nothing is written. |
 | `rejected_by_database` | A constraint refused the row — a backstop behind the checks above. |
@@ -331,6 +332,22 @@ Outcomes are validated in Python **and** constrained in the schema. That is defe
 depth, not duplication: the constraint protects against any future writer, while the
 Python check turns a hallucinated outcome into a reason code instead of an exception
 travelling up through the conversation loop.
+
+`recorded_at` is checked in Python for a different reason, worth stating because the
+obvious assumption is wrong: **a `STRICT` column is not a type gate.** SQLite accepts
+any `TEXT` or `REAL` that converts losslessly, so before this check `"1700000000000"`,
+`"00042"`, `" 42"`, `"1e3"`, `3.0` and `True` were all silently coerced to integers and
+written — rows that look legitimate for ever. Only a lossy float (`3.5`) was refused,
+and only an unbindable type (a list, a dict) reached `storage_unavailable`. The caller
+is an LLM tool layer, where a JSON number often arrives as a float and a timestamp
+often arrives as a string, so these are the realistic inputs rather than the exotic
+ones.
+
+The 64-bit bound is a separate matter and is not a style choice. An `int` outside it
+satisfies `isinstance` and then raises `OverflowError` as `sqlite3` *binds* it, before
+the database sees the statement — and `OverflowError` is neither `sqlite3.Error` nor
+`ValueError`, so nothing caught it and it travelled up through the conversation loop.
+`record_result` promises never to raise; that promise needs this bound to be true.
 
 Attempts are append-only. Recording the same lesson twice leaves two rows.
 

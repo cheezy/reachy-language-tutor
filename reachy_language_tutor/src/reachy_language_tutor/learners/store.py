@@ -447,6 +447,11 @@ def utc_now_ms() -> int:
 # underneath them.
 # --------------------------------------------------------------------------------
 
+# What a SQLite INTEGER column can hold. Beyond this the driver raises OverflowError
+# while binding, before the database ever sees the statement.
+_SQLITE_INT_MIN = -(2**63)
+_SQLITE_INT_MAX = 2**63 - 1
+
 _LEARNER_FILTER_MARKERS = ("learner_id = ?", "learners.id = ?")
 
 
@@ -712,6 +717,30 @@ def record_result(
     # score anyone meant.
     if score is not None and (not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 100):
         return RecordResultOutcome(recorded=False, reason="invalid_score")
+    # The same shape as the check above, and for a sharper reason. Unchecked, a str or
+    # a float reached the STRICT column and came back as rejected_by_database, and a
+    # list or dict failed to bind and came back as storage_unavailable -- both of which
+    # tell a caller the robot is broken when it sent nonsense. Worse, True is an int
+    # subclass with no CHECK constraint to stop it, so a bool was RECORDED, silently
+    # timestamping the attempt 1ms after the epoch.
+    #
+    # No SEMANTIC range, deliberately: the schema puts no CHECK on recorded_at the way
+    # it does on score, so a "is this a sensible date" rule invented here would live in
+    # one place while score's lives in two. If one is ever wanted it belongs beside
+    # score's CHECK, where every writer inherits it. So 0, a negative value and a
+    # far-future value are all accepted.
+    #
+    # The 64-bit bound is a different thing and is not optional. It is what the column
+    # can represent at all, and without it an int passes the isinstance check and then
+    # raises OverflowError at bind time -- not sqlite3.Error, not ValueError, so
+    # nothing below catches it and it travels up through the conversation loop. That is
+    # precisely what this function promises never to do.
+    if recorded_at is not None and (
+        not isinstance(recorded_at, int)
+        or isinstance(recorded_at, bool)
+        or not _SQLITE_INT_MIN <= recorded_at <= _SQLITE_INT_MAX
+    ):
+        return RecordResultOutcome(recorded=False, reason="invalid_recorded_at")
 
     when = utc_now_ms() if recorded_at is None else recorded_at
     connection: sqlite3.Connection | None = None
@@ -724,8 +753,12 @@ def record_result(
 
         with connection:
             connection.execute(_INSERT_ATTEMPT_SQL, (learner_id, lesson_id, outcome, score, when))
-    except sqlite3.IntegrityError as exc:
-        # The schema's own constraints, as a backstop to the checks above.
+    except (sqlite3.IntegrityError, OverflowError) as exc:
+        # The schema's own constraints, as a backstop to the checks above. OverflowError
+        # joins them because it is the one refusal that comes from the driver rather
+        # than the database and is in neither sqlite3.Error nor ValueError: the check
+        # above should mean it never fires, and if it ever does, a reason code is still
+        # better than an exception ending the turn. Neither message carries the value.
         logger.warning("The learner database refused an attempt: %s", exc)
         return RecordResultOutcome(recorded=False, reason="rejected_by_database")
     except (sqlite3.Error, OSError, ValueError) as exc:
