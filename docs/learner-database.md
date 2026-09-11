@@ -204,17 +204,21 @@ like the sample learner practised at install time.
 
 ## Versioning and re-seeding
 
-Two independent markers, both checked before any work:
+Three markers, and they are not read at the same time. The first two are gates,
+checked before any work on every call. The third is read only once a gate has already
+opened — inside the re-seed itself — so it costs nothing on the ordinary path.
 
-| Marker | Stored in | Governs |
-|---|---|---|
-| Schema version | `PRAGMA user_version` | Whether the DDL needs applying |
-| Seed version | `schema_meta.seed_version` | Whether seed data needs writing |
-| Seeded learners | `schema_meta.seeded_learner_ids` | Which sample learners must never be seeded again |
+| Marker | Stored in | Governs | Read |
+|---|---|---|---|
+| Schema version | `PRAGMA user_version` | Whether the DDL needs applying | Every call |
+| Seed version | `schema_meta.seed_version` | Whether seed data needs writing | Every call |
+| Seeded learners | `schema_meta.seeded_learner_ids` | Which sample learners must never be seeded again | Only when re-seeding |
 
-Once both are current, startup costs a connection open, a few pragmas, one integer
-header read, and one indexed single-row lookup — no DDL parsing and no writes. That
-matters: the deployment target is the Wireless model, whose onboard computer is weak.
+Once the two gates are current, startup costs a connection open, a few pragmas, one
+integer header read, and one indexed single-row lookup — no DDL parsing and no writes.
+That matters: the deployment target is the Wireless model, whose onboard computer is
+weak. It is also why the third marker is read where it is: moving it onto the fast path
+would add a lookup to every start for a value only the re-seed uses.
 
 Re-seeding is safe because the two kinds of row are treated differently:
 
@@ -293,7 +297,13 @@ Everything above describes the data. This is how the application reaches it.
 **Import from the package, never from the storage module:**
 
 ```python
-from reachy_language_tutor.learners import get_profile, get_progress, record_result
+from reachy_language_tutor.learners import (
+    get_profile,
+    get_practised_languages,
+    get_progress,
+    record_result,
+    store_is_available,
+)
 ```
 
 What that package exports is the whole vocabulary a caller needs. It deliberately does
@@ -302,23 +312,47 @@ are SQLite's business, and a hosted backend would have no equivalent.
 
 | Function | Returns | Meaning of the empty answer |
 |---|---|---|
-| `get_profile(learner_id, *, instance_path=None)` | `LearnerProfile \| None` | `None` = no such learner **or** the store is unreadable |
-| `get_progress(learner_id, language_code, *, instance_path=None)` | `LanguageProgress \| None` | `None` = that language is not taught **or** the store is unreadable |
+| `get_profile(learner_id, *, instance_path=None)` | `LearnerProfile \| None` | `None` = no such learner, **or** the store is unreadable, **or** the learner id was refused |
+| `get_practised_languages(learner_id, *, instance_path=None)` | `tuple[PractisedLanguage, ...]` | `()` = nothing practised, **or** every attempt was `skipped`, **or** the store is unreadable, **or** the learner id was refused |
+| `get_progress(learner_id, language_code, *, instance_path=None)` | `LanguageProgress \| None` | `None` = that language is not taught, **or** the store is unreadable, **or** either argument was refused |
 | `record_result(learner_id, lesson_id, outcome, *, score=None, recorded_at=None, instance_path=None)` | `RecordResultOutcome` | never raises; see the reason codes below |
+| `store_is_available(instance_path=None)` | `bool` | `False` = the store could not be read, **or** `instance_path` itself was refused. It binds no caller value into SQL, so it is **not** a test of whether a *learner id or language code* was refused |
 
-`learner_id` comes first on every one of them, and `instance_path` is keyword-only and
-last, so it can never be passed by accident into the language slot.
+Those "or"s are why the next section exists: only the log tells them apart — and not
+even the log separates a learner who has practised nothing from one who has only ever
+declined. Declining is not practice, so a language they have only skipped is absent from
+`get_practised_languages`, silently and by design, which is what lets the tutor offer it
+as new.
+
+On every function that takes a learner, `learner_id` comes first and `instance_path` is
+keyword-only and last, so it can never be passed by accident into the language slot.
+`store_is_available` is the exception and takes no learner at all: its `instance_path`
+is its only parameter and may be passed positionally.
 
 ### Absence is not the same as breakage
 
-Both readers return `None` for two different reasons: the thing genuinely does not
-exist, or the store could not be read. A storage failure is logged as a warning, but a
-caller that treats `None` as "does not exist" will tell someone "I don't teach German"
-when the database is simply broken — a confident falsehood.
+`None` carries three meanings, not two: the thing genuinely does not exist, the store
+could not be read, or the reader refused the argument shape it was given. A caller that
+treats `None` as "does not exist" will tell someone "I don't teach German" when the
+database is broken, or when the tool layer sent a language code the reader refused — a
+confident falsehood either way.
 
-`store_is_available(instance_path)` is how a caller tells the two apart without either
-reader having to raise. `record_result` does not need it: it already reports
-`storage_unavailable` explicitly.
+**`store_is_available(instance_path)` is deliberately NOT the test for this.** It binds
+no caller value, so it answers `True` when the argument was the problem, and a caller
+reading that `True` as confirmation gets exactly the falsehood above. Use it for what it
+is: a probe of whether the store itself can be read.
+
+The rule that separates the three is **silence**. A genuine absence logs nothing; every
+other empty answer — `None`, or `()` from `get_practised_languages` — logs a warning
+first.
+
+The prefixes are per reader, not global. A refused argument is named the same way
+everywhere: `Could not read a learner id`, and from `get_progress` also `Could not read
+a language code`. A failed lookup is named by the reader it failed in — `Could not read
+a learner profile`, `Could not read a learner's practised languages`, or `Could not read
+learner progress` — so a caller watching only the last of those misses breakage in the
+other two. `record_result` needs none of this: it already reports `storage_unavailable`
+explicitly.
 
 ### The three empty answers, which are not the same thing
 
@@ -328,9 +362,14 @@ always-populated one:
 | Situation | Result | What the tutor should say |
 |---|---|---|
 | Language taught, never practised | populated; `completed` empty, `next_lesson` is lesson 1 | "You haven't started French — shall we?" |
-| Language not taught here | `None` | "I don't teach German yet." |
+| Language not taught here | `None`, **and nothing logged** | "I don't teach German yet." |
 | Language taught, no lessons written | populated; `remaining` empty, `next_lesson` is `None` | "I teach it, but I have nothing prepared." |
 | Every lesson completed | `remaining` empty, `completed` full | "You've finished Spanish." |
+
+The "nothing logged" in the second row is load-bearing, not decoration: `None` also
+comes back when the store is unreadable or an argument was refused, and saying "I don't
+teach German yet" on either of those is the confident falsehood the section above is
+about. Only silence distinguishes them.
 
 An **unknown learner** gets a populated fresh start rather than an error — the lesson
 catalog is not personal data, so there is nothing to withhold. Recording a result is
@@ -345,7 +384,7 @@ so every failure comes back as a code:
 | `reason` | Cause |
 |---|---|
 | `invalid_outcome` | Not one of `completed`, `partial`, `skipped`. Case-sensitive — silently lowercasing a guess would record something the model did not mean. |
-| `invalid_score` | A score outside 0–100, or one that is not a whole number. Checked by type before it is compared, so a value of any shape lands here rather than raising. |
+| `invalid_score` | A score outside 0–100, or one that is not a whole number. Checked by type before it is compared, so a value of any shape lands here rather than raising. A `bool` lands here too, deliberately: Python's `bool` is a subclass of `int`, so without an explicit exclusion `True` would be accepted as a score of 1. |
 | `invalid_recorded_at` | An explicit timestamp that is not a whole number of milliseconds, or one outside the 64-bit range a SQLite `INTEGER` can hold. No judgement is made about the date itself: `0`, a negative value and a far-future value are all accepted, because the schema puts no range on this column. |
 | `unknown_learner` | No such learner. Nothing is written. |
 | `unknown_lesson` | No such lesson. Nothing is written. |
@@ -361,7 +400,9 @@ travelling up through the conversation loop.
 obvious assumption is wrong: **a `STRICT` column is not a type gate.** SQLite accepts
 any `TEXT` or `REAL` that converts losslessly, so before this check `"1700000000000"`,
 `"00042"`, `" 42"`, `"1e3"`, `3.0` and `True` were all silently coerced to integers and
-written — rows that look legitimate for ever. Only a lossy float (`3.5`) was refused,
+written — rows that look legitimate for ever. What it does refuse is anything that will
+not convert: a lossy float (`3.5`), and text that is not a number at all (`"yesterday"`,
+`"42abc"`, `""`). That is the trap — the refusals are the cases you would think to test,
 and only an unbindable type (a list, a dict) reached `storage_unavailable`. The caller
 is an LLM tool layer, where a JSON number often arrives as a float and a timestamp
 often arrives as a string, so these are the realistic inputs rather than the exotic
@@ -378,9 +419,59 @@ Attempts are append-only. Recording the same lesson twice leaves two rows.
 ### Learner scoping
 
 Every query that touches personal data filters by learner id, and every write names it
-as its first column. This is enforced at import time rather than by review: a statement
-that is not learner-scoped raises as the module loads, so the whole suite fails at once
-instead of one household member's data quietly reaching another.
+as its first column. Two different things enforce that, and they cover different
+statements — which matters, because only one of them is an import-time guarantee.
+
+Every module-level statement that touches personal data is passed through
+`_learner_scoped`, which refuses one that names no learner filter. Those really do fail
+as the module loads, so the whole suite fails at once instead of one household member's
+data quietly reaching another. The catalog statements are deliberately not wrapped —
+see the paragraph below — so "every module-level statement" would be the wrong reading.
+
+A statement written inline inside a function body can still be wrapped — `_learner_scoped`
+refuses it just the same, at call time. What inline loses is the *timing*: nothing makes
+the wrapping happen, so an author who simply does not call it gets no refusal at all.
+Those statements are covered by a test that reads this module's own source and reports
+any `execute()` argument it cannot prove scoped — a test rather than an import-time
+guarantee, so it catches them when the suite runs rather than when the module loads.
+
+**What both halves do catch is the accident they exist for**: a statement with no
+learner filter at all. `SELECT outcome FROM lesson_results` is refused by
+`_learner_scoped` at import and reported by the test. Every hole below needs an author
+to have written a filter and then widened or neutered it, which is a more deliberate
+act than the omission.
+
+Neither half is a proof, though, and the holes are worth knowing by name. The first one
+is the one this document is read for.
+
+**Both halves read `store.py` and nothing else.** `_learner_scoped` is only ever applied
+to this module's own statements, and the test points its scan at `store.__file__`. So a query
+touching personal data written in a tool module, a route, or anywhere else is caught by
+review and by nothing mechanical — the opening sentence of this section is a statement
+about the queries in this module, not a property the application enforces wherever you
+put one. Put the query here, or accept that nothing will stop you.
+
+Both consult the same substring rule, which looks for a learner filter and has no
+notion of *which* rows that filter constrains — a self-join, an `OR`, or the second leg
+of a `UNION` satisfies it while reading everyone. That is tracked as **D11**.
+
+A runtime value is refused when the guard cannot reconstruct the statement's text from
+the source — a bare name, a call and a concatenation with a name are all reported, and
+so is an interpolated table name. What it CAN reconstruct, it then judges by the
+substring rule above, and that is where the hole is: an f-string, a `%`-format or a
+`.format()` with a literal table and a literal marker is reconstructed and then passed,
+so `f"... WHERE learner_id = ? OR {extra}"` stays green — a cross-learner read and an
+injection point in one.
+
+They also disagree, in **both** directions, so neither is uniformly the stronger. The
+test strips SQL comments before consulting the rule and `_learner_scoped` sees the raw
+literal, so `-- learner_id = ?` in a trailing comment satisfies the import-time guard
+while the test flags it — tracked as **D12**. In the other direction the test exempts a
+plain learner-creating `INSERT` before consulting the rule at all, which
+`_learner_scoped` refuses.
+
+Read this section as "two overlapping nets that catch the omission and miss the
+widening", not as "this cannot happen" — and not as "this does not help".
 
 The lesson catalog and the language list are deliberately **not** learner-scoped. They
 are shared reference data, and treating them as personal would be a false positive.
@@ -400,11 +491,11 @@ thing that lets a connection escape into another thread.
 
 | Stays | Goes |
 |---|---|
-| The three functions' signatures | The SQLite bodies behind them |
+| The five exported functions' signatures | The SQLite bodies behind them |
 | Every type in `models.py` | `connect`, `ensure_learner_database`, the seed constants |
 | The reason-code vocabulary | The local database file |
 
-A hosted backend implements the same three functions over HTTPS and returns the same
-types built from JSON. `storage_unavailable` already exists for the failure mode the
+A hosted backend implements the same five exported functions over HTTPS and returns the
+same types built from JSON. `storage_unavailable` already exists for the failure mode the
 network introduces, so callers written today need no change when a request times out.
 Callers that import from the package rather than the storage module do not move at all.

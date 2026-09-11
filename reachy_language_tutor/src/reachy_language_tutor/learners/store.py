@@ -7,8 +7,8 @@ here that is not scoped to one learner, and a test AST-scans this module's own s
 for an inline query that skipped the guard. A query written elsewhere is caught by
 review, not by a check, so do not read this paragraph as a safety net.
 
-**The interface** is get_profile, get_progress and record_result, plus the types in
-models.py. A hosted backend implements exactly these, and callers do not change.
+**The interface** is get_profile, get_practised_languages, get_progress, record_result
+and store_is_available, plus the types in models.py. A hosted backend implements exactly these, and callers do not change.
 Import them from the package (`reachy_language_tutor.learners`), never from here.
 
 **SQLite implementation detail**, which a hosted backend has no analogue for and
