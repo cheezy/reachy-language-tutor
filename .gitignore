@@ -8,8 +8,12 @@ agents.local.md
 # own line; .gitignore has no trailing-comment syntax.
 .stride_auth.md
 
-# Stride runtime cache (last API response, hook state)
+# Stride runtime state. Per-run hook artifacts, never versioned.
 .stride/
+.stride-changed-files.json
+.stride-diff-upload-state
+.stride-dirty-baseline
+.stride-env-cache
 .env
 .env.*
 !.env.example
