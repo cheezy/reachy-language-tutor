@@ -11,12 +11,20 @@ Two sinks carry the same payload, and only one of them was obvious:
     is written whether or not --debug is on -- the worse of the two.
 Both are covered here. A test that exercises only the tool would pass while
 either leaked, which is exactly how this went unnoticed.
+
+Conversation transcript reaches the same console sink by its own route, and D9
+decided what happens to it: described at INFO, spoken at DEBUG. Those tests are
+at the bottom of this file, beside the tool-result ones, because the two share a
+single branch and a change to either can break the other.
 """
 
+import ast
+import re
 import json
 import asyncio
 import logging
 from typing import Any
+from pathlib import Path
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock
 
@@ -530,16 +538,21 @@ def test_the_console_prefers_the_log_safe_rendering(caplog: pytest.LogCaptureFix
     assert "display_name" in logged
 
 
-def test_the_console_still_logs_ordinary_transcript(caplog: pytest.LogCaptureFixture) -> None:
-    """Only tool results are redacted; the conversation transcript is untouched.
+def _log_one_at_debug(message: dict[str, Any], caplog: pytest.LogCaptureFixture) -> str:
+    """The same real branch, read by an operator who passed --debug.
 
-    Redacting it too would destroy the console's purpose. That transcript carries a
-    spoken name by another route is real, pre-existing, and tracked separately -- it
-    is not something this seam should silently paper over.
+    Separate from _log_one because the whole D9 decision is a difference between
+    two levels: a helper that captured both would be unable to express it.
     """
-    logged = _log_one({"role": "user", "content": "I would like to practise Spanish"}, caplog)
+    with caplog.at_level(logging.DEBUG):
+        for msg in AdditionalOutputs(message).args:
+            log_handler_message(msg)
+    return " ".join(record.getMessage() for record in caplog.records)
 
-    assert "I would like to practise Spanish" in logged
+
+def _transcript(role: str, content: str) -> dict[str, Any]:
+    """A queue message exactly as the four transcript producers build one: no kind."""
+    return {"role": role, "content": content}
 
 
 def test_a_tool_result_with_no_rendering_is_still_redacted(caplog: pytest.LogCaptureFixture) -> None:
@@ -562,3 +575,490 @@ def test_a_tool_result_with_no_rendering_is_still_redacted(caplog: pytest.LogCap
                 assert "display_name" in logged, (kind, broken)
             else:
                 assert "display_name" not in logged, (kind, broken)
+
+
+# --- Sink 2, transcript: the D9 decision --------------------------------------------
+#
+# D3 closed the tool-result routes and left this one open on purpose. D9 chose
+# DEMOTE over accept and over redact, and these tests are what makes that a
+# decision rather than a preference: each one fails if the split is reversed,
+# and between them they pin both halves of it.
+
+
+# The recipe docs/SETUP.md gives an operator to answer "did it hear me at all".
+# It reads a count of ZERO as a deaf microphone, so an INFO line that stopped
+# matching would not be a quiet regression -- it would print a false diagnosis in
+# the one place a stuck user is told to trust.
+DOCUMENTED_SPEECH_EVENT_GREP = re.compile(r"role=user|transcript|speech_started", re.IGNORECASE)
+
+SPOKEN_GREETING = f"Hello {LEARNER_NAME}, ready for Spanish?"
+
+
+def test_a_spoken_name_does_not_reach_the_log_that_is_written_anyway(caplog: pytest.LogCaptureFixture) -> None:
+    """The defect, stated as a test.
+
+    get_profile exists so Reachy can greet the learner by name, so the sentence
+    right after it returns carries that name -- as transcript, which D3 did not
+    touch. INFO is written whether or not --debug is on, in about 20 unrelated
+    homes, so this is the line that actually leaks.
+    """
+    logged = _log_one(_transcript("assistant", SPOKEN_GREETING), caplog)
+
+    assert LEARNER_NAME not in logged
+    assert "Spanish" not in logged
+
+
+def test_info_still_says_who_spoke_and_how_much(caplog: pytest.LogCaptureFixture) -> None:
+    """Demoted, not deleted: an operator can still see that a turn happened.
+
+    This is the half that separates D9's choice from blanket redaction. Without
+    it the log would say nothing at all about the conversation, and a robot that
+    was talking would look identical to one that was not.
+    """
+    logged = _log_one(_transcript("user", "I would like to practise Spanish"), caplog)
+
+    assert "role=user" in logged
+    # The house rendering for a string, the same one describe_for_log gives a tool
+    # result -- shape, not content.
+    assert "str(len=32)" in logged
+
+
+def test_the_documented_deaf_microphone_grep_still_counts_a_user_turn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """docs/SETUP.md tells a stuck user to trust this count. Keep it truthful.
+
+    Pinned as the regex itself rather than as a description of it, because the
+    failure being guarded is a rewording of the INFO line that keeps a length and
+    silently drops the token the doc greps for.
+    """
+    logged = _log_one(_transcript("user", "I would like to practise Spanish"), caplog)
+
+    assert DOCUMENTED_SPEECH_EVENT_GREP.search(logged) is not None
+
+
+def test_the_words_are_there_for_an_operator_who_asks_for_them(caplog: pytest.LogCaptureFixture) -> None:
+    """--debug is the opt-in. Someone debugging their own robot still sees the words.
+
+    The console UI never depended on this line -- it is fed by
+    ConsoleApp._dispatch_transcript over JSON-RPC -- but a log with no way back to
+    the conversation would make a real support problem unsolvable.
+    """
+    logged = _log_one_at_debug(_transcript("assistant", SPOKEN_GREETING), caplog)
+
+    assert SPOKEN_GREETING in logged
+
+
+def test_every_transcript_producer_is_treated_the_same(caplog: pytest.LogCaptureFixture) -> None:
+    """All four non-tool-result producers, including the two easy ones to forget.
+
+    huggingface_realtime queues four untagged messages: a debounced partial, a
+    final user turn, an assistant turn, and an error rendered as assistant speech.
+    A policy that covered the two obvious roles would leave a partial transcript
+    -- which carries the same words -- logging in cleartext.
+    """
+    turns = {
+        "user_partial": "I would like to practise Spa",
+        "user": f"My name is {LEARNER_NAME}",
+        "assistant": SPOKEN_GREETING,
+        "assistant_error": f"[error] session failed for {LEARNER_NAME}",
+    }
+
+    for role, text in turns.items():
+        caplog.clear()
+        logged = _log_one(_transcript(role.removesuffix("_error"), text), caplog)
+        assert LEARNER_NAME not in logged, role
+        assert "Spa" not in logged, role
+        assert f"content=str(len={len(text)})" in logged, role
+
+
+def test_a_long_turn_is_measured_rather_than_truncated_into_info(caplog: pytest.LogCaptureFixture) -> None:
+    """The 500-character cut belongs to the DEBUG line now.
+
+    Truncating at INFO would have been the tempting half-measure: it bounds the
+    log's size and leaks the first 500 characters, which is where a greeting puts
+    the name.
+    """
+    long_turn = f"{LEARNER_NAME} said: " + "hola " * 400
+
+    logged = _log_one(_transcript("assistant", long_turn), caplog)
+
+    assert LEARNER_NAME not in logged
+    assert f"content=str(len={len(long_turn)})" in logged
+
+    caplog.clear()
+    debugged = _log_one_at_debug(_transcript("assistant", long_turn), caplog)
+    assert "…" in debugged
+
+
+def test_the_policy_is_not_name_detection(caplog: pytest.LogCaptureFixture) -> None:
+    """A turn with no name in it is demoted too, and that is deliberate.
+
+    Nothing at this layer can tell a sentence containing a household member's name
+    from one that does not, and a rule that tried would fail open on the first
+    spelling it did not expect. The KIND decides, exactly as it does for tool
+    results one branch above.
+    """
+    logged = _log_one(_transcript("user", "yes please"), caplog)
+
+    assert "yes please" not in logged
+    assert "content=str(len=10)" in logged
+
+
+def test_tool_results_are_still_redacted_whatever_happened_to_transcript(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The two branches share one function; D9 must not have loosened D3's.
+
+    Worth stating separately because the transcript change edits the fall-through
+    that a tool result reaches when its rendering is missing.
+    """
+    logged = _log_one_at_debug(
+        {
+            "role": "assistant",
+            "content": json.dumps(PROFILE_RESULT),
+            "kind": "tool_result",
+            "log_safe": describe_for_log(PROFILE_RESULT, trust_keys=True),
+        },
+        caplog,
+    )
+
+    assert LEARNER_NAME not in logged
+    assert "display_name" in logged
+
+
+def test_a_greeting_turn_leaks_nothing_end_to_end(caplog: pytest.LogCaptureFixture) -> None:
+    """The real sequence: get_profile returns, then Reachy says the name out loud.
+
+    Each half was already covered -- the tool result by D3, the transcript above --
+    and neither proves the pair. This is the turn the defect was actually about.
+    """
+    with caplog.at_level(logging.INFO):
+        for message in (
+            {
+                "role": "assistant",
+                "content": json.dumps(PROFILE_RESULT),
+                "kind": "tool_result",
+                "log_safe": describe_for_log(PROFILE_RESULT, trust_keys=True),
+            },
+            _transcript("assistant", SPOKEN_GREETING),
+        ):
+            for msg in AdditionalOutputs(message).args:
+                log_handler_message(msg)
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+
+    assert LEARNER_NAME not in logged
+    # Still diagnosable: the tool came back with our schema, and a turn was spoken.
+    assert "display_name" in logged
+    assert "role=assistant" in logged
+
+
+# --- The producers, read from the source rather than from memory ----------------------
+
+
+_ABOVE_DEBUG = frozenset({"info", "warning", "error", "critical", "exception"})
+
+
+def _realtime_tree() -> ast.Module:
+    """Parse the realtime handler. The queue producers are inline in its event loop.
+
+    They are reached only by driving a live websocket session, so a behavioural test
+    would either mock the thing under test or cover nothing. Reading the source is
+    the honest way to assert how many there are.
+    """
+    return ast.parse(Path(hf_mod.__file__).read_text(encoding="utf-8"))
+
+
+def _queued_message_shapes() -> list[tuple[int, Any]]:
+    """Every ``output_queue.put(...)`` in the handler, paired with what it queues."""
+    shapes: list[tuple[int, Any]] = []
+    for node in ast.walk(_realtime_tree()):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "put"):
+            continue
+        if not (isinstance(func.value, ast.Attribute) and func.value.attr == "output_queue"):
+            continue
+        shapes.append((node.lineno, node.args[0] if node.args else None))
+    return shapes
+
+
+def _is_rendered(arg: ast.AST) -> bool:
+    """True when this argument is a call to the log-safe rendering seam."""
+    return isinstance(arg, ast.Call) and getattr(arg.func, "id", None) in _RENDERERS
+
+
+def _identifiers_in(node: ast.AST) -> list[str]:
+    """Every name and attribute reachable from a node -- what a log call interpolates."""
+    found: list[str] = []
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name):
+            found.append(child.id)
+        elif isinstance(child, ast.Attribute):
+            found.append(child.attr)
+    return found
+
+
+def test_exactly_four_producers_queue_untagged_transcript() -> None:
+    """The count in D9's acceptance criteria, checked against the code.
+
+    A fifth producer is not a bug by itself -- everything on this queue reaches
+    log_handler_message, so a new transcript message is demoted like the rest. What
+    this catches is the KEY SET changing underneath the policy: a transcript message
+    that starts carrying a ``kind`` would be redacted as a payload instead.
+
+    It reads keys only. It says nothing about the VALUE behind "content" -- a
+    producer that queued a non-string would pass here, which is why the branch logs
+    its INFO line before testing the type at all, and why
+    test_a_turn_with_no_text_still_leaves_a_trace covers that half behaviourally.
+    """
+    untagged: list[tuple[int, list[str]]] = []
+    tagged = 0
+
+    for lineno, queued in _queued_message_shapes():
+        if not (isinstance(queued, ast.Call) and getattr(queued.func, "id", None) == "AdditionalOutputs"):
+            continue  # the audio frames, which are tuples and carry no text
+        inner = queued.args[0] if queued.args else None
+        if isinstance(inner, ast.Call):
+            tagged += 1  # tool_call_message builds its own kind and log_safe
+            continue
+        assert isinstance(inner, ast.Dict), f"line {lineno}: cannot read this message"
+        keys = [key.value for key in inner.keys if isinstance(key, ast.Constant)]
+        assert len(keys) == len(inner.keys), f"line {lineno}: a computed key"
+        if "kind" in keys:
+            tagged += 1
+        else:
+            untagged.append((lineno, sorted(keys)))
+
+    assert tagged >= 2, "the tagged producers vanished, so this scan is not reading the file it thinks"
+    assert len(untagged) == 4, untagged
+    for lineno, keys in untagged:
+        assert keys == ["content", "role"], (lineno, keys)
+
+
+def _literal_text(call: ast.Call) -> str:
+    """Every constant string the call carries -- its format string and any f-string parts."""
+    parts = []
+    for arg in call.args:
+        for child in ast.walk(arg):
+            if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                parts.append(child.value)
+    return " ".join(parts)
+
+
+# Names that measure a turn rather than quote it. A latency line mentions the word
+# transcript and interpolates a number, and it is not a sink -- but it is also not a
+# licence to wave through anything, so the exemption is a fixed list of names.
+_MEASUREMENTS = frozenset({"delta_ms"})
+
+# What a variable carrying speech is called in this file. Started as "transcript"
+# alone, which read every line the word appeared on and missed
+# logger.debug("response text done: %s", event.text) -- assistant speech under a name
+# that never says so. Widening it is cheap here because the only INFO lines these
+# words reach are the two latency ones, which the exemption above already names.
+_SPEECH_NAMES = ("transcript", "text", "delta", "content", "speech", "message", "msg")
+
+# The seam itself. An argument already passed through one of these is a shape, not
+# words, so a line that renders its speech is what the policy asks for rather than a
+# violation of it -- without this, the fix and the defect look identical to the scan.
+_RENDERERS = frozenset({"describe_for_log", "describe_json_for_log"})
+
+
+def test_the_handlers_own_transcript_lines_stay_at_debug() -> None:
+    """The second sink, kept consistent with the console's.
+
+    huggingface_realtime logs the same words one layer down. Those calls are already
+    DEBUG, which is what made this the cheap half of the decision -- but nothing said
+    so, and promoting one while chasing a bug would undo the console's half in a file
+    where the word INFO never appears next to the word transcript.
+
+    A line that renders its argument through describe_for_log is reading shape rather
+    than words, so it is what this policy asks for and the scan lets it past at any
+    level -- otherwise the error branch's fix would look exactly like its defect.
+
+    What this does NOT catch: a log line that neither mentions transcript in its text
+    nor interpolates a raw variable whose name is in _SPEECH_NAMES.
+    ``logger.info("%s", event.payload)`` is invisible here. The scan reads names, and
+    a name is the only handle this layer has -- so the list is the guard, and a line
+    that starts carrying speech under a new name needs adding to it.
+    """
+    at_debug = 0
+    measurements = 0
+    above_debug: list[tuple[int, str, list[str]]] = []
+
+    for node in ast.walk(_realtime_tree()):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr in _ABOVE_DEBUG | {"debug"}):
+            continue
+        if not (isinstance(func.value, ast.Name) and func.value.id == "logger"):
+            continue
+        # A bare constant is the format string; only an interpolated value carries words.
+        interpolated = [arg for arg in node.args if not isinstance(arg, ast.Constant)]
+        raw = [arg for arg in interpolated if not _is_rendered(arg)]
+        names = [name for arg in raw for name in _identifiers_in(arg)]
+        about_speech = "transcript" in _literal_text(node).lower() or any(
+            word in name.lower() for name in names for word in _SPEECH_NAMES
+        )
+        if not (about_speech and raw):
+            continue
+        if names and all(name in _MEASUREMENTS for name in names):
+            measurements += 1  # "first audio delta %.0f ms after user transcript"
+            continue
+        if func.attr == "debug":
+            at_debug += 1
+        else:
+            above_debug.append((node.lineno, func.attr, sorted(set(names))))
+
+    assert above_debug == [], above_debug
+    # Non-vacuity, checked AFTER the claim so a scan that reads nothing cannot be
+    # mistaken for a promoted line, and a promoted line cannot be reported as an
+    # empty scan. Both happened while writing this.
+    assert at_debug >= 6, f"only {at_debug} speech lines found, so this scan proves nothing"
+    assert measurements >= 1, "the latency lines vanished, so the exemption is untested"
+
+
+def test_a_turn_with_no_text_still_leaves_a_trace(caplog: pytest.LogCaptureFixture) -> None:
+    """The SDK types an assistant transcript as optional, and None is not a string.
+
+    The shape line has to sit outside the isinstance guard or the one turn whose
+    absence an operator most needs to see -- a turn that produced no text -- is the
+    one turn that logs nothing at any level. That is worse than the leak this task
+    closed: a silent gap reads as a robot that never spoke.
+    """
+    logged = _log_one({"role": "assistant", "content": None}, caplog)
+
+    assert "role=assistant" in logged
+    assert "content=None" in logged
+
+
+# --- Sink 3: the tools that log their own arguments, one layer below the console -----
+#
+# D3 and D9 both operate on log_handler_message. These four log inside the tool, so
+# neither seam ever sees them, and they were still writing a learner's data in
+# cleartext at INFO after both. The specialist security review of D9 found them.
+
+
+@pytest.fixture()
+def memory_deps(tmp_path: Any) -> ToolDependencies:
+    """Tool dependencies whose memory store is a throwaway directory."""
+    return ToolDependencies(
+        reachy_mini=MagicMock(),
+        movement_manager=MagicMock(),
+        instance_path=tmp_path,
+    )
+
+
+@pytest.mark.asyncio
+async def test_remember_does_not_write_the_fact_it_was_asked_to_store(
+    memory_deps: ToolDependencies, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The worst of the four: this tool's description tells the model to store a name.
+
+    "Is called Alice Ferreira" is the canonical call, not an unlucky one, so this
+    line put a household member's name in the default-on log every time the tutor
+    was introduced to someone.
+    """
+    from reachy_language_tutor.tools.remember import Remember
+
+    fact = f"Is called {LEARNER_NAME}"
+    with caplog.at_level(logging.INFO):
+        await Remember()(memory_deps, fact=fact)
+    logged = " ".join(record.getMessage() for record in caplog.records)
+
+    assert LEARNER_NAME not in logged
+    assert "Tool call: remember" in logged
+    assert f"str(len={len(fact)})" in logged
+
+
+@pytest.mark.asyncio
+async def test_remember_still_shows_the_fact_under_debug(
+    memory_deps: ToolDependencies, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Demoted, not deleted -- the same split the console uses for transcript."""
+    from reachy_language_tutor.tools.remember import Remember
+
+    with caplog.at_level(logging.DEBUG):
+        await Remember()(memory_deps, fact=f"Is called {LEARNER_NAME}")
+
+    assert LEARNER_NAME in " ".join(record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_forget_redacts_both_paths_not_just_the_one_that_matched(
+    memory_deps: ToolDependencies, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The no-match path is the common one, and it carries the query verbatim.
+
+    A fix that covered only the line with `removed=` in it would leave the more
+    frequent branch leaking, which is the shape this kind of fix usually fails in.
+    """
+    from reachy_language_tutor.tools.forget import Forget
+    from reachy_language_tutor.tools.remember import Remember
+
+    with caplog.at_level(logging.INFO):
+        await Forget()(memory_deps, query=f"anything about {LEARNER_NAME}")
+    missed = " ".join(record.getMessage() for record in caplog.records)
+
+    assert LEARNER_NAME not in missed
+    assert "no_match" in missed
+
+    await Remember()(memory_deps, fact=f"Is called {LEARNER_NAME}")
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        await Forget()(memory_deps, query=LEARNER_NAME)
+    matched = " ".join(record.getMessage() for record in caplog.records)
+
+    assert LEARNER_NAME not in matched
+    # Which branch this took, not just that forget logged something. Both branches
+    # emit "Tool call: forget", so asserting only that would let the second half
+    # decay into a copy of the first if matching ever changed -- and the match
+    # path's redaction would stop being revert-proof with nothing going red.
+    assert "removed=" in matched
+    assert "no_match" not in matched
+
+
+@pytest.mark.asyncio
+async def test_the_camera_question_is_described_rather_than_quoted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The model composes this from a conversation that already holds the profile.
+
+    "What is Alice holding" is inside the parameter schema's own examples, so the
+    leak is a phrasing away rather than a misuse.
+    """
+    from reachy_language_tutor.tools.camera import Camera
+
+    deps = ToolDependencies(
+        reachy_mini=MagicMock(),
+        movement_manager=MagicMock(),
+        camera_enabled=False,
+    )
+    question = f"What is {LEARNER_NAME} holding?"
+
+    with caplog.at_level(logging.INFO):
+        await Camera()(deps, question=question)
+    logged = " ".join(record.getMessage() for record in caplog.records)
+
+    assert LEARNER_NAME not in logged
+    assert "Tool call: camera" in logged
+
+
+@pytest.mark.asyncio
+async def test_the_idle_reason_is_described_rather_than_quoted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An open free-text field with no truncation -- the widest of the four."""
+    from reachy_language_tutor.tools.idle_do_nothing import IdleDoNothing
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+
+    with caplog.at_level(logging.INFO):
+        await IdleDoNothing()(deps, reason=f"{LEARNER_NAME} asked me to wait")
+    logged = " ".join(record.getMessage() for record in caplog.records)
+
+    assert LEARNER_NAME not in logged
+    assert "Tool call: idle_do_nothing" in logged

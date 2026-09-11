@@ -1,6 +1,7 @@
 import logging
 from typing import Any, Dict
 
+from reachy_language_tutor.utils import describe_for_log
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 
@@ -29,5 +30,10 @@ class IdleDoNothing(Tool):
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
         """Stay still and silent for the current idle turn."""
         reason = kwargs.get("reason", "idle turn")
-        logger.info("Tool call: idle_do_nothing reason=%s", reason)
+        # An open free-text field the model fills in: nothing stops it from quoting
+        # whoever just spoke. Untruncated before, which made it the widest of the
+        # four tool sinks. Kept free of the word W11's discovery guard scans for,
+        # because this tool reads no personal data and must not join that set.
+        logger.info("Tool call: idle_do_nothing reason=%s", describe_for_log(reason))
+        logger.debug("Tool call: idle_do_nothing reason=%s", reason)
         return {"status": "idle", "reason": reason}

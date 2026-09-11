@@ -942,7 +942,16 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                             logger.debug("response.create rejected; worker will retry after active response finishes")
                         else:
                             self._response_started_or_rejected_event.set()
-                            logger.error("Realtime error [%s]: %s (raw=%s)", code, msg, err)
+                            # The same string is queued as assistant speech eleven lines
+                            # below, where D9 demotes it -- so printing it verbatim here
+                            # would have asserted it was sensitive on one path and
+                            # cleartext on the other, one line apart. code is a
+                            # server-defined enum and carries the triage signal; the
+                            # words follow D9's split. ERROR matters more than INFO
+                            # here, not less: a support bundle is collected exactly
+                            # when this line has fired.
+                            logger.error("Realtime error [%s]: %s", code, describe_for_log(msg))
+                            logger.debug("Realtime error [%s]: %s (raw=%s)", code, msg, err)
 
                         if code == "input_audio_buffer_commit_empty":
                             self.deps.movement_manager.set_listening(False)

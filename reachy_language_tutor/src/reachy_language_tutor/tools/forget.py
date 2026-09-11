@@ -1,6 +1,7 @@
 import logging
 from typing import Any
 
+from reachy_language_tutor.utils import describe_for_log
 from reachy_language_tutor.memory import forget_memory_fact
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
@@ -38,7 +39,10 @@ class Forget(Tool):
 
         result = forget_memory_fact(deps.instance_path, query=query)
         if result.removed is None:
-            logger.info("Tool call: forget query=%s no_match", query[:120])
+            # The no-match path is the common one, and the query is a phrase lifted
+            # from the conversation. Redacting only the match path would leak more.
+            logger.info("Tool call: forget query=%s no_match", describe_for_log(query))
+            logger.debug("Tool call: forget query=%s no_match", query[:120])
             return {"error": f'no memory matched "{query}"; nothing was removed'}
 
         response: dict[str, Any] = {
@@ -48,5 +52,10 @@ class Forget(Tool):
         if len(result.candidates) > 1:
             response["other_matches"] = [fact.text for fact in result.candidates[1:]]
 
-        logger.info("Tool call: forget query=%s removed=%s", query[:120], result.removed.text[:120])
+        logger.info(
+            "Tool call: forget query=%s removed=%s",
+            describe_for_log(query),
+            describe_for_log(result.removed.text),
+        )
+        logger.debug("Tool call: forget query=%s removed=%s", query[:120], result.removed.text[:120])
         return response

@@ -2,6 +2,7 @@ import base64
 import logging
 from typing import Any, Dict
 
+from reachy_language_tutor.utils import describe_for_log
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 
@@ -42,7 +43,11 @@ class Camera(Tool):
             logger.warning("camera: empty question")
             return {"error": "question must be a non-empty string"}
 
-        logger.info("Tool call: camera question=%s", question[:120])
+        # The model composes this from the conversation, which by then holds the
+        # profile get_profile returned -- "what is Alice holding" is within the
+        # schema's own examples. INFO keeps the fact that the camera fired.
+        logger.info("Tool call: camera question=%s", describe_for_log(question))
+        logger.debug("Tool call: camera question=%s", question[:120])
 
         if not deps.camera_enabled:
             logger.error("Camera is disabled")

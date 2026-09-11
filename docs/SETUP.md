@@ -206,7 +206,10 @@ cd ~/dev/reachy/learn_language/reachy_language_tutor
 
 - Web UI: **http://127.0.0.1:7860/**
 - `--no-camera` because the simulator has no camera
-- `--debug` for verbose logging
+- `--debug` for verbose logging, and the only way to get the conversation's actual
+  words into the log. Without it the log records that a turn happened and how long
+  it was (`role=user content=str(len=32)`) but not what was said, so a log captured
+  from someone's home does not carry their side of the conversation.
 
 Within a few seconds Reachy should greet you through your Mac's speakers and ask which
 language you want to practise. Talk to it using your Mac's microphone.

@@ -1,6 +1,7 @@
 import logging
 from typing import Any
 
+from reachy_language_tutor.utils import describe_for_log
 from reachy_language_tutor.memory import add_memory_fact
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
@@ -44,5 +45,10 @@ class Remember(Tool):
         if stored is None:
             return {"error": "fact was empty or invalid; nothing was saved"}
 
-        logger.info("Tool call: remember fact=%s", stored.text[:120])
+        # Same policy as transcript (D9, console.log_handler_message): INFO says a
+        # tool ran and how much it carried; the words are DEBUG, which is --debug.
+        # This tool's own description tells the model to store a name, so its
+        # argument is the most reliably personal string in the app.
+        logger.info("Tool call: remember fact=%s", describe_for_log(stored.text))
+        logger.debug("Tool call: remember fact=%s", stored.text[:120])
         return {"saved": stored.text, "memory_id": stored.id}

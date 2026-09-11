@@ -18,7 +18,7 @@ from reachy_mini import ReachyMini
 from reachy_mini.io.jsonrpc import JsonRpcError
 from reachy_mini.apps.jsonrpc_server import JsonRpcServer
 from reachy_mini.media.media_manager import MediaBackend
-from reachy_language_tutor.utils import describe_json_for_log
+from reachy_language_tutor.utils import describe_for_log, describe_json_for_log
 from reachy_language_tutor.config import (
     HF_BACKEND,
     LOCKED_PROFILE,
@@ -85,7 +85,8 @@ def log_handler_message(msg: dict) -> None:
     because its content is a person's data rather than transcript. The KIND decides:
     a producer that forgot the rendering, or built a malformed one, still gets
     redacted rather than falling through to cleartext. An ordinary transcript
-    message carries neither and is logged exactly as before.
+    message carries neither, and is described at INFO and spoken at DEBUG -- see
+    the branch below for why that split, and not the alternatives, was chosen.
     """
     kind = msg.get("kind")
     if kind in REDACTED_MESSAGE_KINDS:
@@ -103,8 +104,37 @@ def log_handler_message(msg: dict) -> None:
         return
 
     content = msg.get("content", "")
+    # Outside the isinstance guard on purpose. A producer queues event.transcript
+    # straight from the SDK, which types it as optional -- and a None there used to
+    # fall off this branch and log nothing at any level, so the one turn whose shape
+    # an operator most needs to see would be the turn that left no trace.
+    # describe_for_log renders whatever arrives without reading it.
+    logger.info("role=%s content=%s", msg.get("role"), describe_for_log(content))
+
     if isinstance(content, str):
-        logger.info(
+        # Transcript -- the person's own words and the robot's own speech. It is the
+        # remaining route a learner's name reaches the log: a tutor that has just read
+        # get_profile says "Hello Alice" out loud, and that sentence is transcript, not
+        # a tool result. D3 closed the tool-result routes and deliberately left this one
+        # open, because blanket-redacting transcript would destroy what the console is
+        # for. D9 is the decision about this route, and it is DEMOTE -- neither accept
+        # nor redact:
+        #
+        #   INFO keeps the SHAPE: who spoke and how much. An operator reading captured
+        #   stderr from someone's home still sees that a turn happened, and the
+        #   "did it hear me" recipe in docs/SETUP.md -- grep -icE "role=user|..." --
+        #   still counts turns, which a silent demotion would have broken while
+        #   printing zero and reading as a deaf microphone.
+        #
+        #   The WORDS move to DEBUG, which is --debug: an opt-in an operator asks for
+        #   on a robot they are debugging, rather than the default on ~20 unrelated
+        #   households whose logs nobody chose to collect.
+        #
+        # The console UI is untouched. It is fed by ConsoleApp._dispatch_transcript
+        # over JSON-RPC, not by this log line, so the conversation still displays in
+        # full either way. Do not reach for log_safe here: that seam is for payloads
+        # that are DATA, and transcript is the app's own speech.
+        logger.debug(
             "role=%s content=%s",
             msg.get("role"),
             content if len(content) < 500 else content[:500] + "\u2026",
