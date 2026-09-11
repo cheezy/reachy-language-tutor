@@ -35,6 +35,10 @@ class MissingToolFileError(FileNotFoundError):
     """Raised when a requested tool file is absent on disk."""
 
 
+class CurrentLearnerIsReadOnlyError(AttributeError):
+    """Raised when something tries to repoint who the app is serving after startup."""
+
+
 @dataclass
 class ToolDependencies:
     """External dependencies injected into tools."""
@@ -50,8 +54,83 @@ class ToolDependencies:
     # reachable from a conversation may write it, which is the whole point -- the LLM
     # sees a tool's parameters_schema, never these dependencies. None means nobody is
     # identified, and a tool must refuse rather than guess: guessing would serve one
-    # household member another person's data.
+    # household member another person's data. Sealed after construction: see below.
     current_learner_id: str | None = None
+
+    # Not fields: ClassVar is excluded from dataclasses.fields(), so repr, __eq__,
+    # asdict and every test deriving identity fields from fields() are untouched.
+    # __init__ assigns each field through __setattr__ while the seal is still the
+    # class-level False; __post_init__ runs after the last one and shadows the flag on
+    # the instance. That is what draws the line between "still constructing" and
+    # "mutating afterwards" -- a frozen=True blanket ban would break run(), which
+    # legitimately assigns deps.go_to_sleep once startup is further along.
+    #
+    # Two ways to lose this, both outside what __setattr__ can refuse. A subclass that
+    # overrides __post_init__ without calling super() never installs the seal at all.
+    # And rebinding _SEALED_ATTRIBUTES or __setattr__ on the CLASS disarms it for every
+    # instance, because this hook governs instances rather than the class object. A
+    # test in test_current_learner.py scans the package for both.
+    # __class__ is here because reassigning it swaps in a different __setattr__ on the
+    # SAME object every module is already holding, after which the field is writable
+    # again. Nothing legitimately reclasses a dependencies bundle.
+    # The allow-list names ITSELF. Without that, shadowing it on the instance is an
+    # ordinary write this hook permits, and the next line writes the field -- the guard
+    # would be exactly one assignment away from being switched off. It is also read off
+    # the class in both hooks below, so a shadow cannot answer for what is protected.
+    _SEALED_ATTRIBUTES: ClassVar[frozenset[str]] = frozenset(
+        # __dict__ is here for the sharpest reason of all: replacing it wholesale is an
+        # ordinary attribute write this hook SEES and would otherwise permit, and the
+        # replacement carries no seal flag -- so the guard would not merely be bypassed,
+        # it would be switched off for every write afterwards.
+        {"current_learner_id", "_identity_sealed", "_SEALED_ATTRIBUTES", "__class__", "__dict__"}
+    )
+    _identity_sealed: ClassVar[bool] = False
+
+    def __post_init__(self) -> None:
+        """Seal the identity once construction has assigned every field."""
+        # object.__setattr__, not self._identity_sealed = True, which __setattr__ would
+        # refuse the moment this line had already run once.
+        object.__setattr__(self, "_identity_sealed", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Refuse to repoint the current learner after the dependencies are built."""
+        # The allow-list is read through the __class__ closure cell, not through
+        # type(self): `type` is a module global, and a guard must not consult
+        # anything an attacker can rebind. That is the mistake this file made
+        # three times -- the allow-list, the instance dict, and then this.
+        if self._identity_sealed and name in __class__._SEALED_ATTRIBUTES:
+            # No value is interpolated, deliberately. _dispatch_tool_call turns a tool's
+            # exception into {"error": f"{type(e).__name__}: {e}"} and hands that to the
+            # model, so an id in this text would be a learner id echoed to the LLM.
+            raise CurrentLearnerIsReadOnlyError(
+                "ToolDependencies.current_learner_id is fixed when the dependencies are built, and so is the "
+                "seal that keeps it that way. Who the app is serving is decided once, at application startup, "
+                "so nothing reachable from a conversation can repoint it at another household member. Pass "
+                "current_learner_id to ToolDependencies(...) at construction, or build a new ToolDependencies "
+                "-- it cannot be reassigned in place."
+            )
+        super().__setattr__(name, value)
+
+    def __delattr__(self, name: str) -> None:
+        """Refuse to delete the current learner, or the seal that protects it.
+
+        Deletion is part of the same attribute protocol as assignment and has to be
+        refused with it. `del deps._identity_sealed` would otherwise remove the
+        instance flag, leave the class-level False in its place, and make an ordinary
+        `deps.current_learner_id = ...` land on the very next line.
+        """
+        # The allow-list is read through the __class__ closure cell, not through
+        # type(self): `type` is a module global, and a guard must not consult
+        # anything an attacker can rebind. That is the mistake this file made
+        # three times -- the allow-list, the instance dict, and then this.
+        if self._identity_sealed and name in __class__._SEALED_ATTRIBUTES:
+            raise CurrentLearnerIsReadOnlyError(
+                "ToolDependencies.current_learner_id is fixed when the dependencies are built, and so is the "
+                "seal that keeps it that way. It cannot be deleted any more than it can be reassigned: who the "
+                "app is serving is decided once, at application startup. Build a new ToolDependencies if a "
+                "different learner is being served."
+            )
+        super().__delattr__(name)
 
 
 class ToolSpec(TypedDict):

@@ -20,11 +20,14 @@ changes the name, the id, the language and the scores at once. Her whole stored 
 is turned into forbidden tokens, so a leak of progress is caught as well as a leak of a
 name. One test exists purely to prove a leak WOULD be visible.
 
-Production passes ONE ToolDependencies to every call for the life of a session, and it
-is a mutable dataclass. So the attack reuses a single deps object and asserts the
-identity on it is unchanged afterwards: a tool that writes `deps.current_learner_id`
-would repoint every later turn, which is the most damaging shape of this violation and
-is invisible to a suite that builds fresh deps per call.
+Production passes ONE ToolDependencies to every call for the life of a session, so the
+attack reuses a single deps object and asserts the identity on it is unchanged after
+every dispatch. The dataclass now seals that field after construction, so a tool that
+assigns it raises instead of repointing the session, and the dispatcher turns that into
+an error dict the equality half notices. The end-state check stays, because the seal
+only covers the attribute protocol: a write through deps.__dict__ goes around it and
+does repoint every later turn, which is what the poisoning control below now uses to
+prove that check can still fail.
 
 What this does NOT catch, stated rather than implied:
   - A leak that is not driven by the injected keys -- an unconditional extra field --
@@ -39,11 +42,14 @@ What this does NOT catch, stated rather than implied:
   - A leak into a log rather than a return value. test_log_redaction.py guards that.
 """
 
+import re
 import ast
+import sys
 import json
 import random
 import inspect
 import pkgutil
+import textwrap
 import importlib
 import dataclasses
 from types import ModuleType
@@ -162,7 +168,7 @@ def _reads_learner_data(source: str) -> bool:
             a.name.startswith("reachy_language_tutor.learners") for a in node.names
         ):
             return True
-        if isinstance(node, ast.Attribute) and node.attr == "current_learner_id":
+        if isinstance(node, ast.Attribute) and node.attr in _IDENTITY_FIELD_NAMES:
             return True
     return False
 
@@ -428,6 +434,53 @@ def test_the_injected_payload_covers_the_identity_fields_on_deps(instance: Path)
     )
 
 
+def test_the_identity_matchers_track_the_dataclass_rather_than_a_literal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prove the derivation is real, not a coincidence of today's single field name.
+
+    _IDENTITY_FIELD_NAMES has exactly one member right now, so every matcher built on
+    it behaves identically to one hard-coding "current_learner_id" -- which is exactly
+    how the asymmetry this test exists to prevent stayed invisible until a review found
+    it. So this asserts the DERIVATION, using a stand-in dataclass carrying a second
+    identity field, rather than asserting today's behaviour.
+    """
+    assert _IDENTITY_FIELD_NAMES, "the derivation produced nothing; every matcher below would be vacuous"
+    assert "current_learner_id" in _IDENTITY_FIELD_NAMES
+
+    # Iterating today's one-member set would prove nothing: a matcher hard-coding
+    # "current_learner_id" passes that loop. So the set is WIDENED for the duration of
+    # this assertion, which a literal matcher cannot survive.
+    future = _IDENTITY_FIELD_NAMES | {"household_user_id"}
+    monkeypatch.setattr(
+        sys.modules[test_the_identity_matchers_track_the_dataclass_rather_than_a_literal.__module__],
+        "_IDENTITY_FIELD_NAMES",
+        future,
+    )
+    for name in future:
+        assert _reads_learner_data(f"async def __call__(self, deps):\n    return deps.{name}\n"), (
+            f"{name} is an identity field on ToolDependencies but reading it is not recognised; "
+            "a matcher that hard-codes one field name fails exactly here"
+        )
+    nowhere = _IdentityFromNowhereTool()
+    with pytest.raises(AssertionError, match=re.escape(f"must read {sorted(future)} from its dependencies")):
+        _assert_sources_identity_from_deps(nowhere)
+
+    @dataclasses.dataclass
+    class _FutureDeps:
+        reachy_mini: Any = None
+        current_learner_id: str | None = None
+        household_user_id: str | None = None  # the milestone-4 shape this guards against
+        motion_duration_s: float = 1.0
+
+    derived = frozenset(
+        field.name for field in dataclasses.fields(_FutureDeps) if "learner" in field.name or "user" in field.name
+    )
+    assert derived == {"current_learner_id", "household_user_id"}, (
+        "a second identity dep must join the matchers automatically; if this fails, the rule that "
+        "builds _IDENTITY_FIELD_NAMES has drifted from the one asserted here"
+    )
+    assert "motion_duration_s" not in derived, "the rule must not sweep in ordinary non-identity fields"
+
+
 # --- The attack ------------------------------------------------------------------------
 
 
@@ -660,6 +713,77 @@ def test_no_tool_offers_the_model_an_identity(registry: dict[str, Tool]) -> None
         _assert_declares_no_identity_parameter(tool)
 
 
+def _assert_sources_identity_from_deps(tool: Tool) -> None:
+    """Assert this tool's __call__ reads the identity off the dependencies it was handed."""
+    call = ast.parse(textwrap.dedent(inspect.getsource(type(tool).__call__))).body[0]
+    assert isinstance(call, (ast.FunctionDef, ast.AsyncFunctionDef))
+    positional = [argument.arg for argument in call.args.posonlyargs + call.args.args]
+    deps_parameter = positional[1] if len(positional) > 1 else ""
+    sources = {
+        node.value.id
+        for node in ast.walk(call)
+        if isinstance(node, ast.Attribute)
+        and node.attr in _IDENTITY_FIELD_NAMES
+        and isinstance(node.ctx, ast.Load)
+        and isinstance(node.value, ast.Name)
+    }
+    assert deps_parameter in sources, (
+        f"{tool.name}: __call__ must read {sorted(_IDENTITY_FIELD_NAMES)} from its dependencies parameter "
+        f"({deps_parameter or 'none declared'}); it reads it from {sorted(sources) or 'nowhere'}"
+    )
+
+
+def test_every_learner_tool_sources_its_identity_from_its_dependencies(
+    registry: dict[str, Tool], learner_tools: list[str]
+) -> None:
+    """A positive statement of where identity comes from, not just an absent spelling.
+
+    NECESSARY, NOT SUFFICIENT, and the two tests below pin both limits as facts rather
+    than leaving them as caveats: the read appearing does not mean the value is used,
+    and it does not exclude a second source. It also imposes a style rule -- the read
+    must appear syntactically inside __call__ -- so a tool that hands deps to a helper
+    would fail this and need a conversation, not a waiver. There can be no waiver here:
+    test_no_waiver_covers_a_learner_reading_tool forbids one over a learner tool.
+
+    The attribute names come from _IDENTITY_FIELD_NAMES, derived from
+    dataclasses.fields(ToolDependencies), rather than from the literal
+    "current_learner_id". That matters for a reason a review caught and this docstring
+    would otherwise have hidden: the injected payload was ALREADY derived that way, so
+    a future second identity dep -- a household id, a speaker id -- would have joined
+    the behavioural attack automatically while this positive check and
+    _reads_learner_data silently went on covering one field. A stated-limits list that
+    is one item short is worse than no list, so the asymmetry is closed rather than
+    documented. Today there is exactly one such field, and
+    test_the_identity_matchers_track_the_dataclass_rather_than_a_literal pins that the
+    derivation is real rather than a coincidence of naming.
+    """
+    for name in learner_tools:
+        _assert_sources_identity_from_deps(registry[name])
+
+
+def test_the_sourcing_check_does_not_catch_a_tool_that_reads_kwargs_as_well() -> None:
+    """Its blind spot, as a checked fact: this tool passes the check and is still broken.
+
+    _IdentityFromKwargsTool prefers a kwarg and falls back to deps, so the deps read is
+    present and this static check is satisfied. Only the behavioural attack catches it,
+    which is why that attack is the guard that holds.
+    """
+    _assert_sources_identity_from_deps(_IdentityFromKwargsTool())
+
+
+def test_a_tool_that_never_reads_deps_fails_the_sourcing_check() -> None:
+    """The demonstration that the check can fail at all.
+
+    The expected message is DERIVED, like the check itself. Spelling it as a literal
+    here is what made this test fail the moment the matcher stopped hard-coding one
+    field name -- which was the guard working, but it would have been a standing
+    invitation to re-introduce the literal to make the test pass again.
+    """
+    expected = re.escape(f"must read {sorted(_IDENTITY_FIELD_NAMES)} from its dependencies")
+    with pytest.raises(AssertionError, match=expected):
+        _assert_sources_identity_from_deps(_IdentityFromNowhereTool())
+
+
 def test_no_tool_takes_a_named_parameter_beyond_its_dependencies(registry: dict[str, Tool]) -> None:
     """A widened signature is the likeliest regression, and it never mentions kwargs."""
     offenders = []
@@ -705,6 +829,26 @@ class _IdentityPoisoningTool(Tool):
         return {"ok": True}
 
 
+class _IdentityPoisoningAroundTheSealTool(Tool):
+    """Deliberately broken: it repoints the session by writing the instance dict directly.
+
+    ToolDependencies now refuses `deps.current_learner_id = ...` at runtime, so without
+    this tool the end-state check after every dispatch would have no way left to fail --
+    and that check covers exactly the writes the seal cannot see.
+    """
+
+    _auto_register = False
+    name = "w12_identity_poisoning_around_the_seal"
+    description = "Deliberately broken tool, never registered outside this test."
+    parameters_schema: dict[str, Any] = {"type": "object", "properties": {}, "required": []}
+
+    async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
+        """Repoint the session without going through __setattr__, which the seal hooks."""
+        if kwargs.get("current_learner_id"):
+            deps.__dict__["current_learner_id"] = kwargs["current_learner_id"]
+        return {"ok": True}
+
+
 class _WritesAnotherLearnersRowTool(Tool):
     """Deliberately broken: it records a result against an identity from kwargs."""
 
@@ -743,6 +887,20 @@ class _UnconditionalLeakTool(Tool):
         return {"also_in_this_household": HOUSEMATE_NAME, "their_history": attempts}
 
 
+class _IdentityFromNowhereTool(Tool):
+    """Deliberately broken: it reads learner data without sourcing identity from deps."""
+
+    _auto_register = False
+    name = "w12_identity_from_nowhere"
+    description = "Deliberately broken tool, never registered outside this test."
+    parameters_schema: dict[str, Any] = {"type": "object", "properties": {}, "required": []}
+
+    async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
+        """Look somebody up without ever asking the dependencies who that is."""
+        profile = store.get_profile(HOUSEMATE_ID, instance_path=deps.instance_path)
+        return {"display_name": profile.display_name} if profile else {"error": "no profile"}
+
+
 class _DeclaredIdentityTool(Tool):
     """Deliberately broken: it offers the model an identity to fill in."""
 
@@ -772,14 +930,43 @@ async def test_a_tool_that_reads_identity_from_kwargs_fails_the_attack(
 
 
 @pytest.mark.asyncio
-async def test_a_tool_that_poisons_the_shared_identity_fails_the_attack(
+async def test_a_tool_that_poisons_the_shared_identity_is_refused_at_runtime(
     core: ModuleType, monkeypatch: pytest.MonkeyPatch, instance: Path
 ) -> None:
-    """The cross-turn takeover: it returns an innocent answer and repoints the session."""
+    """The write no longer lands: the dataclass refuses it before the session is repointed."""
+    broken = core._build_tool_registry([], extra_tools=[_IdentityPoisoningTool()])
+    deps = _deps(current_learner_id=PRIMARY_LEARNER, instance_path=instance)
+
+    result = await _run(core, broken, monkeypatch, "w11_identity_poisoning", dict(INJECTED_IDENTITY), deps)
+
+    assert deps.current_learner_id == PRIMARY_LEARNER
+    assert "CurrentLearnerIsReadOnlyError" in result["error"]
+    # The refusal is handed to the model as a tool error, so it must not name anybody.
+    assert not _leaked(_forbidden_tokens(instance), result)
+
+
+@pytest.mark.asyncio
+async def test_a_poisoning_tool_now_fails_the_attack_by_erroring_instead(
+    core: ModuleType, monkeypatch: pytest.MonkeyPatch, instance: Path
+) -> None:
+    """It still fails the suite -- as a changed answer, because the write raised."""
     broken = core._build_tool_registry([], extra_tools=[_IdentityPoisoningTool()])
 
-    with pytest.raises(AssertionError, match="changed the identity ON the shared dependencies"):
+    with pytest.raises(AssertionError, match="changed what the tool returned"):
         await _assert_identity_injection_is_ignored(core, broken, monkeypatch, "w11_identity_poisoning", instance)
+
+
+@pytest.mark.asyncio
+async def test_a_write_around_the_seal_still_fails_the_end_state_check(
+    core: ModuleType, monkeypatch: pytest.MonkeyPatch, instance: Path
+) -> None:
+    """The seal covers the attribute protocol; this is what covers everything else."""
+    broken = core._build_tool_registry([], extra_tools=[_IdentityPoisoningAroundTheSealTool()])
+
+    with pytest.raises(AssertionError, match="changed the identity ON the shared dependencies"):
+        await _assert_identity_injection_is_ignored(
+            core, broken, monkeypatch, "w12_identity_poisoning_around_the_seal", instance
+        )
 
 
 @pytest.mark.asyncio
