@@ -6,6 +6,7 @@ import inspect
 import logging
 import importlib
 import threading
+import traceback
 import importlib.util
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Callable, ClassVar, Sequence, TypedDict
@@ -13,6 +14,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from reachy_mini import ReachyMini
+from reachy_language_tutor.utils import describe_json_for_log
 from reachy_language_tutor.config import config, list_tool_module_names
 from reachy_language_tutor.mcp_client import McpToolTimeoutError, McpToolInvocationError
 from reachy_language_tutor.tool_spaces import build_remote_client, read_installed_tool_spaces
@@ -136,7 +138,17 @@ class RemoteMcpTool(Tool):
             # Timeout subclasses the retryable error, but retrying it would just double the wait.
             raise
         except McpToolInvocationError as exc:
-            logger.warning("Remote MCP tool failed once; retrying %s from %s: %s", self.name, self._space_slug, exc)
+            # The type, not the text. A remote server's error is written in response to
+            # a call whose ARGUMENTS were the learner's data, so its message can quote
+            # them back. The two identifiers before it are ours and are what triage
+            # needs. Same rule as the dispatch error below; only the retry's failure
+            # reaches that one, so this line needs its own.
+            logger.warning(
+                "Remote MCP tool failed once; retrying %s from %s: %s",
+                self.name,
+                self._space_slug,
+                type(exc).__name__,
+            )
             await asyncio.sleep(_REMOTE_TOOL_RETRY_DELAY_S)
             result = await self._client.call_tool(self._client_tool_name, kwargs)
         payload = dict(result)
@@ -450,6 +462,21 @@ def get_tool_specs(exclusion_list: list[str] | None = None) -> list[ToolSpec]:
         return [tool.spec() for tool in ALL_TOOLS.values() if tool.name not in exclusion_list]
 
 
+def result_keys_are_ours(tool_name: str) -> bool:
+    """Report whether a tool's result envelope was built by this application.
+
+    A locally-registered tool composes its own return dict here, so its top-level
+    keys are schema and are worth naming in a log -- that is most of the dispatch
+    signal. A RemoteMcpTool returns dict(result) from a third-party Space, so those
+    keys belong to whoever wrote it and a data-keyed envelope would print verbatim.
+
+    Nesting is a separate question and is never trusted: describe_for_log stops trust
+    at the envelope, which is what covers a hosted backend's payload at milestone 5.
+    """
+    tool = get_tools().get(tool_name)
+    return tool is not None and not isinstance(tool, RemoteMcpTool)
+
+
 def get_tools() -> dict[str, Tool]:
     """Return a shallow snapshot of the active tool registry."""
     initialize_tools()
@@ -463,7 +490,10 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
         parsed_args = json.loads(args_json or "{}")
         return parsed_args if isinstance(parsed_args, dict) else {}
     except Exception:
-        logger.warning("bad args_json=%r", args_json)
+        # Shape, not text. This is the same model-composed payload the realtime layer
+        # renders before logging; echoing it here would re-open that sink one layer
+        # down, at WARNING, which --debug does not gate.
+        logger.warning("bad args_json=%s", describe_json_for_log(args_json))
         return {}
 
 
@@ -478,7 +508,17 @@ async def _dispatch_tool_call(tool_name: str, args: Dict[str, Any], deps: ToolDe
         return {"error": "Tool cancelled"}
     except Exception as e:
         msg = f"{type(e).__name__}: {e}"
-        logger.exception("Tool error in %s: %s", tool_name, msg)
+        # The type and where it happened, never the message. An exception raised out
+        # of a tool can carry a learner's name or their lesson result in its TEXT,
+        # and this layer cannot tell which do -- but a traceback's frames are file,
+        # line and function, which carry nothing a learner said. Keeping them answers
+        # the triage question the type alone cannot: a tool reaches a store, an MCP
+        # client and a movement manager, and "where" is most of the diagnosis. The
+        # message still reaches the model, which already holds that data.
+        frames = " <- ".join(
+            f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno}" for frame in traceback.extract_tb(e.__traceback__)
+        )
+        logger.error("Tool error in %s: %s at %s", tool_name, type(e).__name__, frames)
         return {"error": msg}
 
 

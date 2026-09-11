@@ -180,6 +180,10 @@ class BackgroundToolManager(BaseModel):
                 logger.debug(f"Background tool cancelled: {background_tool.tool_name} (id={background_tool.id})")
             else:
                 background_tool.status = ToolState.FAILED
+                # This reads background_tool.error BEFORE the assignment below, so it
+                # logs None. Do not simply swap in `error` when fixing that: the value
+                # is a tool's error text, which can carry a learner's name or their
+                # lesson result. Route it through describe_for_log in the same change.
                 logger.debug(
                     f"Background tool failed: {background_tool.tool_name} (id={background_tool.id}): {background_tool.error}"
                 )

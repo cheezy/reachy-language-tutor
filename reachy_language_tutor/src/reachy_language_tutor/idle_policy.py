@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from collections.abc import Mapping, Callable, Iterable
 
 from reachy_language_tutor.tools import core_tools
+from reachy_language_tutor.utils import tool_call_message, describe_json_for_log
 from reachy_language_tutor.streaming import AdditionalOutputs
 from reachy_language_tutor.tools.dance import Dance
 from reachy_language_tutor.tools.move_head import MoveHead
@@ -118,13 +119,7 @@ async def start_idle_tool_call(
     )
     await output_queue.put(
         AdditionalOutputs(
-            {
-                "role": "assistant",
-                "content": (
-                    f"🛠️ Idle tool {tool_name} with args {args_json_str}. "
-                    f"The tool is now running. Tool ID: {background_tool.tool_id}"
-                ),
-            },
+            tool_call_message("🛠️ Idle tool", tool_name, args_json_str, background_tool.tool_id),
         ),
     )
     logger.info(
@@ -133,6 +128,8 @@ async def start_idle_tool_call(
         tool_name,
         background_tool.tool_id,
         call_id,
-        args_json_str,
+        # These arguments are built by args_factory() in this module, never by the
+        # model, so their key names are ours to print.
+        describe_json_for_log(args_json_str, trust_keys=True),
     )
     return background_tool

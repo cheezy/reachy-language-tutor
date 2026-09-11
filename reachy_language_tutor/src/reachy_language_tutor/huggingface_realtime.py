@@ -27,6 +27,7 @@ from websockets.exceptions import ConnectionClosedError
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
 
 from reachy_language_tutor.tools import core_tools
+from reachy_language_tutor.utils import describe_for_log, tool_call_message, describe_json_for_log
 from reachy_language_tutor.config import (
     HF_LOCAL_CONNECTION_MODE,
     config,
@@ -565,11 +566,17 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
     async def _handle_tool_result(self, completed_tool: ToolNotification) -> None:
         """Process the result of a tool call."""
         if completed_tool.error is not None:
+            # Shape, not text. A tool is required to RETURN an error dict rather than
+            # raise, so anything arriving here already escaped that rule -- and this
+            # generic layer cannot tell a safe constant from a message that
+            # interpolated a learner's name or their lesson result. ERROR is written
+            # whether or not --debug is on, so it gets the same treatment the result
+            # already gets. The cost is real: reproduce the failure to read the text.
             logger.error(
                 "Tool '%s' (id=%s) failed with error: %s",
                 completed_tool.tool_name,
                 completed_tool.id,
-                completed_tool.error,
+                describe_for_log(completed_tool.error, trust_keys=True),
             )
             tool_result = {"error": completed_tool.error}
             tool_result_for_model = tool_result
@@ -585,7 +592,16 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                 completed_tool.tool_name,
                 completed_tool.id,
             )
-            logger.debug("Tool '%s' model-visible result: %s", completed_tool.tool_name, tool_result_for_model)
+            # The shape, never the values: a tool result carries a learner's name and
+            # their lesson results, and this line is one layer above the tool that
+            # produced it, so no care taken inside the tool reaches here.
+            logger.debug(
+                "Tool '%s' model-visible result: %s",
+                completed_tool.tool_name,
+                describe_for_log(
+                    tool_result_for_model, trust_keys=core_tools.result_keys_are_ours(completed_tool.tool_name)
+                ),
+            )
         else:
             logger.warning(
                 "Tool '%s' (id=%s) returned no result and no error", completed_tool.tool_name, completed_tool.id
@@ -638,6 +654,14 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                     {
                         "role": "assistant",
                         "content": json.dumps(tool_result_for_model),
+                        # The console logs what it receives, and this content is a learner's
+                        # data rather than transcript. Say what it IS, not merely how to
+                        # render it: a consumer that sees the kind redacts even if the
+                        # rendering below is ever missing or malformed.
+                        "kind": "tool_result",
+                        "log_safe": describe_for_log(
+                            tool_result_for_model, trust_keys=core_tools.result_keys_are_ours(completed_tool.tool_name)
+                        ),
                     },
                 ),
             )
@@ -859,11 +883,14 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                         args_json_str = getattr(event, "arguments", None)
                         call_id: str = str(getattr(event, "call_id", uuid.uuid4()))
 
+                        # Shape, not values: a tool's arguments carry a person's data as
+                        # readily as its result does. record_result is handed the lesson
+                        # outcome, so this line would print it in full.
                         logger.info(
                             "Tool call received — tool_name=%r, call_id=%s, args=%s",
                             tool_name,
                             call_id,
-                            args_json_str,
+                            describe_json_for_log(args_json_str),
                         )
 
                         if not isinstance(tool_name, str) or not isinstance(args_json_str, str):
@@ -871,7 +898,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                                 "Invalid tool call: tool_name=%s (type=%s), args=%s (type=%s), call_id=%s",
                                 tool_name,
                                 type(tool_name).__name__,
-                                args_json_str,
+                                describe_json_for_log(args_json_str),
                                 type(args_json_str).__name__,
                                 call_id,
                             )
@@ -890,10 +917,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
 
                         await self.output_queue.put(
                             AdditionalOutputs(
-                                {
-                                    "role": "assistant",
-                                    "content": f"🛠️ Used tool {tool_name} with args {args_json_str}. The tool is now running. Tool ID: {background_tool.tool_id}",
-                                },
+                                tool_call_message("🛠️ Used tool", tool_name, args_json_str, background_tool.tool_id),
                             ),
                         )
                         logger.info(

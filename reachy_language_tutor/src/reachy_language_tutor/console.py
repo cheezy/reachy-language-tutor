@@ -18,6 +18,7 @@ from reachy_mini import ReachyMini
 from reachy_mini.io.jsonrpc import JsonRpcError
 from reachy_mini.apps.jsonrpc_server import JsonRpcServer
 from reachy_mini.media.media_manager import MediaBackend
+from reachy_language_tutor.utils import describe_json_for_log
 from reachy_language_tutor.config import (
     HF_BACKEND,
     LOCKED_PROFILE,
@@ -64,6 +65,50 @@ except Exception:  # pragma: no cover - only loaded when settings_app is used
     BaseModel = object  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+# What a message IS, when what it is means it must not be logged in cleartext. A tool
+# call and a tool result are different things that need the same handling, so the set
+# says so rather than one standing in for the other.
+REDACTED_MESSAGE_KINDS = frozenset({"tool_call", "tool_result"})
+
+
+def log_handler_message(msg: dict) -> None:
+    """Log one message from the handler's output queue.
+
+    Extracted from play_loop so a test can drive the real thing: this line is INFO,
+    so it is written whether or not --debug is on, and it is the sink a learner's
+    name actually reaches. A test that reimplemented this branch would pass while
+    the real one leaked, so there is one copy of it and the test calls it.
+
+    A tool call or a tool result says so, and carries a log-safe rendering of itself,
+    because its content is a person's data rather than transcript. The KIND decides:
+    a producer that forgot the rendering, or built a malformed one, still gets
+    redacted rather than falling through to cleartext. An ordinary transcript
+    message carries neither and is logged exactly as before.
+    """
+    kind = msg.get("kind")
+    if kind in REDACTED_MESSAGE_KINDS:
+        log_safe = msg.get("log_safe")
+        if isinstance(log_safe, str):
+            logger.info("role=%s content=%s", msg.get("role"), log_safe)
+            return
+        # Degraded but not blind. A result's keys are our own schema and are worth
+        # seeing; a call's keys were composed by the model and are not.
+        logger.info(
+            "role=%s content=%s",
+            msg.get("role"),
+            describe_json_for_log(msg.get("content"), trust_keys=kind == "tool_result"),
+        )
+        return
+
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        logger.info(
+            "role=%s content=%s",
+            msg.get("role"),
+            content if len(content) < 500 else content[:500] + "\u2026",
+        )
 
 
 def _detach_framework_root_routes(app: "FastAPI") -> None:
@@ -894,13 +939,7 @@ class LocalStream:
 
             if isinstance(handler_output, AdditionalOutputs):
                 for msg in handler_output.args:
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        logger.info(
-                            "role=%s content=%s",
-                            msg.get("role"),
-                            content if len(content) < 500 else content[:500] + "…",
-                        )
+                    log_handler_message(msg)
 
             elif isinstance(handler_output, tuple):
                 _, audio_data = handler_output
