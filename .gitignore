@@ -4,6 +4,9 @@
 agents.local.md
 
 # Secrets. Never commit these.
+# Stride API token - grants full board access. Comments must be on their
+# own line; .gitignore has no trailing-comment syntax.
+.stride_auth.md
 .env
 .env.*
 !.env.example
