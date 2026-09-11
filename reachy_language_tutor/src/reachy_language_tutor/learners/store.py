@@ -9,6 +9,7 @@ touching any caller.
 
 from __future__ import annotations
 import os
+import json
 import time
 import logging
 import sqlite3
@@ -240,6 +241,11 @@ def _seed_version(connection: sqlite3.Connection) -> int:
         return 0
 
 
+def _split_legacy_seeded_ids(raw: str) -> set[str]:
+    """Parse the comma-joined form this record used before it became a JSON array."""
+    return {part for part in raw.split(",") if part}
+
+
 def _seeded_learner_ids(connection: sqlite3.Connection) -> set[str]:
     """Return the sample learner ids this database has ever seeded.
 
@@ -251,7 +257,35 @@ def _seeded_learner_ids(connection: sqlite3.Connection) -> set[str]:
     ).fetchone()
     if row is None:
         return set()
-    return {part for part in str(row["value"]).split(",") if part}
+
+    raw = str(row["value"]).strip()
+    if not raw:
+        return set()
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # Written by a version of this code that comma-joined the ids. Reading it is
+        # what keeps an already-seeded installation's deletions permanent across the
+        # upgrade; treating it as unreadable would re-enable the resurrection here.
+        return _split_legacy_seeded_ids(raw)
+
+    if isinstance(parsed, list) and all(isinstance(item, str) for item in parsed):
+        return {item for item in parsed if item}
+
+    if isinstance(parsed, (str, int, float)):
+        # A legacy single id that happens to be valid JSON on its own, e.g. "123".
+        # Split the PARSED value, not the raw text: a quoted JSON string would otherwise
+        # keep its quotes and yield an id matching no real learner.
+        return _split_legacy_seeded_ids(parsed if isinstance(parsed, str) else str(parsed))
+
+    # Neither shape. Degrading to an empty set is the PERMISSIVE direction - it would
+    # let a deleted learner be re-seeded - so say so loudly rather than failing quietly.
+    logger.warning(
+        "Unreadable %s in the learner database; treating it as empty, which allows sample learners to be seeded again",
+        SEEDED_LEARNERS_KEY,
+    )
+    return set()
 
 
 def _seed(connection: sqlite3.Connection) -> bool:
@@ -308,12 +342,19 @@ def _seed(connection: sqlite3.Connection) -> bool:
             [row for row in SEED_RESULTS if row[0] not in skip_results],
         )
 
-        if new_learners:
-            connection.execute(
-                "INSERT INTO schema_meta (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (SEEDED_LEARNERS_KEY, ",".join(sorted(already_seeded | {row[0] for row in new_learners}))),
-            )
+        # Written unconditionally, not only when a learner row was actually inserted:
+        # the invariant is "every sample learner ever seeded is recorded", and a
+        # conditional write would leave the record absent on a database that seeded
+        # under a version which skipped it - re-enabling resurrection exactly once.
+        # JSON rather than a comma-joined string so an id containing a comma cannot
+        # fragment into pieces that match no real learner.
+        connection.execute(
+            "INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (
+                SEEDED_LEARNERS_KEY,
+                json.dumps(sorted(already_seeded | {row[0] for row in SEED_LEARNERS})),
+            ),
+        )
 
         # Written in the same transaction as the rows it describes, so a crash
         # mid-seed leaves the marker unset and the work re-runs safely.

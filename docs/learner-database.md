@@ -85,9 +85,20 @@ attempts stay visible, and recording a result is a plain insert with no update l
 
 ### `schema_meta` — bookkeeping
 
-A key/value table. Today it holds only `seed_version`. The schema version itself lives
-in SQLite's own `PRAGMA user_version`, which is readable on a brand-new file before any
-table exists — so there is no chicken-and-egg at first start.
+A key/value table holding two rows:
+
+| Key | Meaning |
+|---|---|
+| `seed_version` | Which version of the seed data this database has applied |
+| `seeded_learner_ids` | JSON array of the sample learner ids this database has ever seeded |
+
+The schema version itself is not here — it lives in SQLite's own `PRAGMA user_version`,
+which is readable on a brand-new file before any table exists, so there is no
+chicken-and-egg at first start.
+
+`seeded_learner_ids` deliberately outlives the rows it names: it is what makes a
+learner's deletion permanent, so it must still say "we seeded this person" after that
+person's row is gone. See [Versioning and re-seeding](#versioning-and-re-seeding).
 
 ## How the tables relate
 
@@ -199,6 +210,7 @@ Two independent markers, both checked before any work:
 |---|---|---|
 | Schema version | `PRAGMA user_version` | Whether the DDL needs applying |
 | Seed version | `schema_meta.seed_version` | Whether seed data needs writing |
+| Seeded learners | `schema_meta.seeded_learner_ids` | Which sample learners must never be seeded again |
 
 Once both are current, startup costs a connection open, a few pragmas, one integer
 header read, and one indexed single-row lookup — no DDL parsing and no writes. That
@@ -223,6 +235,21 @@ mechanisms are needed for that, and the second is the subtle one:
 
 That is a privacy requirement, not an optimisation: a household that deletes someone must
 not get them back when a catalog update ships.
+
+**How that record is stored, and why it matters.** `seeded_learner_ids` is a **JSON
+array**, written on every seed run rather than only when a learner row was actually
+inserted. Both details exist because the failure mode here is silent:
+
+- An earlier version comma-joined the ids. An id containing a comma would split into
+  fragments matching no real learner, so the guard would quietly stop recognising that
+  person and seed them again. A JSON array cannot fragment.
+- Writing only when a row was inserted left the record absent on any database that
+  seeded under a version which skipped it — re-enabling resurrection exactly once.
+
+The reader still accepts the old comma-joined form, so upgrading an existing
+installation keeps its record. A value that is neither shape is treated as empty **and
+logged as a warning**, because empty is the permissive direction: it allows seeding to
+happen again, which is precisely what this record exists to stop.
 
 To ship a catalog change: edit the `SEED_*` constants in `store.py` and bump
 `SEED_VERSION`. To change the schema: edit `schema.sql`, bump `SCHEMA_VERSION`, and add

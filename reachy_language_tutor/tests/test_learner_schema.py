@@ -1,6 +1,7 @@
 """Tests for the learner database schema, seeding, and its failure modes."""
 
 import os
+import json
 import sqlite3
 import logging
 from pathlib import Path
@@ -144,6 +145,138 @@ def test_deleted_learner_survives_a_seed_version_bump(tmp_path: Path) -> None:
     assert counts["learners"] == 0, "a deleted learner must not come back on a seed bump"
     assert counts["lesson_results"] == 0, "nor may their results"
     assert counts["lessons"] == 12, "catalog rows should still converge"
+
+
+def _seeded_ids_raw(instance_path: Path) -> str:
+    connection = store.connect(instance_path)
+    try:
+        row = connection.execute(
+            "SELECT value FROM schema_meta WHERE key = ?", (store.SEEDED_LEARNERS_KEY,)
+        ).fetchone()
+        return "" if row is None else str(row["value"])
+    finally:
+        connection.close()
+
+
+def _set_seeded_ids_raw(instance_path: Path, value: str) -> None:
+    connection = store.connect(instance_path)
+    try:
+        connection.execute(
+            "INSERT INTO schema_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (store.SEEDED_LEARNERS_KEY, value),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_seeded_learner_ids_is_stored_as_json(tmp_path: Path) -> None:
+    """A JSON array cannot fragment the way a comma-joined string can."""
+    store.ensure_learner_database(tmp_path)
+
+    parsed = json.loads(_seeded_ids_raw(tmp_path))
+    assert isinstance(parsed, list)
+    assert parsed == ["sample-learner"]
+
+
+def test_legacy_comma_joined_record_is_still_read(tmp_path: Path) -> None:
+    """An installation seeded before this became JSON must not lose its record.
+
+    Losing it re-enables resurrecting a deleted learner on exactly the installations
+    that already hold real learner data.
+    """
+    store.ensure_learner_database(tmp_path)
+    _set_seeded_ids_raw(tmp_path, "sample-learner")
+
+    connection = store.connect(tmp_path)
+    try:
+        assert store._seeded_learner_ids(connection) == {"sample-learner"}
+    finally:
+        connection.close()
+
+
+def test_legacy_record_still_blocks_resurrection_after_upgrade(tmp_path: Path) -> None:
+    """The upgrade path itself: legacy record + deleted learner + seed bump."""
+    store.ensure_learner_database(tmp_path)
+    _set_seeded_ids_raw(tmp_path, "sample-learner")
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("DELETE FROM learners WHERE id = ?", ("sample-learner",))
+        connection.execute("UPDATE schema_meta SET value = '0' WHERE key = ?", (store.SEED_VERSION_KEY,))
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert store.ensure_learner_database(tmp_path).seeded is True
+    assert _counts(tmp_path)["learners"] == 0, "a legacy record must still make deletion permanent"
+
+
+def test_learner_id_containing_a_comma_round_trips(tmp_path: Path) -> None:
+    """The failure the JSON encoding exists to prevent."""
+    store.ensure_learner_database(tmp_path)
+    _set_seeded_ids_raw(tmp_path, json.dumps(["smith, john"]))
+
+    connection = store.connect(tmp_path)
+    try:
+        assert store._seeded_learner_ids(connection) == {"smith, john"}
+    finally:
+        connection.close()
+
+
+def test_record_is_written_even_when_no_new_learners(tmp_path: Path) -> None:
+    """The write must not depend on a learner row actually having been inserted.
+
+    Reaching the path the old `if new_learners:` guard skipped needs every seeded learner
+    to be recorded ALREADY, so the reseed computes no new learners at all. Deleting the
+    record instead would empty already_seeded, make every learner "new", and fire the old
+    guard - which is exactly the trap this test exists to avoid.
+
+    The legacy comma-joined value doubles as the observable: under the old guard the write
+    is skipped and the value stays a bare string; under the unconditional write it is
+    rewritten as JSON.
+    """
+    store.ensure_learner_database(tmp_path)
+    _set_seeded_ids_raw(tmp_path, "sample-learner")
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("UPDATE schema_meta SET value = '0' WHERE key = ?", (store.SEED_VERSION_KEY,))
+        connection.commit()
+    finally:
+        connection.close()
+
+    # Precondition: with sample-learner already recorded, this reseed inserts no learner
+    # row, so the removed guard would have skipped the write entirely.
+    connection = store.connect(tmp_path)
+    try:
+        already = store._seeded_learner_ids(connection)
+        assert {row[0] for row in store.SEED_LEARNERS} <= already, (
+            "precondition failed: this test only covers the guard when nothing is new"
+        )
+    finally:
+        connection.close()
+
+    assert store.ensure_learner_database(tmp_path).seeded is True
+    assert json.loads(_seeded_ids_raw(tmp_path)) == ["sample-learner"], (
+        "the record must be rewritten even when no learner row was inserted"
+    )
+
+
+def test_unreadable_record_degrades_and_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """An unrecognisable value is permissive, so it must be loud."""
+    store.ensure_learner_database(tmp_path)
+    _set_seeded_ids_raw(tmp_path, json.dumps({"not": "a list"}))
+
+    connection = store.connect(tmp_path)
+    try:
+        with caplog.at_level(logging.WARNING):
+            assert store._seeded_learner_ids(connection) == set()
+    finally:
+        connection.close()
+
+    assert "seeded_learner_ids" in caplog.text
 
 
 # -------------------------------------------------------------------- seed data
