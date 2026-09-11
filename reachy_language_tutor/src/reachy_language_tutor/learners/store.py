@@ -309,11 +309,39 @@ def _seeded_learner_ids(connection: sqlite3.Connection) -> set[str]:
     if isinstance(parsed, list) and all(isinstance(item, str) for item in parsed):
         return {item for item in parsed if item}
 
-    if isinstance(parsed, (str, int, float)):
-        # A legacy single id that happens to be valid JSON on its own, e.g. "123".
-        # Split the PARSED value, not the raw text: a quoted JSON string would otherwise
-        # keep its quotes and yield an id matching no real learner.
-        return _split_legacy_seeded_ids(parsed if isinstance(parsed, str) else str(parsed))
+    if isinstance(parsed, str):
+        # A single id written whole, as JSON. It is NOT comma-split, and that is the
+        # difference between this arm and the JSONDecodeError one above: inside JSON a
+        # comma in a string is data, not a separator. Splitting here would fragment
+        # "smith, john" into two ids matching no learner -- the exact failure the array
+        # encoding exists to prevent, and the array arm already refuses to do it, so
+        # doing it here would make the same id survive one spelling and not the other.
+        # Comma-splitting belongs only where the raw text really is the legacy form.
+        return {parsed} if parsed else set()
+
+    if isinstance(parsed, (int, float)) and not isinstance(parsed, bool):
+        # A number is the opposite case: the RAW text is the id, and the parsed value
+        # is a lossy rendering of it. str(json.loads(x)) is not x for any literal whose
+        # Python repr differs from its stored spelling -- "1e5" comes back "100000.0"
+        # and "1.50" comes back "1.5". Each is a DIFFERENT id, so the stored one is
+        # dropped, and dropping an id here re-seeds a learner a household deleted.
+        # bool is excluded explicitly because it subclasses int: without that, a stored
+        # "true" yielded {"True"} instead of reaching the warning below.
+        #
+        # The cost of that exclusion, taken deliberately: a legacy bare id spelled
+        # exactly "true", "false" or "null" parses as a JSON bool or None, reaches
+        # neither arm, and is dropped rather than recovered from raw. A bare boolean in
+        # this record is far likelier to be corruption than an id, and it now degrades
+        # LOUDLY, which is the module's rule; before, it degraded silently into an id
+        # matching nobody. Ids here are slugs, so no shipped id can be spelled that way.
+        #
+        # "Refused" understates it, so say the whole thing: _seed rewrites this record
+        # from the set it just read, in the same transaction, so an unreadable value is
+        # not merely ignored for one read -- it is overwritten and the original text is
+        # gone before anyone sees the warning. That is true of every branch that
+        # degrades, not only this one.
+        # raw is non-empty here: the empty and whitespace-only cases returned above.
+        return {raw}
 
     # Neither shape. Degrading to an empty set is the PERMISSIVE direction - it would
     # let a deleted learner be re-seeded - so say so loudly rather than failing quietly.

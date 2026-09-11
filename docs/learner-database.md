@@ -251,6 +251,30 @@ installation keeps its record. A value that is neither shape is treated as empty
 logged as a warning**, because empty is the permissive direction: it allows seeding to
 happen again, which is precisely what this record exists to stop.
 
+A single id that happens to be valid JSON on its own is read two different ways, and
+the asymmetry is deliberate. A quoted string (`"alice"`) is read from the PARSED value,
+because keeping the quotes would yield an id matching no learner. A number (`1e5`,
+`1.50`) is read from the RAW TEXT, because the parsed value is a lossy rendering of it:
+`str(json.loads("1e5"))` is `"100000.0"`, a different id, so the stored one would be
+dropped and that learner seeded again. A stored boolean is neither, and reaches the
+warning — which it did not before, because Python's `bool` subclasses `int`.
+
+**Comma-splitting applies only to the non-JSON branch.** Inside JSON a comma in a
+string is data, not a separator, so neither the array nor the quoted-string form is
+split: `["smith, john"]` and `"smith, john"` both read back as the one id. The quoted
+form used to split, which meant the same id survived one spelling and fragmented in
+the other. One consequence of excluding `bool`: a legacy bare id spelled exactly
+`true`, `false` or `null` parses as a JSON boolean or null, reaches neither scalar arm,
+and is refused with a warning rather than recovered. Ids here are slugs, and a bare
+boolean in this record is far likelier to be corruption than a name.
+
+**A refusal is not reversible.** Every degrading branch warns and returns what it could
+read, and the seed pass then rewrites this record from exactly that set, in the same
+transaction — so the unreadable text is erased before anyone reads the warning. There is
+no later opportunity to repair a corrupt record by hand. That is the real cost of the
+permissive direction here, and it applies to every branch that degrades, not only to the
+boolean one.
+
 To ship a catalog change: edit the `SEED_*` constants in `store.py` and bump
 `SEED_VERSION`. To change the schema: edit `schema.sql`, bump `SCHEMA_VERSION`, and add
 a migration branch for the older version.

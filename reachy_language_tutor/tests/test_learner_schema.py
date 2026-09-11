@@ -470,3 +470,254 @@ def test_fresh_instance_path_is_usable_on_first_start(tmp_path: Path) -> None:
         assert row["id"] == "es-03-numbers"
     finally:
         connection.close()
+
+
+# ------------------------------------------------- every branch of the seeded-ids read
+#
+# This record is what makes a household's deletion permanent across seed-version bumps.
+# Losing an id here re-seeds a learner someone asked to be forgotten, so every branch
+# that can lose one is covered, and the two that silently did are pinned by value.
+
+
+def _read_ids(instance_path: Path, raw: str) -> set[str]:
+    """Store a raw record and read it back through the real function."""
+    _set_seeded_ids_raw(instance_path, raw)
+    connection = store.connect(instance_path)
+    try:
+        return store._seeded_learner_ids(connection)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "123",
+        "1.50",
+        "1e5",
+        "0.1",
+        "12345678901234567890",
+        "-7",
+        "1E5",
+        "1.0e-3",
+        # json.loads accepts these three bare tokens and returns floats, so they reach
+        # the number arm too. Under str(parsed) they became "inf", "-inf" and "nan".
+        "Infinity",
+        "-Infinity",
+        "NaN",
+    ],
+)
+def test_a_stored_number_reads_back_exactly_as_stored(tmp_path: Path, raw: str) -> None:
+    """The id is the stored TEXT; the parsed number is a lossy rendering of it.
+
+    str(json.loads(x)) is not x for any literal whose Python repr differs from its
+    stored spelling: "1e5" came back "100000.0" and "1.50" came back "1.5". Each is a
+    DIFFERENT id, so the real one was dropped -- and dropping one here re-seeds a
+    learner a household deleted. "123" and "0.1" round-tripped by luck, which is why
+    they are in this list too: they are what made the bug invisible.
+    """
+    store.ensure_learner_database(tmp_path)
+
+    assert _read_ids(tmp_path, raw) == {raw}
+
+
+def test_a_stored_json_string_loses_its_quotes(tmp_path: Path) -> None:
+    """The scalar branch's other arm, and the reason it cannot just use the raw text.
+
+    A quoted JSON string must be read through the PARSED value; keeping the quotes
+    would yield an id matching no real learner. This is the case that makes the number
+    arm's opposite treatment look inconsistent until you see both.
+    """
+    store.ensure_learner_database(tmp_path)
+
+    assert _read_ids(tmp_path, '"sample-learner"') == {"sample-learner"}
+
+
+@pytest.mark.parametrize("raw", ["true", "false"])
+def test_a_stored_boolean_warns_rather_than_becoming_an_id(
+    tmp_path: Path, raw: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """bool subclasses int, so it slipped through the number arm and became "True".
+
+    An id of "True" matches no learner, so the record was effectively empty -- but
+    silently, and silence here is the permissive direction: it lets a deleted learner
+    be seeded again. The warning is the whole point of this branch.
+    """
+    store.ensure_learner_database(tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        assert _read_ids(tmp_path, raw) == set()
+
+    assert "treating it as empty" in caplog.text
+    assert raw not in caplog.text, "the record's contents must not reach the log"
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "\t\n"])
+def test_an_empty_record_reads_as_empty_without_a_warning(
+    tmp_path: Path, raw: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Empty is a real state -- nothing has been seeded yet -- not a parse failure.
+
+    Warning here would cry wolf on every fresh install, which is how a warning that
+    matters stops being read.
+    """
+    store.ensure_learner_database(tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        assert _read_ids(tmp_path, raw) == set()
+
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize("raw", ["null", '{"a": 1}', "[1, 2]", '["ok", 2]'])
+def test_a_shape_this_record_never_had_warns(
+    tmp_path: Path, raw: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Neither a list of strings nor a scalar: degrade loudly, never quietly."""
+    store.ensure_learner_database(tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        assert _read_ids(tmp_path, raw) == set()
+
+    assert "allows sample learners to be seeded again" in caplog.text
+    assert raw not in caplog.text, "the record's contents must not reach the log"
+
+
+def test_the_failure_path_never_logs_the_record_itself(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The module's rule: log the exception or the key, never the stored contents.
+
+    An earlier version of this pinned it by asserting "True" was absent while storing
+    "true" -- substrings that could never appear however the warning was written, so
+    the assertion could not fail and the rule had no coverage at all. The marker below
+    is stored IN the record precisely so that a warning which started interpolating it
+    would be caught.
+    """
+    marker = "learner-id-that-must-not-be-logged"
+    store.ensure_learner_database(tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        assert _read_ids(tmp_path, json.dumps({marker: 1})) == set()
+
+    assert "allows sample learners to be seeded again" in caplog.text, "it did warn"
+    assert marker not in caplog.text, "the record's contents must not reach the log"
+
+
+def test_a_refused_record_is_erased_by_the_next_seed_pass(tmp_path: Path) -> None:
+    """The cost of degrading, stated in full rather than one step short.
+
+    "Refused with a warning" sounds per-read and reversible. It is neither: _seed
+    rewrites this record from the set it just read, in the same transaction, so the
+    unreadable text is gone before anyone reads the warning and there is no later
+    chance to repair it by hand. Pinned because the comment and the docs now claim it.
+    """
+    store.ensure_learner_database(tmp_path)
+    _set_seeded_ids_raw(tmp_path, "true")
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("UPDATE schema_meta SET value = '0' WHERE key = ?", (store.SEED_VERSION_KEY,))
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert store.ensure_learner_database(tmp_path).seeded is True
+    assert _seeded_ids_raw(tmp_path) == json.dumps(["sample-learner"]), "the original text is gone"
+
+
+def test_a_comma_inside_json_is_data_and_not_a_separator(tmp_path: Path) -> None:
+    """The same id must survive every JSON spelling, or the guarantee is a coin flip.
+
+    test_learner_id_containing_a_comma_round_trips already pins this for the array
+    form. The quoted-string arm used to comma-split as well, so "smith, john" survived
+    as an array element and fragmented as a scalar -- two ids matching no learner, no
+    warning, and the real one gone. Splitting belongs only where the raw text really is
+    the legacy comma-joined form, which is the non-JSON branch.
+    """
+    store.ensure_learner_database(tmp_path)
+
+    assert _read_ids(tmp_path, json.dumps("smith, john")) == {"smith, john"}
+    assert _read_ids(tmp_path, json.dumps(["smith, john"])) == {"smith, john"}
+    # And the branch that genuinely IS the legacy form still splits.
+    assert _read_ids(tmp_path, "alice,bob") == {"alice", "bob"}
+
+
+@pytest.mark.parametrize(
+    ("label", "raw", "expected_after"),
+    [
+        ("JSON array", '["sample-learner"]', ["sample-learner"]),
+        ("legacy comma-joined", "sample-learner", ["sample-learner"]),
+        ("legacy comma-joined, several", "sample-learner,someone-else", ["sample-learner", "someone-else"]),
+        ("JSON string scalar", '"sample-learner"', ["sample-learner"]),
+    ],
+)
+def test_no_stored_form_resurrects_a_deleted_learner_across_a_seed_bump(
+    tmp_path: Path, label: str, raw: str, expected_after: list[str]
+) -> None:
+    """The behaviour all of the above exists to protect, once per stored form.
+
+    A unit test on the parse proves the ids come back; only this proves that coming
+    back is what stops the re-seed.
+
+    Only two of these four were ever WRITTEN by this code: W4 comma-joined the ids
+    bare, and D2 onward writes a JSON array. A bare quoted string has never been
+    emitted by any writer, and a bare number only as a single comma-joined id that
+    happens to parse. They are kept as defensive coverage of arms that exist, not as
+    claims about what is sitting on a disk somewhere.
+    """
+    store.ensure_learner_database(tmp_path)
+    _set_seeded_ids_raw(tmp_path, raw)
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("DELETE FROM learners WHERE id = ?", ("sample-learner",))
+        connection.execute("UPDATE schema_meta SET value = '0' WHERE key = ?", (store.SEED_VERSION_KEY,))
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert store.ensure_learner_database(tmp_path).seeded is True
+
+    # learners == 0 alone cannot tell "the seed ran and withheld this learner" from
+    # "the seed did nothing at all". The catalog rows cannot tell them apart either --
+    # they survive from the FIRST ensure call and are only converged by the second, so
+    # asserting on them proves nothing about THIS pass, which is what an earlier
+    # version of this comment claimed. What does: the record is rewritten from the set
+    # just read, and only by a pass that actually seeded.
+    assert _seeded_ids_raw(tmp_path) == json.dumps(sorted(expected_after)), label
+    assert _counts(tmp_path)["learners"] == 0, label
+
+
+def test_a_numeric_id_read_from_the_raw_text_still_suppresses_the_reseed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chain the unit test above cannot close, for the one arm this task changed.
+
+    No shipped id is numeric -- SEED_LEARNERS holds only "sample-learner" -- so a
+    numeric record cannot be exercised end to end without standing one up. Patching
+    the seed constant is the smallest way to prove that "reads back exactly" is
+    actually what stops the re-seed, rather than a property asserted in isolation and
+    assumed to matter. Under the old str(parsed) the record read "100000.0", matched
+    nothing, and this learner came back.
+    """
+    monkeypatch.setattr(store, "SEED_LEARNERS", (("1e5", "Numeric Learner", 0),))
+    monkeypatch.setattr(store, "SEED_RESULTS", ())
+
+    assert store.ensure_learner_database(tmp_path).seeded is True
+    assert _counts(tmp_path)["learners"] == 1
+
+    _set_seeded_ids_raw(tmp_path, "1e5")
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("DELETE FROM learners WHERE id = ?", ("1e5",))
+        connection.execute("UPDATE schema_meta SET value = '0' WHERE key = ?", (store.SEED_VERSION_KEY,))
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert store.ensure_learner_database(tmp_path).seeded is True
+
+    # Same oracle as above: the rewritten record is what shows this pass seeded.
+    assert _seeded_ids_raw(tmp_path) == json.dumps(["1e5"])
+    assert _counts(tmp_path)["learners"] == 0, "a numeric id must make deletion permanent too"
