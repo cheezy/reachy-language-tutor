@@ -2031,3 +2031,510 @@ def test_fresh_instance_path_is_queryable_in_one_call(tmp_path: Path) -> None:
     assert progress.next_lesson.id == "es-03-numbers"
     assert isinstance(progress.next_lesson, Lesson)
     assert isinstance(progress.attempts[0], LessonAttempt)
+
+
+# ------------------------------------------------- a value the driver cannot bind
+#
+# sqlite3 raises OverflowError while BINDING an int outside SQLite's signed 64-bit
+# range, before the database sees the statement. It subclasses ArithmeticError, so it
+# was in none of (sqlite3.Error, OSError, ValueError) and travelled straight out of
+# three readers whose docstrings promise never to raise. D5 fixed the same class of
+# bug in record_result; these are the rest.
+
+
+# Everything a conversation tool can put where a learner id belongs. object() is here
+# for the same reason it is in the recorded_at list: it is not JSON, but neither was
+# the assumption that only JSON arrives.
+_HOSTILE_IDS = [
+    2**63,
+    -(2**63) - 1,
+    10**30,
+    -(10**30),
+    "sample-learner",
+    "42",
+    "",
+    None,
+    True,
+    3.5,
+    float("nan"),
+    b"sample-learner",
+    [],
+    {},
+    (),
+    object(),
+]
+
+
+def test_no_reader_raises_whatever_the_learner_id(instance: Path) -> None:
+    """The contract all three share, stated as a test rather than three docstrings.
+
+    The caller is a conversation tool, so an exception here ends the turn -- and the
+    learner id is normally a str, which means an int arriving at all already says
+    something upstream is wrong. That is exactly when a reader is supposed to answer
+    rather than crash.
+    """
+    for learner_id in _HOSTILE_IDS:
+        # Each reader's own contract type, never "is None or True" -- that spelling
+        # can never fail, so it would assert only that nothing raised while reading
+        # like it checked the answer.
+        profile = store.get_profile(learner_id, instance_path=instance)
+        assert profile is None or isinstance(profile, LearnerProfile), learner_id
+        assert isinstance(store.get_practised_languages(learner_id, instance_path=instance), tuple), learner_id
+        # NOT "progress is None or it is about es" -- a populated fresh-start for an
+        # id that can never match satisfies that while being the wrong answer, and
+        # float("nan") in the list above walked exactly that path unnoticed.
+        progress = store.get_progress(learner_id, "es", instance_path=instance)
+        if progress is not None:
+            assert progress.learner_id == learner_id, learner_id
+            assert progress.language_code == "es", learner_id
+
+
+def test_an_unbindable_id_answers_absence_rather_than_raising(instance: Path) -> None:
+    """Each reader's own contract value, not merely 'it did not raise'.
+
+    get_practised_languages returns an empty tuple rather than None, so a test that
+    only asserted 'no exception' would pass while one of them started answering the
+    wrong shape.
+    """
+    for learner_id in (2**63, -(2**63) - 1, 10**30):
+        assert store.get_profile(learner_id, instance_path=instance) is None, learner_id
+        assert store.get_practised_languages(learner_id, instance_path=instance) == (), learner_id
+        assert store.get_progress(learner_id, "es", instance_path=instance) is None, learner_id
+
+
+def test_the_last_id_sqlite_can_bind_is_still_looked_up(instance: Path) -> None:
+    """The boundary, from both sides, so the fix cannot become "refuse large ints".
+
+    An earlier version of this test only asserted None at the boundary -- which a
+    reader that had short-circuited on magnitude would also satisfy, so it proved
+    nothing. These ids are seeded as the text they are, and SQLite's TEXT affinity
+    makes the bound integer match them, so finding the row is only possible if the
+    value really reached the database.
+    """
+    for learner_id in (2**63 - 1, -(2**63)):
+        _add_learner(instance, str(learner_id), name=f"Edge {learner_id}")
+        _add_result(instance, str(learner_id), "es-01-greetings", "completed")
+
+        profile = store.get_profile(learner_id, instance_path=instance)
+        assert profile is not None and profile.display_name == f"Edge {learner_id}", learner_id
+
+        # Still a real query on the other two as well, and each asserted on a POPULATED
+        # answer. An earlier version asserted get_practised_languages(...) == (), which
+        # is also what an absorbed failure returns -- so that line could not tell a real
+        # query from a reader that had bailed out on magnitude, and proved nothing.
+        progress = store.get_progress(learner_id, "es", instance_path=instance)
+        assert progress is not None and progress.next_lesson is not None, learner_id
+        practised = store.get_practised_languages(learner_id, instance_path=instance)
+        assert [(lang.code, lang.attempts) for lang in practised] == [("es", 1)], learner_id
+
+
+def test_the_language_code_is_refused_before_it_can_ever_be_bound(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The second value this reader takes, which the defect report did not name.
+
+    An earlier version of this test asserted only that an out-of-range int came back
+    None, and claimed to prove the widened except tuple covered it. It no longer does
+    and should not: the guard refuses these before a connection is even opened, so
+    OverflowError is unreachable from this argument by construction. Deleting
+    OverflowError from _READER_ABSORBS would leave that old assertion green, which is
+    the whole reason it is written this way now. The tuple is still pinned for the
+    learner id, which does reach a bind, by the two tests above.
+    """
+    for language_code in (2**63, -(2**63) - 1, 10**30):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            assert store.get_progress("sample-learner", language_code, instance_path=instance) is None
+        assert "Could not read a language code: int is not a string" in caplog.text, language_code
+
+
+def test_an_unbindable_language_code_is_separable_from_a_language_we_do_not_teach(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Both answer None, and only the log can tell them apart.
+
+    This reader's None means "this robot has no such language" -- a claim about the
+    shared lesson catalog. An unbindable language code supports no such claim, and
+    store_is_available cannot help: it binds no caller value, so it stays True. Without
+    its own log line the tutor would say "I do not teach that" about a language it may
+    well teach, with every available signal agreeing.
+    """
+    with caplog.at_level(logging.WARNING):
+        assert store.get_progress("sample-learner", "de", instance_path=instance) is None
+    assert caplog.text == "", "a language we genuinely do not teach is not a failure"
+
+    with caplog.at_level(logging.WARNING):
+        assert store.get_progress("sample-learner", 10**30, instance_path=instance) is None
+    assert "Could not read a language code" in caplog.text
+    assert store.store_is_available(instance) is True, "the store is fine; the argument was not"
+
+
+def test_silence_is_what_separates_a_real_absence_from_every_other_none(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """get_progress's None does three jobs; only the log tells them apart.
+
+    store_is_available cannot: it binds no caller value, so it answers True for both
+    argument failures below. A caller that read True as confirmation would tell a
+    person "I do not teach that" about a language this robot may well teach, with
+    every other signal agreeing. So the rule is silence, and it is pinned here rather
+    than only asserted in the docstring.
+    """
+    # The first four rows are the ones that matter. An earlier version of this rule was
+    # FALSE for them and this table did not notice, because every case it walked was a
+    # value sqlite3 REFUSES to bind. These bind cleanly and match nothing: languages.code
+    # is TEXT in a STRICT table, so a BLOB never equals it, NULL never equals anything,
+    # and 42/3.5/True take TEXT affinity and become "42"/"3.5"/"1". Each answered a
+    # silent None for a language this robot teaches.
+    quiet_then_loud: list[tuple[str, object, object, str]] = [
+        ("bytes language code", "sample-learner", b"es", "Could not read a language code"),
+        ("None language code", "sample-learner", None, "Could not read a language code"),
+        ("int language code", "sample-learner", 42, "Could not read a language code"),
+        ("bool language code", "sample-learner", True, "Could not read a language code"),
+        ("float language code", "sample-learner", 3.5, "Could not read a language code"),
+        # The third class, and the one that survived two earlier versions of this
+        # rule: a correctly typed str that binds cleanly and differs from a taught
+        # code only in case or padding. schema.sql CHECKs code = lower(code), so a
+        # non-lowercase code is a GUARANTEED false absence, never a real one.
+        ("uppercase, which the catalog CHECK forbids", "sample-learner", "ES", "Could not read a language code"),
+        ("mixed case", "sample-learner", "Es", "Could not read a language code"),
+        ("a surrogate, which is a str the driver cannot bind", "sample-learner", "e\ud800s", "Could not read a language code"),
+        ("the empty string, too short to be a code", "sample-learner", "", "Could not read a language code"),
+        ("padded, which no CHECK forbids and nothing matched", "sample-learner", " es", "Could not read a language code"),
+        ("a control character", "sample-learner", "es\x00", "Could not read a language code"),
+        ("a language we really do not teach", "sample-learner", "de", ""),
+        ("a legal-shaped code that is simply absent", "sample-learner", "pt", ""),
+        ("an unbindable language code", "sample-learner", 10**30, "Could not read a language code"),
+        ("an unbindable learner id", 10**30, "es", "Could not read learner progress"),
+    ]
+
+    for label, learner_id, language_code, expected in quiet_then_loud:
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            assert store.get_progress(learner_id, language_code, instance_path=instance) is None, label
+        if expected:
+            assert expected in caplog.text, label
+        else:
+            assert caplog.text == "", label
+        # The disambiguator the docstring tells callers NOT to use, shown failing.
+        assert store.store_is_available(instance) is True, label
+
+
+def test_a_real_learner_is_unaffected(instance: Path) -> None:
+    """The other half of any except-clause change: the path that was always fine."""
+    profile = store.get_profile("sample-learner", instance_path=instance)
+    assert profile is not None and profile.display_name == "Sample Learner"
+
+    progress = store.get_progress("sample-learner", "es", instance_path=instance)
+    assert progress is not None and progress.language_code == "es"
+
+    practised = store.get_practised_languages("sample-learner", instance_path=instance)
+    # A real row, not an empty tuple -- which is what an absorbed failure returns, so
+    # an assertion of () here would have passed even if this reader had stopped working.
+    assert [(lang.code, lang.attempts) for lang in practised] == [("es", 3)]
+
+
+def test_the_overflow_warning_names_the_exception_and_not_the_id(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Widening an except clause is exactly where the no-ids-in-logs rule gets lost.
+
+    The existing rule is pinned for a missing database; this is the newly caught path,
+    and the id here is a distinctive number rather than a name, so a leak is visible.
+    """
+    with caplog.at_level(logging.WARNING):
+        store.get_profile(1234567890123456789012345, instance_path=instance)
+        store.get_practised_languages(1234567890123456789012345, instance_path=instance)
+        store.get_progress(1234567890123456789012345, "es", instance_path=instance)
+        # The newest handler too. It refuses before the id is ever bound, which is
+        # why it cannot leak one -- but "widening a handler is where this rule gets
+        # forgotten" applies hardest to the handler added last.
+        store.get_progress(1234567890123456789012345, b"es", instance_path=instance)
+
+    assert "1234567890123456789012345" not in caplog.text, "learner ids are personal data"
+    assert caplog.text.count("too large") == 3, "each reader should have logged its own refusal"
+    assert "bytes is not a string" in caplog.text, "the type, which is safe; never the value"
+
+    # A surrogate is the one value whose EXCEPTION message quotes its argument:
+    # UnicodeEncodeError names the offending character and its index, so letting it
+    # reach a handler would put a fragment of the id in a line whose comment promises
+    # otherwise. It is refused before the bind now, and _log_safe covers the same
+    # class on the paths a guard cannot reach.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        store.get_profile("alice\ud800bob", instance_path=instance)
+    assert "ud800" not in caplog.text and "position" not in caplog.text, "no fragment of the id"
+    assert "not encodable as UTF-8" in caplog.text, "still diagnosable: the shape, not the value"
+
+
+def test_a_broken_store_is_not_reported_as_a_bad_language_code(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The two messages have to keep meaning what the docstring says they mean.
+
+    An earlier version wrapped the first query in its own handler, so a dropped table
+    -- a storage failure -- was reported as "Could not read a language code". That
+    reads to an operator as a bad argument on a healthy store, which is the blur this
+    task is about, arriving through the very line added to prevent it. The guard is a
+    type check before the connection now, so a storage failure falls through to the
+    handler that describes one.
+    """
+    connection = store.connect(instance)
+    try:
+        connection.execute("DROP TABLE languages")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with caplog.at_level(logging.WARNING):
+        assert store.get_progress("sample-learner", "es", instance_path=instance) is None
+
+    assert "Could not read learner progress" in caplog.text
+    assert "Could not read a language code" not in caplog.text
+
+
+def test_a_bad_language_code_is_not_reported_as_a_broken_store(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The converse direction, which is where the last regression hid.
+
+    Pinning only "a storage failure is not called a bad code" left the mirror image
+    free: a str carrying a surrogate passes any type check, fails at bind time with a
+    UnicodeEncodeError that is a ValueError, and was logged as a failed lookup on a
+    perfectly healthy store. One-directional pins are how a fix trades one mislabel
+    for the other and the suite stays green.
+    """
+    with caplog.at_level(logging.WARNING):
+        assert store.get_progress("sample-learner", "e\ud800s", instance_path=instance) is None
+
+    assert "Could not read a language code" in caplog.text
+    assert "Could not read learner progress" not in caplog.text
+    assert store.store_is_available(instance) is True
+
+
+def test_store_is_available_still_separates_absence_from_breakage(
+    instance: Path, tmp_path: Path
+) -> None:
+    """The distinction the readers depend on, re-checked after collapsing one more case.
+
+    A value the driver cannot bind now answers None like a broken store does -- so the
+    thing that tells those apart has to keep working, or the collapse would be the
+    blurring it is not supposed to be.
+    """
+    assert store.store_is_available(instance) is True
+    assert store.get_profile(10**30, instance_path=instance) is None
+
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    store.learner_db_path_for_instance(broken).write_bytes(b"not a database at all")
+    assert store.store_is_available(broken) is False
+
+
+def test_record_result_still_answers_with_a_reason_code(instance: Path) -> None:
+    """D5's fix is a different shape and must not be pulled into this one.
+
+    record_result returns a reason rather than None, and it catches OverflowError one
+    handler earlier than the tuple this task widened.
+    """
+    outcome = store.record_result(10**30, "es-01-greetings", "completed", instance_path=instance)
+
+    assert outcome.recorded is False
+    # The exact bucket, not merely "some published reason". An unbindable id is
+    # refused by the driver, which is rejected_by_database -- distinct from
+    # unknown_learner, the answer for an id that is bindable and simply absent.
+    # Asserting membership in RECORD_REASONS alone would pass either way, and the
+    # difference is what a tutor says out loud.
+    assert outcome.reason == "rejected_by_database"
+    assert outcome.reason in learners.RECORD_REASONS
+
+    absent = store.record_result("nobody", "es-01-greetings", "completed", instance_path=instance)
+    assert absent.reason == "unknown_learner", "the two must not collapse into one bucket"
+
+
+# -------------------------------- values that can never match, and a bad instance path
+
+
+def test_a_learner_who_exists_is_never_silently_reported_absent(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The worst shape this defect took, and it was silent.
+
+    bytes and None can never compare equal to a TEXT id however the store is filled --
+    a BLOB never equals TEXT, and NULL never equals anything. So these lookups were
+    guaranteed non-matches, and all three readers answered as if the learner were
+    absent. get_progress was the worst of them: its answer for an unknown learner is a
+    populated "fresh start", so a learner with real history was told they had
+    completed nothing, which is the one claim the database exists to settle.
+    """
+    truth = store.get_progress("sample-learner", "es", instance_path=instance)
+    assert truth is not None and truth.completed, "the learner really does have history"
+
+    for learner_id in (b"sample-learner", None, float("nan")):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            assert store.get_profile(learner_id, instance_path=instance) is None, learner_id
+            assert store.get_practised_languages(learner_id, instance_path=instance) == (), learner_id
+            progress = store.get_progress(learner_id, "es", instance_path=instance)
+
+        # Not a populated object claiming an empty history. Refused outright.
+        assert progress is None, learner_id
+        assert caplog.text.count("Could not read a learner id") == 3, learner_id
+        # One prefix per meaning: this is a caller error, not a failed lookup.
+        assert "Could not read learner progress" not in caplog.text, learner_id
+        assert "sample-learner" not in caplog.text, "the shape, never the value"
+
+
+def test_nan_is_null_wearing_a_float(instance: Path) -> None:
+    """Named separately because it is the case a type check cannot see.
+
+    sqlite3 binds float("nan") as SQL NULL, so it is the None case above arriving
+    through a type the guard does not inspect -- and it slipped past an earlier
+    version. float("inf") is NOT in this class: it binds as REAL and takes TEXT
+    affinity to "Inf", which is a real lookup, so a guard that refused floats would be
+    refusing a value the database can genuinely compare.
+    """
+    assert store.get_profile(float("nan"), instance_path=instance) is None
+    assert store.get_progress(float("nan"), "es", instance_path=instance) is None
+    assert store.get_profile(float("inf"), instance_path=instance) is None, "bindable, simply absent"
+
+    # SQLite renders an infinite REAL as "Inf" when TEXT affinity applies, so that is
+    # the id it can find. Checked rather than assumed: "inf" does not match.
+    _add_learner(instance, "Inf", name="Infinity")
+    found = store.get_profile(float("inf"), instance_path=instance)
+    assert found is not None and found.display_name == "Infinity", "a real lookup, not a refusal"
+
+
+def test_a_number_is_still_looked_up_because_sqlite_can_compare_it(instance: Path) -> None:
+    """The line the guard must not cross, and this task's edge cases draw it.
+
+    SQLite applies the column's TEXT affinity to a bound number, so 42 finds the
+    learner whose id is "42". A guard that simply required a str would refuse those --
+    and would refuse the 64-bit boundary ids the edge_cases require to keep working.
+    """
+    _add_learner(instance, "42", name="Forty Two")
+
+    assert store.get_profile(42, instance_path=instance) is not None
+    assert store.get_profile(2**63 - 1, instance_path=instance) is None, "bindable, simply absent"
+    assert isinstance(store.get_practised_languages(3.5, instance_path=instance), tuple)
+
+
+def test_every_entry_point_answers_rather_than_raises_for_a_bad_instance_path(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Fifteen combinations that used to raise TypeError, including the two this task
+    does not otherwise touch.
+
+    The fix is one guard in learner_db_path_for_instance, which all five entry points
+    reach through connect, raising ValueError rather than TypeError -- ValueError is
+    already in every one of their handlers, so each answers with its own contract
+    value. Fixing three of five here would have left the interface less predictable
+    than it was.
+    """
+    entry_points = [
+        ("get_profile", lambda p: store.get_profile("a", instance_path=p), None),
+        ("get_practised_languages", lambda p: store.get_practised_languages("a", instance_path=p), ()),
+        ("get_progress", lambda p: store.get_progress("a", "es", instance_path=p), None),
+        ("store_is_available", lambda p: store.store_is_available(p), False),
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        for name, call, expected in entry_points:
+            for bad in (12345, ["x"], b"/tmp"):
+                assert call(bad) == expected, (name, bad)
+
+        for bad in (12345, ["x"], b"/tmp"):
+            outcome = store.record_result("a", "es-01-greetings", "completed", instance_path=bad)
+            assert outcome.recorded is False, bad
+            # The exact reason, not membership in RECORD_REASONS -- invalid_outcome,
+            # unknown_learner and storage_unavailable all satisfy membership, so it
+            # could not tell the path this test is about from any other refusal. The
+            # same hollow shape this file already corrected once, at the record_result
+            # reason-code test above.
+            assert outcome.reason == "storage_unavailable", bad
+            assert outcome.reason in learners.RECORD_REASONS, bad
+
+    assert "/tmp" not in caplog.text, "a path can carry a username; log the type"
+    assert "must be a path, not int" in caplog.text
+
+
+def test_a_genuine_programming_error_still_raises(
+    instance: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of choosing ValueError: TypeError keeps meaning what it meant.
+
+    Widening the readers' absorb tuple to include TypeError was the tempting
+    alternative and is worse -- the row converters call int() on column values, so
+    TypeError is also what a real bug in them raises, and absorbing it would turn that
+    bug into a silent absence.
+    """
+    assert TypeError not in store._READER_ABSORBS
+
+    def explode(_row: object) -> object:
+        raise TypeError("a converter bug")
+
+    monkeypatch.setattr(store, "_profile_from_row", explode)
+
+    # End to end through the reader, so a reader that grew its own except TypeError
+    # beside the shared tuple would fail here. Asserting on the tuple alone would not
+    # notice that, which is the same shape of hollow assertion this file has already
+    # had to correct twice.
+    with pytest.raises(TypeError):
+        store.get_profile("sample-learner", instance_path=instance)
+
+
+def test_no_entry_point_raises_when_the_home_directory_cannot_be_found(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The default path branch, which no instance_path argument ever reaches.
+
+    Path.home() raises RuntimeError when the home directory cannot be determined -- a
+    robot service started without HOME. ensure_learner_database has caught that since
+    it was written; the five entry points did not, so the branch taken whenever no
+    instance_path is passed ended the conversation turn.
+    """
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: (_ for _ in ()).throw(RuntimeError("no home"))))
+
+    with caplog.at_level(logging.WARNING):
+        assert store.get_profile("sample-learner") is None
+        assert store.get_practised_languages("sample-learner") == ()
+        assert store.get_progress("sample-learner", "es") is None
+        assert store.store_is_available() is False
+        assert store.record_result("sample-learner", "es-01-greetings", "completed").recorded is False
+
+    assert "no home" in caplog.text, "still diagnosable"
+
+
+def test_a_bad_instance_path_is_a_caller_error_not_a_broken_store(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """store_is_available is the module's disambiguator; it must not blur either way.
+
+    A non-path instance_path makes every reader answer absence, so if this said False
+    with the same message a broken disk produces, a caller would conclude the store was
+    unreadable when nothing is wrong with it.
+    """
+    with caplog.at_level(logging.WARNING):
+        assert store.store_is_available(12345) is False
+
+    assert "The instance path is not a path" in caplog.text
+    assert "The learner store is not readable" not in caplog.text
+    assert store.store_is_available(instance) is True
+
+
+def test_no_entry_point_logs_a_fragment_of_a_surrogate_id(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The two sinks _log_safe did not originally cover.
+
+    UnicodeEncodeError names the offending character and its INDEX, so an unencodable
+    learner id leaves a fragment of itself in the log. The readers refuse it before the
+    bind; these two reach the handler, which is why the helper has to be applied there
+    too rather than only where the rule was first written down.
+    """
+    with caplog.at_level(logging.WARNING):
+        store.record_result("alice\ud800bob", "es-01-greetings", "completed", instance_path=instance)
+        store.store_is_available(str(instance) + "/\ud800")
+
+    assert "ud800" not in caplog.text and "position" not in caplog.text
+    assert "UnicodeEncodeError" in caplog.text, "still diagnosable: the class, not the value"

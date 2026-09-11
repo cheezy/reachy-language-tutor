@@ -23,6 +23,7 @@ tools: nothing is shared, so sqlite3's same-thread check can never fire.
 from __future__ import annotations
 import os
 import json
+import math
 import time
 import logging
 import sqlite3
@@ -191,8 +192,20 @@ class EnsureResult:
 
 
 def learner_db_path_for_instance(instance_path: str | Path | None = None) -> Path:
-    """Return the learner database path for this app instance."""
+    """Return the learner database path for this app instance.
+
+    A value Path() cannot accept raises ValueError rather than the TypeError Path
+    itself raises. That one word is what makes every public entry point absorb it:
+    ValueError is already in each of their handlers, so all five answer with their own
+    contract value -- None, an empty tuple, False, a reason code -- instead of three of
+    them promising not to raise and then raising. TypeError deliberately keeps its
+    ordinary meaning, so a genuine bug in a row converter still surfaces as one rather
+    than being swallowed as a silent absence.
+    """
     if instance_path is not None:
+        refusal = _cannot_be_a_path(instance_path)
+        if refusal is not None:
+            raise ValueError(f"instance_path must be a path, not {refusal}")
         return Path(instance_path).expanduser() / LEARNER_DB_FILENAME
 
     data_home = os.getenv("XDG_DATA_HOME")
@@ -454,6 +467,128 @@ _SQLITE_INT_MAX = 2**63 - 1
 
 _LEARNER_FILTER_MARKERS = ("learner_id = ?", "learners.id = ?")
 
+# What a reader absorbs instead of raising. Their contract is a value, never an
+# exception: the caller is a conversation tool, and an exception there ends the turn.
+#
+# OverflowError is the odd one and is named rather than left to be inherited. sqlite3
+# raises it while BINDING an int outside the range above -- before the database sees
+# the statement -- and it subclasses ArithmeticError, so it is in none of the other
+# three. It is therefore a CALLER error, where the other three are storage failures.
+#
+# Collapsing the two into one answer here is not the blurring store_is_available
+# exists to prevent. That distinction matters because a broken store says None about a
+# learner who really exists. A value the driver cannot bind cannot name any learner, so
+# "no such learner" is the TRUE answer rather than a fallback -- and store_is_available
+# still truthfully reports the store healthy, which is what a caller asks next.
+#
+# RuntimeError is here for a different reason than the rest, and not for OverflowError's:
+# Path.home() raises it when the home directory cannot be determined, which is the
+# DEFAULT path branch, taken whenever no instance_path is passed. ensure_learner_database
+# has caught it since it was written; these readers did not, so a robot service started
+# without HOME ended the conversation turn instead of reporting an unreadable store.
+# TypeError stays out on purpose: the row converters call int() and str() on column
+# values, so absorbing it would turn a genuine bug there into a silent absence.
+_READER_ABSORBS = (sqlite3.Error, OSError, ValueError, OverflowError, RuntimeError)
+
+
+def _log_safe(exc: BaseException) -> object:
+    r"""Render an exception for a log line without letting it quote the argument.
+
+    Almost every exception these readers absorb is value-free: OverflowError says the
+    int was too large, sqlite3 names a type or a table, never a bound value. One is
+    not. UnicodeEncodeError's message is "'utf-8' codec can't encode character
+    '\\ud800' in position 5", which carries the offending character AND its index
+    within the learner id -- a fragment of personal data reaching a log line whose
+    neighbouring comment promises never to carry one. The class name says everything
+    an operator needs: the value could not be encoded.
+    """
+    return type(exc).__name__ if isinstance(exc, UnicodeError) else exc
+
+
+# What the lesson catalog can possibly hold, from schema.sql's own CHECK on
+# languages.code: lowercase, and 2 to 8 characters. A value outside that cannot be a
+# catalog code, so its absence is a fact about the VALUE and not about the store.
+_CATALOG_CODE_MIN, _CATALOG_CODE_MAX = 2, 8
+
+
+def _cannot_be_a_path(value: object) -> str | None:
+    """Say why this value could never be a filesystem path, or None if it might.
+
+    The type, never the value: a path carries a username, and on this robot that is a
+    household member's name.
+    """
+    if not isinstance(value, (str, os.PathLike)):
+        return f"{type(value).__name__}, not a str or os.PathLike"
+    return None
+
+
+def _cannot_name_a_learner(value: object) -> str | None:
+    """Say why this value could never equal a stored learner id, or None if it might.
+
+    Not a type check, deliberately. Learner ids are TEXT, and SQLite applies the
+    column's affinity to a bound number, so 42 finds the learner whose id is "42" and
+    an int at the 64-bit boundary finds its own text spelling -- those are real
+    lookups and this task's edge cases require them to keep working.
+
+    What cannot work is a value that can never COMPARE equal to TEXT however the store
+    is filled. A BLOB never equals TEXT and NULL never equals anything, so bytes and
+    None are guaranteed non-matches: get_profile(b"sample-learner") answered a silent
+    None for a learner who exists, and get_progress answered a populated result
+    claiming no lessons completed for a learner with a real history. That second one
+    is the worse failure, because the database is meant to be the source of truth for
+    progress and a quiet zero would have the tutor re-teach finished lessons.
+
+    Each reason names a shape, never the value.
+    """
+    if value is None:
+        return "None, and NULL never compares equal to a stored id"
+    if isinstance(value, float) and math.isnan(value):
+        # Same refusal, one type further out. sqlite3 binds NaN as SQL NULL -- typeof()
+        # says "null" -- so it is the NULL case above wearing a float. float("inf") is
+        # NOT: it binds as REAL and takes TEXT affinity to "Inf", which is a real lookup.
+        return "not a number, and sqlite3 binds NaN as NULL"
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"{type(value).__name__}, and a BLOB never compares equal to TEXT"
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return "not encodable as UTF-8"
+    return None
+
+
+def _cannot_be_a_catalog_code(value: object) -> str | None:
+    """Say why this value could never name a language row, or None if it might.
+
+    Tests the property that matters -- can this name a catalog row -- rather than a
+    proxy for it. Two earlier attempts tested proxies and both let a class through:
+    bindability let every wrong TYPE past, and the type alone let "ES" and " es " past.
+    Each returned a silent None for a language this robot does teach.
+
+    Each reason names a shape, never the value.
+    """
+    if not isinstance(value, str):
+        return f"{type(value).__name__} is not a string"
+    if value != value.lower():
+        return "not lowercase, and the catalog's CHECK stores only lowercase codes"
+    if value != value.strip() or any(ch.isspace() or ord(ch) < 0x20 for ch in value):
+        # The class the CHECK cannot close for us. lower(code) rules out "ES"; nothing
+        # rules out " es", "es\n" or "es\x00", which are lowercase, in range, and bind
+        # cleanly -- so each matched nothing and answered a silent None for a language
+        # this robot teaches. Refused rather than stripped: repairing the caller's value
+        # invisibly would leave the tool layer no signal that what it sent was malformed.
+        return "padded or contains a control character"
+    if not _CATALOG_CODE_MIN <= len(value) <= _CATALOG_CODE_MAX:
+        return f"{len(value)} characters, outside the catalog's 2 to 8"
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        # A str the driver cannot bind. Refused HERE so it is named as the caller
+        # error it is; left to the handler below it would be logged as a failed
+        # lookup, which is the mirror of the mislabelling this guard replaced.
+        return "not encodable as UTF-8"
+    return None
+
 
 def _learner_scoped(sql: str) -> str:
     """Return the statement, refusing at import time one that is not learner-scoped.
@@ -570,14 +705,24 @@ def store_is_available(instance_path: str | Path | None = None) -> bool:
     The readers answer None both for "no such thing" and for "cannot look it up", which
     a caller must not conflate when telling a person what is true. This is how they tell
     the two apart, without either reader having to raise.
+
+    One thing it deliberately does NOT report as breakage: an instance_path that is not
+    a path. That is a caller error on a store which may be perfectly healthy, and saying
+    False about it would be the same wrong-bucket move this function exists to prevent
+    -- so it is refused separately, with its own message, before anything is opened.
     """
+    refusal = None if instance_path is None else _cannot_be_a_path(instance_path)
+    if refusal is not None:
+        logger.warning("The instance path is not a path: %s", refusal)
+        return False
+
     connection: sqlite3.Connection | None = None
     try:
         connection = connect(instance_path)
         connection.execute(_STORE_READABLE_SQL).fetchone()
         return True
-    except (sqlite3.Error, OSError, ValueError) as exc:
-        logger.warning("The learner store is not readable: %s", exc)
+    except _READER_ABSORBS as exc:
+        logger.warning("The learner store is not readable: %s", _log_safe(exc))
         return False
     finally:
         if connection is not None:
@@ -592,14 +737,19 @@ def get_profile(learner_id: str, *, instance_path: str | Path | None = None) -> 
     the difference matters; the two situations should not be described the same way to
     a person.
     """
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not read a learner id: %s", refusal)
+        return None
+
     connection: sqlite3.Connection | None = None
     try:
         connection = connect(instance_path)
         row: sqlite3.Row | None = connection.execute(_PROFILE_SQL, (learner_id,)).fetchone()
         return None if row is None else _profile_from_row(row)
-    except (sqlite3.Error, OSError, ValueError) as exc:
+    except _READER_ABSORBS as exc:
         # Never the learner id: these are personal data and this is a log line.
-        logger.warning("Could not read a learner profile: %s", exc)
+        logger.warning("Could not read a learner profile: %s", _log_safe(exc))
         return None
     finally:
         if connection is not None:
@@ -619,6 +769,11 @@ def get_practised_languages(
     yields empty after logging a warning, call store_is_available before telling a
     person they have never practised.
     """
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not read a learner id: %s", refusal)
+        return ()
+
     connection: sqlite3.Connection | None = None
     try:
         connection = connect(instance_path)
@@ -632,9 +787,9 @@ def get_practised_languages(
             )
             for row in rows
         )
-    except (sqlite3.Error, OSError, ValueError) as exc:
+    except _READER_ABSORBS as exc:
         # Never the learner id: these are personal data and this is a log line.
-        logger.warning("Could not read a learner's practised languages: %s", exc)
+        logger.warning("Could not read a learner's practised languages: %s", _log_safe(exc))
         return ()
     finally:
         if connection is not None:
@@ -651,14 +806,60 @@ def get_progress(
     with an empty history and the first lesson as next -- a very different answer, and
     the tutor says something different about it.
 
-    One caveat the caller must not ignore: an unreadable store also yields None, after
-    logging a warning. Saying "I do not teach German" when the database is simply broken
-    would be a confident falsehood, so call store_is_available before reporting absence
-    to a person.
+    None is doing more than one job. It also comes back when the store cannot be read,
+    and when the language code is not a string -- and neither of those supports a claim
+    about the lesson catalog.
+
+    The rule that separates them is silence, not store_is_available. **A genuine
+    absence logs nothing. Every other None logs a warning first.** So a caller about to
+    tell a person "I do not teach German" must know that this call was quiet. One
+    prefix per meaning, and each means only that one thing:
+
+      "Could not read a language code"  -- the code could not name a catalog row.
+      "Could not read a learner id"     -- the id could not name any learner.
+      "Could not read learner progress" -- the lookup itself failed; the store is at
+                                           fault rather than either argument.
+
+    An earlier round had the guard and the handler sharing that last prefix, so a
+    caller error on a healthy store read as breakage -- the mirror of the mislabelling
+    the round before it removed. Distinct prefixes are what keep the mapping honest.
+
+    The rule assumes ensure_learner_database reported ready=True. A languages table
+    that exists but holds no rows satisfies store_is_available's probe, and then every
+    language is a silent absence -- true of the table as it stands, and still the wrong
+    thing to tell a person. That state is reported one layer up, at seeding, and an app
+    that serves anyway has already ignored the answer.
+
+    store_is_available is deliberately NOT that test. It binds no caller value, so it
+    answers True when the argument is the problem -- reading True as confirmation that
+    the absence is real is exactly the confident falsehood this warns about.
 
     An unknown learner gets a fresh start rather than an error: the lesson catalog is
     not personal data, so there is nothing to withhold.
     """
+    # Refused here, before the connection is opened, because the values that make this
+    # function lie are ones the database ACCEPTS. A BLOB never equals TEXT, NULL never
+    # equals anything, 42 and True take TEXT affinity and become "42" and "1", and "ES"
+    # is simply not a spelling the catalog's CHECK permits -- every one of them binds
+    # cleanly, matches nothing, and used to return a SILENT None for a language this
+    # robot does teach. Refusing before the connection also keeps a genuine storage
+    # failure falling through to the handler that describes one.
+    #
+    # Still None and still no exception: the contract is unchanged.
+    refusal = _cannot_be_a_catalog_code(language_code)
+    if refusal is not None:
+        logger.warning("Could not read a language code: %s", refusal)
+        return None
+
+    # Refused for the same reason and with the same force. This reader's answer for an
+    # unknown learner is a populated "fresh start", so a learner id that can never
+    # match does not merely say the wrong thing -- it says a learner with real history
+    # has completed nothing, which is the one claim the database exists to settle.
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not read a learner id: %s", refusal)
+        return None
+
     connection: sqlite3.Connection | None = None
     try:
         connection = connect(instance_path)
@@ -673,8 +874,9 @@ def get_progress(
         attempts = tuple(
             _attempt_from_row(row) for row in connection.execute(_ATTEMPTS_SQL, (learner_id, language_code))
         )
-    except (sqlite3.Error, OSError, ValueError) as exc:
-        logger.warning("Could not read learner progress: %s", exc)
+    except _READER_ABSORBS as exc:
+        # Never the learner id: these are personal data and this is a log line.
+        logger.warning("Could not read learner progress: %s", _log_safe(exc))
         return None
     finally:
         if connection is not None:
@@ -764,8 +966,8 @@ def record_result(
         # better than an exception ending the turn. Neither message carries the value.
         logger.warning("The learner database refused an attempt: %s", exc)
         return RecordResultOutcome(recorded=False, reason="rejected_by_database")
-    except (sqlite3.Error, OSError, ValueError) as exc:
-        logger.warning("Could not record a lesson attempt: %s", exc)
+    except _READER_ABSORBS as exc:
+        logger.warning("Could not record a lesson attempt: %s", _log_safe(exc))
         return RecordResultOutcome(recorded=False, reason="storage_unavailable")
     finally:
         if connection is not None:
