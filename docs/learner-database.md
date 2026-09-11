@@ -261,3 +261,109 @@ A missing directory is created. A corrupt or unreadable database is **logged and
 reported, never deleted** — it may hold real progress that a human can still recover.
 `ensure_learner_database()` returns `ready=False` with the error rather than raising,
 so the app starts and can say learner data is unavailable instead of crashing.
+
+## The query interface
+
+Everything above describes the data. This is how the application reaches it.
+
+**Import from the package, never from the storage module:**
+
+```python
+from reachy_language_tutor.learners import get_profile, get_progress, record_result
+```
+
+What that package exports is the whole vocabulary a caller needs. It deliberately does
+not export the connection helper, the bootstrap function, or the seed constants — those
+are SQLite's business, and a hosted backend would have no equivalent.
+
+| Function | Returns | Meaning of the empty answer |
+|---|---|---|
+| `get_profile(learner_id, *, instance_path=None)` | `LearnerProfile \| None` | `None` = no such learner **or** the store is unreadable |
+| `get_progress(learner_id, language_code, *, instance_path=None)` | `LanguageProgress \| None` | `None` = that language is not taught **or** the store is unreadable |
+| `record_result(learner_id, lesson_id, outcome, *, score=None, recorded_at=None, instance_path=None)` | `RecordResultOutcome` | never raises; see the reason codes below |
+
+`learner_id` comes first on every one of them, and `instance_path` is keyword-only and
+last, so it can never be passed by accident into the language slot.
+
+### Absence is not the same as breakage
+
+Both readers return `None` for two different reasons: the thing genuinely does not
+exist, or the store could not be read. A storage failure is logged as a warning, but a
+caller that treats `None` as "does not exist" will tell someone "I don't teach German"
+when the database is simply broken — a confident falsehood.
+
+`store_is_available(instance_path)` is how a caller tells the two apart without either
+reader having to raise. `record_result` does not need it: it already reports
+`storage_unavailable` explicitly.
+
+### The three empty answers, which are not the same thing
+
+This distinction is the reason `get_progress` returns an optional value rather than an
+always-populated one:
+
+| Situation | Result | What the tutor should say |
+|---|---|---|
+| Language taught, never practised | populated; `completed` empty, `next_lesson` is lesson 1 | "You haven't started French — shall we?" |
+| Language not taught here | `None` | "I don't teach German yet." |
+| Language taught, no lessons written | populated; `remaining` empty, `next_lesson` is `None` | "I teach it, but I have nothing prepared." |
+| Every lesson completed | `remaining` empty, `completed` full | "You've finished Spanish." |
+
+An **unknown learner** gets a populated fresh start rather than an error — the lesson
+catalog is not personal data, so there is nothing to withhold. Recording a result is
+where an unknown learner is caught and reported, because that is the operation that
+must not silently appear to succeed.
+
+### Recording a result
+
+`record_result` never raises. A wrong word from the conversation must not end the turn,
+so every failure comes back as a code:
+
+| `reason` | Cause |
+|---|---|
+| `invalid_outcome` | Not one of `completed`, `partial`, `skipped`. Case-sensitive — silently lowercasing a guess would record something the model did not mean. |
+| `invalid_score` | A score outside 0–100, or one that is not a whole number. Checked by type before it is compared, so a value of any shape lands here rather than raising. |
+| `unknown_learner` | No such learner. Nothing is written. |
+| `unknown_lesson` | No such lesson. Nothing is written. |
+| `rejected_by_database` | A constraint refused the row — a backstop behind the checks above. |
+| `storage_unavailable` | The database could not be opened or written. |
+
+Outcomes are validated in Python **and** constrained in the schema. That is defence in
+depth, not duplication: the constraint protects against any future writer, while the
+Python check turns a hallucinated outcome into a reason code instead of an exception
+travelling up through the conversation loop.
+
+Attempts are append-only. Recording the same lesson twice leaves two rows.
+
+### Learner scoping
+
+Every query that touches personal data filters by learner id, and every write names it
+as its first column. This is enforced at import time rather than by review: a statement
+that is not learner-scoped raises as the module loads, so the whole suite fails at once
+instead of one household member's data quietly reaching another.
+
+The lesson catalog and the language list are deliberately **not** learner-scoped. They
+are shared reference data, and treating them as personal would be a false positive.
+
+### Connections
+
+One connection per call, opened and closed inside that call, never stored, cached, or
+carried across an `await`. Because nothing is shared, SQLite's same-thread check can
+never fire, and a tool that later wants to move a call off the event loop can wrap it
+without this module changing. WAL mode means readers never block the writer; two
+writers serialise on the busy timeout rather than failing.
+
+There is deliberately no connection pool and no cached handle: a pool is exactly the
+thing that lets a connection escape into another thread.
+
+### What milestone 5 changes
+
+| Stays | Goes |
+|---|---|
+| The three functions' signatures | The SQLite bodies behind them |
+| Every type in `models.py` | `connect`, `ensure_learner_database`, the seed constants |
+| The reason-code vocabulary | The local database file |
+
+A hosted backend implements the same three functions over HTTPS and returns the same
+types built from JSON. `storage_unavailable` already exists for the failure mode the
+network introduces, so callers written today need no change when a request times out.
+Callers that import from the package rather than the storage module do not move at all.

@@ -1,10 +1,19 @@
-"""Learner database: path derivation, connections, schema application, and seeding.
+"""Learner database: the SQLite implementation of the learner store.
 
-This module owns the SQLite file and nothing else yet. The query interface the
-conversation tools will call (profiles, progress, recording results) is a separate
-task and belongs here too when it lands -- all SQL in this app must stay inside this
-package so the storage layer can be swapped for a hosted backend later without
-touching any caller.
+Every query in this application lives in this module. Nothing else may contain one,
+and a verification step enforces that -- it is what keeps the storage swappable.
+
+**The interface** is get_profile, get_progress and record_result, plus the types in
+models.py. A hosted backend implements exactly these, and callers do not change.
+Import them from the package (`reachy_language_tutor.learners`), never from here.
+
+**SQLite implementation detail**, which a hosted backend has no analogue for and
+simply drops: connect, ensure_learner_database, EnsureResult, the SEED_* constants,
+NEXT_LESSON_SQL, LEARNER_DB_FILENAME and learner_db_path_for_instance.
+
+Connections are opened and closed inside a single call and never stored, cached, or
+carried across an await. That is what makes these functions safe to call from async
+tools: nothing is shared, so sqlite3's same-thread check can never fire.
 """
 
 from __future__ import annotations
@@ -16,6 +25,15 @@ import sqlite3
 import threading
 from pathlib import Path
 from dataclasses import dataclass
+
+from reachy_language_tutor.learners.models import (
+    OUTCOMES,
+    Lesson,
+    LessonAttempt,
+    LearnerProfile,
+    LanguageProgress,
+    RecordResultOutcome,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -414,3 +432,258 @@ def ensure_learner_database(instance_path: str | Path | None = None) -> EnsureRe
 def utc_now_ms() -> int:
     """Return the current time in milliseconds since the epoch."""
     return int(time.time() * 1000)
+
+
+# --------------------------------------------------------------------------------
+# The query interface
+#
+# Everything below is the public contract the conversation tools call. Callers import
+# it from the package, not from this module, so that the storage engine can change
+# underneath them.
+# --------------------------------------------------------------------------------
+
+_LEARNER_FILTER_MARKERS = ("learner_id = ?", "learners.id = ?")
+
+
+def _learner_scoped(sql: str) -> str:
+    """Return the statement, refusing at import time one that is not learner-scoped.
+
+    Learner scoping is the boundary that stops one household member's data reaching
+    another. A missing filter should not be a review comment -- it should stop the
+    module from importing at all, which is what this does.
+
+    A read is scoped by filtering on the learner id. A write is scoped by naming it as
+    the first column it writes, which is the equivalent guarantee for an insert: the
+    row cannot be attributed to anyone else.
+    """
+    if any(marker in sql for marker in _LEARNER_FILTER_MARKERS):
+        return sql
+    if sql.lstrip().upper().startswith("INSERT") and "(learner_id," in sql.replace(" ", ""):
+        return sql
+    raise ValueError("a learner-scoped statement must filter on, or write, the learner id")
+
+
+_PROFILE_SQL = _learner_scoped("SELECT id, display_name, created_at FROM learners WHERE learners.id = ?")
+_LEARNER_EXISTS_SQL = _learner_scoped("SELECT 1 FROM learners WHERE learners.id = ? LIMIT 1")
+_COMPLETED_IDS_SQL = _learner_scoped(
+    "SELECT DISTINCT r.lesson_id FROM lesson_results AS r "
+    "JOIN lessons AS l ON l.id = r.lesson_id "
+    "WHERE r.learner_id = ? AND l.language_code = ? AND r.outcome = 'completed'"
+)
+_ATTEMPTS_SQL = _learner_scoped(
+    "SELECT r.learner_id, r.lesson_id, r.outcome, r.score, r.recorded_at "
+    "FROM lesson_results AS r JOIN lessons AS l ON l.id = r.lesson_id "
+    "WHERE r.learner_id = ? AND l.language_code = ? "
+    "ORDER BY r.recorded_at DESC, r.id DESC"
+)
+_INSERT_ATTEMPT_SQL = _learner_scoped(
+    "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) VALUES (?, ?, ?, ?, ?)"
+)
+
+# Catalog statements are deliberately NOT learner-scoped: lessons and languages are
+# shared reference data, not personal data. The guard above covers the two tables
+# that hold anything about a person.
+_LANGUAGE_SQL = "SELECT code, name FROM languages WHERE code = ?"
+_LESSONS_SQL = (
+    "SELECT id, language_code, position, title, objective FROM lessons WHERE language_code = ? ORDER BY position"
+)
+_LESSON_EXISTS_SQL = "SELECT 1 FROM lessons WHERE id = ? LIMIT 1"
+
+_LEARNER_SCOPED_SQL: tuple[str, ...] = (
+    # NEXT_LESSON_SQL is scoped too ("r.learner_id = ?"), so it is registered rather
+    # than exempted -- an exemption would be a precedent for skipping the next one.
+    _learner_scoped(NEXT_LESSON_SQL),
+    _PROFILE_SQL,
+    _LEARNER_EXISTS_SQL,
+    _COMPLETED_IDS_SQL,
+    _ATTEMPTS_SQL,
+    _INSERT_ATTEMPT_SQL,
+)
+
+
+def _profile_from_row(row: sqlite3.Row) -> LearnerProfile:
+    """Build a learner profile from one database row."""
+    return LearnerProfile(
+        id=str(row["id"]),
+        display_name=str(row["display_name"]),
+        created_at=int(row["created_at"]),
+    )
+
+
+def _lesson_from_row(row: sqlite3.Row) -> Lesson:
+    """Build a lesson from one database row."""
+    return Lesson(
+        id=str(row["id"]),
+        language_code=str(row["language_code"]),
+        position=int(row["position"]),
+        title=str(row["title"]),
+        objective=str(row["objective"]),
+    )
+
+
+def _attempt_from_row(row: sqlite3.Row) -> LessonAttempt:
+    """Build a lesson attempt from one database row."""
+    score = row["score"]
+    return LessonAttempt(
+        learner_id=str(row["learner_id"]),
+        lesson_id=str(row["lesson_id"]),
+        outcome=str(row["outcome"]),
+        score=None if score is None else int(score),
+        recorded_at=int(row["recorded_at"]),
+    )
+
+
+def store_is_available(instance_path: str | Path | None = None) -> bool:
+    """Report whether the learner store can currently be read.
+
+    The readers answer None both for "no such thing" and for "cannot look it up", which
+    a caller must not conflate when telling a person what is true. This is how they tell
+    the two apart, without either reader having to raise.
+    """
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        connection.execute("SELECT 1 FROM languages LIMIT 1").fetchone()
+        return True
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        logger.warning("The learner store is not readable: %s", exc)
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def get_profile(learner_id: str, *, instance_path: str | Path | None = None) -> LearnerProfile | None:
+    """Return the learner's profile, or None when it cannot be produced.
+
+    None means there is no such learner -- unless the store is unreadable, in which
+    case a warning is logged and this also returns None. Call store_is_available when
+    the difference matters; the two situations should not be described the same way to
+    a person.
+    """
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        row: sqlite3.Row | None = connection.execute(_PROFILE_SQL, (learner_id,)).fetchone()
+        return None if row is None else _profile_from_row(row)
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        # Never the learner id: these are personal data and this is a log line.
+        logger.warning("Could not read a learner profile: %s", exc)
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def get_progress(
+    learner_id: str, language_code: str, *, instance_path: str | Path | None = None
+) -> LanguageProgress | None:
+    """Return the learner's standing in one language, or None if it is not taught here.
+
+    None means this robot has no such language, so the tutor should say so rather than
+    offer a lesson. A language that is taught but never practised comes back populated
+    with an empty history and the first lesson as next -- a very different answer, and
+    the tutor says something different about it.
+
+    One caveat the caller must not ignore: an unreadable store also yields None, after
+    logging a warning. Saying "I do not teach German" when the database is simply broken
+    would be a confident falsehood, so call store_is_available before reporting absence
+    to a person.
+
+    An unknown learner gets a fresh start rather than an error: the lesson catalog is
+    not personal data, so there is nothing to withhold.
+    """
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        language: sqlite3.Row | None = connection.execute(_LANGUAGE_SQL, (language_code,)).fetchone()
+        if language is None:
+            return None
+
+        lessons = [_lesson_from_row(row) for row in connection.execute(_LESSONS_SQL, (language_code,))]
+        completed_ids = {
+            str(row["lesson_id"]) for row in connection.execute(_COMPLETED_IDS_SQL, (learner_id, language_code))
+        }
+        attempts = tuple(
+            _attempt_from_row(row) for row in connection.execute(_ATTEMPTS_SQL, (learner_id, language_code))
+        )
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        logger.warning("Could not read learner progress: %s", exc)
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+    completed = tuple(lesson for lesson in lessons if lesson.id in completed_ids)
+    remaining = tuple(lesson for lesson in lessons if lesson.id not in completed_ids)
+    return LanguageProgress(
+        learner_id=learner_id,
+        language_code=str(language["code"]),
+        language_name=str(language["name"]),
+        completed=completed,
+        remaining=remaining,
+        # The same rule NEXT_LESSON_SQL states, evaluated from rows already fetched.
+        # A test pins the two together so they cannot drift.
+        next_lesson=remaining[0] if remaining else None,
+        attempts=attempts,
+    )
+
+
+def record_result(
+    learner_id: str,
+    lesson_id: str,
+    outcome: str,
+    *,
+    score: int | None = None,
+    recorded_at: int | None = None,
+    instance_path: str | Path | None = None,
+) -> RecordResultOutcome:
+    """Record one attempt at a lesson, reporting the outcome rather than raising.
+
+    Never raises. A bad value from the conversation must not end the turn, so every
+    failure comes back as a reason code the caller can turn into something sayable.
+    """
+    if outcome not in OUTCOMES:
+        # Case-sensitive on purpose: silently lowercasing a model's guess would record
+        # something it did not mean.
+        return RecordResultOutcome(recorded=False, reason="invalid_outcome")
+    # isinstance before the comparison: the caller is an LLM tool layer, so `score`
+    # can be any JSON value. Comparing a str against an int would raise TypeError
+    # straight through the conversation loop, which is the thing this function exists
+    # to prevent. bool is excluded because it is a subclass of int and True is not a
+    # score anyone meant.
+    if score is not None and (not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 100):
+        return RecordResultOutcome(recorded=False, reason="invalid_score")
+
+    when = utc_now_ms() if recorded_at is None else recorded_at
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        if connection.execute(_LEARNER_EXISTS_SQL, (learner_id,)).fetchone() is None:
+            return RecordResultOutcome(recorded=False, reason="unknown_learner")
+        if connection.execute(_LESSON_EXISTS_SQL, (lesson_id,)).fetchone() is None:
+            return RecordResultOutcome(recorded=False, reason="unknown_lesson")
+
+        with connection:
+            connection.execute(_INSERT_ATTEMPT_SQL, (learner_id, lesson_id, outcome, score, when))
+    except sqlite3.IntegrityError as exc:
+        # The schema's own constraints, as a backstop to the checks above.
+        logger.warning("The learner database refused an attempt: %s", exc)
+        return RecordResultOutcome(recorded=False, reason="rejected_by_database")
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        logger.warning("Could not record a lesson attempt: %s", exc)
+        return RecordResultOutcome(recorded=False, reason="storage_unavailable")
+    finally:
+        if connection is not None:
+            connection.close()
+
+    return RecordResultOutcome(
+        recorded=True,
+        attempt=LessonAttempt(
+            learner_id=learner_id,
+            lesson_id=lesson_id,
+            outcome=outcome,
+            score=score,
+            recorded_at=when,
+        ),
+    )
