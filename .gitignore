@@ -7,6 +7,9 @@ agents.local.md
 # Stride API token - grants full board access. Comments must be on their
 # own line; .gitignore has no trailing-comment syntax.
 .stride_auth.md
+
+# Stride runtime cache (last API response, hook state)
+.stride/
 .env
 .env.*
 !.env.example
