@@ -260,6 +260,52 @@ An older layout used separate `instructions.txt` and `tools.txt` files. **It is 
 read.** If you find those — particularly under `src/reachy_language_tutor/profiles/` — they are
 dead files from a stale generator; delete them.
 
+### Reachy speaks, but never responds when you speak to it
+
+The single most likely cause is **microphone permission**, and it is invisible: macOS hands a
+denied process **silence** rather than an error, so the app records nothing, logs nothing
+unusual, and simply never replies.
+
+**System Settings → Privacy & Security → Microphone → enable your terminal application.**
+
+The app inherits the permission of whatever launched it, so it is the *terminal* that needs
+access, not Python. If a permission prompt appeared once and was dismissed, macOS records that
+as a denial and never asks again.
+
+Two other causes, in order of likelihood:
+
+- **The wrong input device is default.** The app logs `No specific audio card found, using
+  default audio source` and takes whatever macOS says is default — which may be a monitor, a
+  webcam, or a virtual device, not the microphone you are speaking into. Set the right one in
+  **System Settings → Sound → Input**. GStreamer picks the device when it builds its pipeline,
+  so **restart the app** after changing it; switching while it runs has no effect.
+- **The microphone is muted or turned down** at the OS level.
+
+`./scripts/check-env.sh` now measures the actual capture level and reports the device, so run
+that first. A peak near **-350 dB is digital silence**, not a quiet room; normal room noise sits
+around -30 to -50 dB.
+
+**How to confirm from the app's log**, without guessing whether it heard you:
+
+```bash
+grep -icE "role=user|transcript|speech_started" <logfile>   # inbound speech events
+grep -oE "after [0-9.]+s idle" <logfile> | tail -3          # idle timer
+```
+
+Zero speech events plus an idle timer that keeps climbing and never resets means no audio is
+arriving at all — the app is deaf, not confused.
+
+### The robot stops moving and the log fills with connection errors
+
+```
+ERROR ... Failed to set robot target: Lost connection with the server. (suppressed 52 repeats)
+```
+
+The daemon was restarted underneath a running app — most often by relaunching Reachy Mini
+Control. The app survives but can no longer drive the robot, which looks like the robot has
+fallen asleep. **Restart the app**, not the desktop app. Note the ordering generally: start the
+desktop app first, the conversation app second.
+
 ### No sound, or the app never speaks
 
 Check your Hugging Face token (`./scripts/check-env.sh` covers this). Then check macOS

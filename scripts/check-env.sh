@@ -133,6 +133,54 @@ else
   fix "\"$VENV/bin/hf\" auth login"
 fi
 
+# Audio input. The app records silence rather than erroring when the microphone
+# is denied or the wrong device is default, so Reachy simply never responds and
+# nothing in its log says why. Check the device and the actual signal level.
+echo
+echo "Audio input"
+DEFAULT_IN=$(system_profiler SPAudioDataType 2>/dev/null \
+  | awk '/^ {8}[A-Za-z].*:$/{d=$0} /Default Input Device: Yes/{gsub(/^ +| *:$/,"",d); print d; exit}')
+if [ -n "$DEFAULT_IN" ]; then ok "default input device: $DEFAULT_IN"
+else note "could not determine the default input device"; fi
+
+LEVEL=$("$VENV/bin/python" - <<'PYEOF' 2>/dev/null
+import gi, os, pathlib, time
+try:
+    import gstreamer_python
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    os.environ.setdefault("GST_PLUGIN_PATH",
+        str(pathlib.Path(gstreamer_python.__file__).parent / "lib/gstreamer-1.0"))
+    Gst.init(None)
+    p = Gst.parse_launch("osxaudiosrc num-buffers=60 ! audioconvert ! "
+                         "audio/x-raw,format=S16LE,channels=1 ! "
+                         "level interval=500000000 ! fakesink sync=false")
+    bus = p.get_bus(); p.set_state(Gst.State.PLAYING)
+    peaks, end = [], time.time() + 5
+    while time.time() < end:
+        m = bus.timed_pop_filtered(500 * Gst.MSECOND,
+                                   Gst.MessageType.ELEMENT | Gst.MessageType.EOS)
+        if not m: continue
+        if m.type == Gst.MessageType.EOS: break
+        st = m.get_structure()
+        if st and st.get_name() == "level": peaks.append(st.get_value("peak")[0])
+    p.set_state(Gst.State.NULL)
+    print(round(max(peaks), 1) if peaks else "none")
+except Exception:
+    print("unavailable")
+PYEOF
+)
+case "$LEVEL" in
+  none|unavailable|"") note "could not measure the input level (audio check skipped)" ;;
+  *) if [ "${LEVEL%%.*}" -lt -100 ] 2>/dev/null; then
+       note "microphone is SILENT (peak ${LEVEL} dB) - Reachy will never hear you"
+       fix "grant your terminal app Microphone access in System Settings > Privacy & Security"
+       fix "and confirm the right device is selected in System Settings > Sound > Input"
+     else
+       ok "microphone is capturing audio (peak ${LEVEL} dB)"
+     fi ;;
+esac
+
 [ -f "$APP/.env" ] && ok ".env present" || note "no .env (not required yet)"
 
 echo
