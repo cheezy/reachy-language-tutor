@@ -59,7 +59,7 @@ Confirm it is up:
 curl -s localhost:8000/api/daemon/status | python3 -m json.tool
 ```
 
-You want `"state": "running"`. Note the `"version"` — you will need it in step 4.
+You want `"state": "running"`. Note the `"version"` — you will need it in step 5.
 
 > The lightweight **mockup-sim** (`"mockup_sim_enabled": true`) is what we use day to day.
 > It has no camera, which is why the app is run with `--no-camera` below.
@@ -141,7 +141,38 @@ provisions `reachy_mini 1.8.0`, which is older than this project's template requ
 So a desktop app update can silently put you back into version skew. **If motion starts
 failing after an app update, check the versions first.** It is almost always this.
 
-## 6. Hugging Face login
+## 6. Developer tooling and tests
+
+The project uses **ruff** (formatter and linter) and **pytest** (tests). They are declared in
+the app's `pyproject.toml` but are not installed by the steps above:
+
+```bash
+~/dev/reachy/reachy_mini_env/bin/pip install pytest pytest-asyncio "ruff==0.15.20"
+```
+
+Run the suite — 223 tests, about 4 seconds:
+
+```bash
+cd ~/dev/reachy/learn_language/reachy_language_tutor
+~/dev/reachy/reachy_mini_env/bin/python -m pytest -q
+```
+
+Format and lint your changes before finishing a task:
+
+```bash
+~/dev/reachy/reachy_mini_env/bin/ruff format src    # rewrites files
+~/dev/reachy/reachy_mini_env/bin/ruff check src     # reports problems
+```
+
+These same three commands are the Stride `after_doing` hook, so a task cannot be completed
+while any of them fails. See `.stride.md`.
+
+> **The suite ignores seven test files.** They come from the upstream conversation app and
+> test profile *switching*, which this app deliberately disables via `config.LOCKED_PROFILE`.
+> 31 of their tests fail by design, not by regression. The exclusions are in
+> `[tool.pytest.ini_options]` in `reachy_language_tutor/pyproject.toml`.
+
+## 7. Hugging Face login
 
 The voice backend authenticates as you. Without a token it will not start.
 
@@ -152,7 +183,7 @@ The voice backend authenticates as you. Without a token it will not start.
 No API keys are needed beyond this. The app uses the Hugging Face realtime backend, which is
 free and requires no separate provider account.
 
-## 7. Verify everything
+## 8. Verify everything
 
 ```bash
 cd ~/dev/reachy/learn_language
@@ -166,7 +197,7 @@ prints a concrete fix for anything broken. It exits non-zero on failure, so it w
 Re-run it any time something stops working. It is faster than debugging by hand, and it knows
 about the traps.
 
-## 8. Run the app
+## 9. Run the app
 
 ```bash
 cd ~/dev/reachy/learn_language/reachy_language_tutor

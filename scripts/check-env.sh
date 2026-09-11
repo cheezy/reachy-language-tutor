@@ -48,6 +48,14 @@ SDK=$("$VENV/bin/python" -c 'import reachy_mini;print(reachy_mini.__version__)' 
 if [ -n "$SDK" ]; then ok "reachy_mini SDK $SDK"
 else bad "reachy_mini not importable in the virtualenv"; fix "\"$VENV/bin/pip\" install 'reachy-mini[mujoco]'"; fi
 
+for t in pytest ruff; do
+  if [ -x "$VENV/bin/$t" ]; then ok "$t installed"
+  else
+    bad "$t missing - the after_doing Stride hook will fail"
+    fix "\"$VENV/bin/pip\" install pytest pytest-asyncio 'ruff==0.15.20'"
+  fi
+done
+
 if "$VENV/bin/python" -c 'import reachy_language_tutor' 2>/dev/null; then
   ok "reachy_language_tutor importable"
 else
