@@ -4,6 +4,11 @@ CLAUDE.md: "Tools must never accept a learner's identity from the conversation, 
 nobody can talk their way into another person's profile." This tool is the first one
 to read learner data, so it is the first place that rule can actually be broken. The
 identity tests here are not style checks -- they are the security boundary.
+
+These call the tool directly, which pins it in isolation but SKIPS the dispatcher's
+unvalidated **args splat. test_tool_identity_boundary.py attacks the real dispatch
+path, discovers learner-reading tools rather than naming them, and is the guard that
+actually holds the boundary.
 """
 
 import inspect
@@ -101,8 +106,13 @@ def test_the_tool_declares_no_parameters() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_learner_identity_in_kwargs_is_ignored(instance: Path) -> None:
-    """The whole point: asking for someone else by name must not return their data."""
+async def test_a_learner_identity_in_kwargs_is_ignored_when_called_directly(instance: Path) -> None:
+    """Asking for someone else by name must not return their data, tool in isolation.
+
+    This calls the tool directly, so it does not cover the dispatcher's unvalidated
+    **args splat -- test_tool_identity_boundary.py does that. Kept because it is a
+    second, independent guard and costs nothing.
+    """
     connection = store.connect(instance)
     with connection:
         connection.execute(
@@ -131,7 +141,7 @@ def test_the_tool_accepts_no_named_parameter_beyond_its_dependencies() -> None:
     -- so the check is on the named parameters, which is where an identity would land.
     """
     parameters = inspect.signature(GetProfile.__call__).parameters
-    assert [name for name in parameters] == ["self", "deps", "kwargs"]
+    assert list(parameters) == ["self", "deps", "kwargs"]
     assert parameters["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
 
 
