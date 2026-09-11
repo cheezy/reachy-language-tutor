@@ -515,6 +515,9 @@ _LESSONS_SQL = (
     "SELECT id, language_code, position, title, objective FROM lessons WHERE language_code = ? ORDER BY position"
 )
 _LESSON_EXISTS_SQL = "SELECT 1 FROM lessons WHERE id = ? LIMIT 1"
+# Not a question about any learner: it asks whether the store can be read at all, so
+# the cheapest catalog row is enough and there is nothing here to scope.
+_STORE_READABLE_SQL = "SELECT 1 FROM languages LIMIT 1"
 
 _LEARNER_SCOPED_SQL: tuple[str, ...] = (
     # NEXT_LESSON_SQL is scoped too ("r.learner_id = ?"), so it is registered rather
@@ -571,7 +574,7 @@ def store_is_available(instance_path: str | Path | None = None) -> bool:
     connection: sqlite3.Connection | None = None
     try:
         connection = connect(instance_path)
-        connection.execute("SELECT 1 FROM languages LIMIT 1").fetchone()
+        connection.execute(_STORE_READABLE_SQL).fetchone()
         return True
     except (sqlite3.Error, OSError, ValueError) as exc:
         logger.warning("The learner store is not readable: %s", exc)
