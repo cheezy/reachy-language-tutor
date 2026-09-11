@@ -1,0 +1,52 @@
+# Per-developer machine state. AGENTS.md defines agents.local.md as local session
+# context (robot type, local paths, HF account). Shared setup knowledge belongs in
+# docs/SETUP.md instead, so it is reviewed and versioned like everything else.
+agents.local.md
+
+# Secrets. Never commit these.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.csr
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+reachy_mini_env/
+.venv/
+venv/
+ENV/
+env/
+
+# Test and lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Editors and tooling
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs and scratch
+*.log
+tmp/

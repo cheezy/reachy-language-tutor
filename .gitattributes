@@ -1,0 +1,7 @@
+# Git only honours macro attribute definitions in the repository's top-level
+# .gitattributes. The app is a subdirectory, so its own .gitattributes (which
+# ships to the Hugging Face Space and must stay as-is) cannot define this macro
+# itself — its `*.gif lfs` style rules would silently resolve to nothing and
+# binaries would be committed as plain blobs. Defining the macro here makes
+# those rules work again.
+[attr]lfs -text filter=lfs diff=lfs merge=lfs
