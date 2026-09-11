@@ -5,7 +5,7 @@ storage module underneath it -- what `__all__` names is the whole vocabulary a c
 needs, and it is what a future hosted backend has to provide.
 """
 
-from reachy_language_tutor.learners.store import get_profile, get_progress, record_result
+from reachy_language_tutor.learners.store import get_profile, get_progress, record_result, store_is_available
 from reachy_language_tutor.learners.models import (
     OUTCOMES,
     RECORD_REASONS,
@@ -28,4 +28,5 @@ __all__ = [
     "get_profile",
     "get_progress",
     "record_result",
+    "store_is_available",
 ]

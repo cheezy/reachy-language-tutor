@@ -522,6 +522,7 @@ def test_package_exports_only_the_interface() -> None:
         "get_profile",
         "get_progress",
         "record_result",
+        "store_is_available",
     }
     for leaked in ("connect", "NEXT_LESSON_SQL", "ensure_learner_database", "SEED_LESSONS"):
         assert leaked not in learners.__all__

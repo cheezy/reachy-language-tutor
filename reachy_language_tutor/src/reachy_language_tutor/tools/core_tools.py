@@ -44,6 +44,12 @@ class ToolDependencies:
     camera_enabled: bool = False
     motion_duration_s: float = 1.0
     go_to_sleep: Callable[[], dict[str, Any]] | None = None
+    # Who the app is serving. Application startup sets this once (see main.py); nothing
+    # reachable from a conversation may write it, which is the whole point -- the LLM
+    # sees a tool's parameters_schema, never these dependencies. None means nobody is
+    # identified, and a tool must refuse rather than guess: guessing would serve one
+    # household member another person's data.
+    current_learner_id: str | None = None
 
 
 class ToolSpec(TypedDict):

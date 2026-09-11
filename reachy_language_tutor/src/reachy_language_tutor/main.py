@@ -24,6 +24,13 @@ from reachy_language_tutor.utils import (
 
 if TYPE_CHECKING:
     from reachy_language_tutor.console import LocalStream
+    from reachy_language_tutor.tools.core_tools import ToolDependencies
+
+
+# MILESTONE 4 REPLACES THIS LINE. Until face recognition exists the app serves exactly
+# one seeded learner. This is the only place in the application package that chooses an
+# identity: the LLM cannot reach it, and no tool or conversation may change it.
+HARDCODED_CURRENT_LEARNER_ID = "sample-learner"
 
 
 def _start_inactivity_timeout_thread(
@@ -59,6 +66,53 @@ def _start_inactivity_timeout_thread(
     thread = threading.Thread(target=poll_inactivity_timeout, daemon=True)
     thread.start()
     return thread
+
+
+def resolve_current_learner_id(instance_path: str | Path | None, logger: logging.Logger) -> str | None:
+    """Decide which learner the app is serving, or None when that cannot be trusted.
+
+    Serving the wrong person their housemate's data needs a wrong *identity*; None
+    cannot cause it, because every reader refuses an unknown learner. So this never
+    aborts startup -- a corrupt database in someone's home would brick the robot for
+    no security gain. It is loud at the identity boundary and permissive at the
+    process boundary: the learner surface goes dead and says why.
+    """
+    from reachy_language_tutor.learners import get_profile, store_is_available
+
+    try:
+        if get_profile(HARDCODED_CURRENT_LEARNER_ID, instance_path=instance_path) is not None:
+            return HARDCODED_CURRENT_LEARNER_ID
+        # Only now pay for the second query, to say which of the two failures it was.
+        if store_is_available(instance_path):
+            logger.error("The configured learner is not in the learner database; serving nobody.")
+        else:
+            logger.error("The learner store is unreadable; serving nobody until it is repaired.")
+    except Exception as e:  # never block startup on learner storage
+        logger.error("Could not establish who the app is serving; serving nobody: %s", e)
+    return None
+
+
+def build_tool_dependencies(
+    robot: ReachyMini,
+    movement_manager: Any,
+    instance_path: str | Path | None,
+    camera_enabled: bool,
+    logger: logging.Logger,
+) -> ToolDependencies:
+    """Build the dependency bundle the tools receive, including who the app is serving.
+
+    Extracted from run() so the wiring can be tested without a robot: this is the one
+    place the current learner is set, and a test that cannot reach it cannot prove it.
+    """
+    from reachy_language_tutor.tools.core_tools import ToolDependencies
+
+    return ToolDependencies(
+        reachy_mini=robot,
+        movement_manager=movement_manager,
+        instance_path=instance_path,
+        camera_enabled=camera_enabled,
+        current_learner_id=resolve_current_learner_id(instance_path, logger),
+    )
 
 
 def main() -> None:
@@ -133,7 +187,6 @@ def run(
     )
 
     from reachy_language_tutor.console import LocalStream
-    from reachy_language_tutor.tools.core_tools import ToolDependencies
     from reachy_language_tutor.conversation_handler import ConversationHandler
 
     if robot is None:
@@ -164,11 +217,12 @@ def run(
 
     movement_manager = MovementManager(current_robot=robot)
 
-    deps = ToolDependencies(
-        reachy_mini=robot,
+    deps = build_tool_dependencies(
+        robot=robot,
         movement_manager=movement_manager,
         instance_path=instance_path,
         camera_enabled=not args.no_camera,
+        logger=logger,
     )
 
     def build_handler(startup_voice: Optional[str] = None) -> ConversationHandler:
