@@ -7,6 +7,7 @@ import asyncio
 import logging
 import argparse
 import threading
+import traceback
 from typing import TYPE_CHECKING, Any, Optional
 from pathlib import Path
 from collections.abc import Callable, Awaitable
@@ -88,7 +89,18 @@ def resolve_current_learner_id(instance_path: str | Path | None, logger: logging
         else:
             logger.error("The learner store is unreadable; serving nobody until it is repaired.")
     except Exception as e:  # never block startup on learner storage
-        logger.error("Could not establish who the app is serving; serving nobody: %s", e)
+        # The type and the frames, NEVER the instance. str(e) is attacker- and
+        # author-controlled: the store absorbs sqlite3.Error, OSError and ValueError
+        # today, so no learner id can reach here -- but that is a property of the
+        # store's internals, not of this line, and one raise ValueError(f"... {id}")
+        # added under get_profile would start rendering a recognized person's
+        # identifier into an ERROR log with nothing failing. This is the same
+        # redaction core_tools._dispatch_tool_call applies for the same reason.
+        # A traceback's frames are file and line only, so they carry no values.
+        frames = " <- ".join(
+            f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno}" for frame in traceback.extract_tb(e.__traceback__)
+        )
+        logger.error("Could not establish who the app is serving; serving nobody: %s at %s", type(e).__name__, frames)
     return None
 
 

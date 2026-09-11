@@ -141,6 +141,7 @@ attacks, and what the positive sourcing assertion there is the static counterpar
 
 import ast
 import logging
+import traceback
 import pkgutil
 import importlib
 import dataclasses
@@ -150,7 +151,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from reachy_language_tutor import main, tools
+from reachy_language_tutor import main, tools, learners
 from reachy_language_tutor.learners import store
 from reachy_language_tutor.tools.core_tools import ToolDependencies
 
@@ -802,25 +803,161 @@ def test_an_unknown_learner_leaves_the_field_unset(
 ) -> None:
     """A configured learner who is not in the database serves nobody, loudly."""
     monkeypatch.setattr(main, "HARDCODED_CURRENT_LEARNER_ID", "no-such-learner")
-    with caplog.at_level(logging.ERROR, logger=__name__):
+    with caplog.at_level(logging.DEBUG, logger=__name__):
         resolved = main.resolve_current_learner_id(instance, logging.getLogger(__name__))
 
     assert resolved is None
+    # The POSITIVE assertion stays at ERROR: the operator-facing message is supposed to
+    # be an ERROR, and accepting it at any level would weaken what pitfall 4 protects.
     messages = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
     assert any("not in the learner database" in message for message in messages), messages
-    # Personal data does not belong in a log line; today's id is a placeholder, but
-    # milestone 4 replaces it with a recognized person.
-    assert not any("no-such-learner" in message for message in messages), messages
+    # The NEGATIVE one does not. Personal data does not belong in a log line at ANY
+    # level -- today's id is a placeholder, but milestone 4 replaces it with a
+    # recognized person -- and a capture that reaches DEBUG while the assertion only
+    # reads ERROR is a disagreement a review caught rather than a safety margin. This
+    # reads the whole record for the same reason _log_surface does.
+    surfaces = [_log_surface(record) for record in caplog.records]
+    assert not any("no-such-learner" in surface for surface in surfaces), surfaces
 
 
 def test_an_unreadable_store_leaves_the_field_unset(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """A broken database must not be reported as "I do not know you"."""
-    with caplog.at_level(logging.ERROR, logger=__name__):
+    with caplog.at_level(logging.DEBUG, logger=__name__):
         resolved = main.resolve_current_learner_id(tmp_path, logging.getLogger(__name__))
 
     assert resolved is None
     messages = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
     assert any("unreadable" in message for message in messages), messages
+
+
+def _log_surface(record: logging.LogRecord) -> str:
+    """Everything a record carries that could later be rendered, not just the message.
+
+    getMessage() alone is not the pin. A record holds `msg` and `args` separately and
+    formats them lazily, so an id can sit in `args` and reach a handler, a formatter or
+    a remote log sink that never called getMessage() in this process. Asserting on the
+    formatted string alone would pass while the id still left the machine.
+
+    Nor are msg and args the pin on their own, which a review caught and this helper
+    would otherwise have hidden. `logger.exception(msg)` and `logger.error(msg,
+    exc_info=e)` leave msg a constant and args empty while the LIVE exception rides in
+    record.exc_info, and every handler in the chain renders it -- so the id ships while
+    a msg/args/getMessage assertion stays green. That matters here more than it would
+    elsewhere: logger.exception is this codebase's prevailing idiom (console.py,
+    personality_routes.py, tool_space_routes.py, tool_settings.py, play_emotion.py and
+    ~10 more), so it is exactly what someone asked to improve triage on this branch
+    would reach for. extra={"learner_id": ...} is a third channel, landing straight in
+    record.__dict__ and invisible to all of the above.
+
+    record.name is a fifth channel and was found by asking for a fifth rather than by
+    being surprised by one. logger.getChild(learner_id).error(...) puts the id in the
+    LOGGER NAME, which every "%(name)s" formatter renders, while msg, args and exc_info
+    stay clean -- the same geometry as the exc_info gap, one channel over. record.name
+    is always a str, so it needs no guard.
+
+    record.exc_text is the sixth, and weaker: a formatter caches the rendered traceback
+    there, and today exc_info is still set whenever it is, so the arm above already
+    covers it. It becomes independent only under QueueHandler.prepare and
+    SocketHandler.makePickle, which clear exc_info after caching. Neither is on this
+    path; it is here so the next reader does not have to rediscover why it is safe.
+
+    So this reads the WHOLE record rather than the message channel. A pin that only
+    covers the spelling in front of it is not a pin.
+    """
+    parts = [record.name, str(record.msg), str(record.args), record.getMessage()]
+    if record.exc_info:
+        parts.append("".join(traceback.format_exception(*record.exc_info)))
+    if record.exc_text:
+        parts.append(str(record.exc_text))
+    if record.stack_info:
+        parts.append(str(record.stack_info))
+    # Whatever extra= attached is an ordinary attribute; diff against a bare record
+    # rather than hand-listing the standard field names, which drift between versions.
+    standard = logging.LogRecord("", 0, "", 0, "", None, None).__dict__.keys()
+    parts.extend(f"{key}={value}" for key, value in record.__dict__.items() if key not in standard)
+    return " | ".join(parts)
+
+
+def test_an_exception_carrying_the_learner_id_does_not_put_it_in_a_log(
+    instance: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The generic branch is the one that regresses, and this is the shape that does it.
+
+    The store absorbs sqlite3.Error, OSError and ValueError today, so no id can reach
+    this branch -- but that is a property of the store's internals, not of this code,
+    and nothing made it fail if the store started raising. A validating profile
+    constructor, a pydantic model, or one raise ValueError(f"... {learner_id}") under
+    get_profile would render a real person's identifier into an ERROR log at milestone
+    4, with no test noticing. So the exception is forced here rather than hoped against.
+    """
+    identifier = main.HARDCODED_CURRENT_LEARNER_ID
+
+    def _raise_with_the_id_in_the_message(*_args: object, **_kwargs: object) -> None:
+        raise ValueError(f"profile validation failed for learner {identifier}")
+
+    monkeypatch.setattr(learners, "get_profile", _raise_with_the_id_in_the_message)
+    with caplog.at_level(logging.DEBUG, logger=__name__):
+        resolved = main.resolve_current_learner_id(instance, logging.getLogger(__name__))
+
+    # Unchanged behaviour: still permissive at the process boundary.
+    assert resolved is None
+    # Every level, not just ERROR: the consideration says "at any level", and a future
+    # logger.debug("resolving %s", id) on this path would emit no ERROR record at all
+    # and leave a level-filtered assertion green.
+    records = list(caplog.records)
+    assert records, "the generic branch must still say something; silence is its own failure"
+    leaked = [_log_surface(record) for record in records if identifier in _log_surface(record)]
+    assert not leaked, f"a learner id reached a log record: {leaked}"
+    # And the operator is not left with nothing: the type still names what went wrong.
+    assert any("ValueError" in _log_surface(record) for record in records), [
+        _log_surface(record) for record in records
+    ]
+
+
+def test_an_exception_from_the_availability_check_is_caught_the_same_way(
+    instance: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The second query can raise too, and it is reached only when the first returns None."""
+    identifier = main.HARDCODED_CURRENT_LEARNER_ID
+    monkeypatch.setattr(main, "HARDCODED_CURRENT_LEARNER_ID", "no-such-learner")
+
+    def _raise_with_the_id_in_the_message(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(f"store handle lost while checking {identifier}")
+
+    monkeypatch.setattr(learners, "store_is_available", _raise_with_the_id_in_the_message)
+    with caplog.at_level(logging.DEBUG, logger=__name__):
+        resolved = main.resolve_current_learner_id(instance, logging.getLogger(__name__))
+
+    assert resolved is None
+    # Every level, not just ERROR: the consideration says "at any level", and a future
+    # logger.debug("resolving %s", id) on this path would emit no ERROR record at all
+    # and leave a level-filtered assertion green.
+    records = list(caplog.records)
+    leaked = [_log_surface(record) for record in records if identifier in _log_surface(record)]
+    assert not leaked, f"a learner id reached a log record: {leaked}"
+    assert any("RuntimeError" in _log_surface(record) for record in records), [
+        _log_surface(record) for record in records
+    ]
+
+
+def test_an_unexpected_error_still_returns_none_rather_than_aborting_startup(
+    instance: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Pitfall 2: narrowing the catch must not turn a storage surprise into a dead robot.
+
+    A corrupt database in someone's home bricking the robot is a worse outcome than a
+    dead learner surface, so the catch stays broad and this pins it with an exception
+    type the store has no reason to raise.
+    """
+
+    def _raise_something_unexpected(*_args: object, **_kwargs: object) -> None:
+        raise MemoryError("out of memory")
+
+    monkeypatch.setattr(learners, "get_profile", _raise_something_unexpected)
+    with caplog.at_level(logging.DEBUG, logger=__name__):
+        resolved = main.resolve_current_learner_id(instance, logging.getLogger(__name__))
+
+    assert resolved is None
 
 
 def test_startup_dependencies_are_unset_when_the_store_is_missing(tmp_path: Path) -> None:
