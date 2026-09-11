@@ -60,6 +60,21 @@ class LessonAttempt:
 
 
 @dataclass(frozen=True)
+class PractisedLanguage:
+    """One language a learner has actually worked on, with how far they have got.
+
+    Distinguishes "started but has finished nothing" from "never touched" -- the tutor
+    says something different about each, and a learner who has only partial attempts
+    still belongs in the list.
+    """
+
+    code: str
+    name: str
+    attempts: int
+    completed: int
+
+
+@dataclass(frozen=True)
 class LanguageProgress:
     """A learner's standing in one language: what is done, what is left, what is next.
 

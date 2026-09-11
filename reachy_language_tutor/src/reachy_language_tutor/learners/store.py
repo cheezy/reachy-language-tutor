@@ -1,7 +1,11 @@
 """Learner database: the SQLite implementation of the learner store.
 
-Every query in this application lives in this module. Nothing else may contain one,
-and a verification step enforces that -- it is what keeps the storage swappable.
+Every query in this application lives in this module. Nothing else may contain one --
+that is what keeps the storage swappable. Two things actually enforce it, and neither
+scans the rest of the codebase: _learner_scoped refuses at import time any statement
+here that is not scoped to one learner, and a test AST-scans this module's own source
+for an inline query that skipped the guard. A query written elsewhere is caught by
+review, not by a check, so do not read this paragraph as a safety net.
 
 **The interface** is get_profile, get_progress and record_result, plus the types in
 models.py. A hosted backend implements exactly these, and callers do not change.
@@ -32,6 +36,7 @@ from reachy_language_tutor.learners.models import (
     LessonAttempt,
     LearnerProfile,
     LanguageProgress,
+    PractisedLanguage,
     RecordResultOutcome,
 )
 
@@ -479,6 +484,23 @@ _ATTEMPTS_SQL = _learner_scoped(
 _INSERT_ATTEMPT_SQL = _learner_scoped(
     "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) VALUES (?, ?, ?, ?, ?)"
 )
+# One statement rather than one per language: the tutor asks this in the voice loop on
+# a weak onboard computer, and a hosted backend answers it in a single request. It
+# leads on lesson_results so idx_lesson_results_learner_lesson carries the filter.
+#
+# A skipped lesson is declined, not practised, so those rows are excluded and a
+# language the learner has only ever skipped does not appear here at all. Telling
+# someone they have been working on a language they turned down is worse than saying
+# nothing. Skips stay in the table and still count against the next lesson.
+_PRACTISED_LANGUAGES_SQL = _learner_scoped(
+    "SELECT g.code, g.name, COUNT(*) AS attempts, "
+    "COUNT(DISTINCT CASE WHEN r.outcome = 'completed' THEN r.lesson_id END) AS completed "
+    "FROM lesson_results AS r "
+    "JOIN lessons AS l ON l.id = r.lesson_id "
+    "JOIN languages AS g ON g.code = l.language_code "
+    "WHERE r.learner_id = ? AND r.outcome <> 'skipped' "
+    "GROUP BY g.code, g.name ORDER BY g.name"
+)
 
 # Catalog statements are deliberately NOT learner-scoped: lessons and languages are
 # shared reference data, not personal data. The guard above covers the two tables
@@ -498,6 +520,7 @@ _LEARNER_SCOPED_SQL: tuple[str, ...] = (
     _COMPLETED_IDS_SQL,
     _ATTEMPTS_SQL,
     _INSERT_ATTEMPT_SQL,
+    _PRACTISED_LANGUAGES_SQL,
 )
 
 
@@ -570,6 +593,41 @@ def get_profile(learner_id: str, *, instance_path: str | Path | None = None) -> 
         # Never the learner id: these are personal data and this is a log line.
         logger.warning("Could not read a learner profile: %s", exc)
         return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def get_practised_languages(
+    learner_id: str, *, instance_path: str | Path | None = None
+) -> tuple[PractisedLanguage, ...]:
+    """Return the languages this learner has actually worked on, ordered by name.
+
+    A language appears once the learner has really attempted it, finished or not.
+    Lessons they skipped do not count: declining a lesson is not practice, so a
+    language they have only skipped is absent here and the tutor may offer it as new.
+
+    Empty means they have practised nothing -- and, because an unreadable store also
+    yields empty after logging a warning, call store_is_available before telling a
+    person they have never practised.
+    """
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        rows = connection.execute(_PRACTISED_LANGUAGES_SQL, (learner_id,)).fetchall()
+        return tuple(
+            PractisedLanguage(
+                code=str(row["code"]),
+                name=str(row["name"]),
+                attempts=int(row["attempts"]),
+                completed=int(row["completed"]),
+            )
+            for row in rows
+        )
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        # Never the learner id: these are personal data and this is a log line.
+        logger.warning("Could not read a learner's practised languages: %s", exc)
+        return ()
     finally:
         if connection is not None:
             connection.close()

@@ -517,8 +517,10 @@ def test_package_exports_only_the_interface() -> None:
         "LessonAttempt",
         "Lesson",
         "OUTCOMES",
+        "PractisedLanguage",
         "RECORD_REASONS",
         "RecordResultOutcome",
+        "get_practised_languages",
         "get_profile",
         "get_progress",
         "record_result",
@@ -526,6 +528,80 @@ def test_package_exports_only_the_interface() -> None:
     }
     for leaked in ("connect", "NEXT_LESSON_SQL", "ensure_learner_database", "SEED_LESSONS"):
         assert leaked not in learners.__all__
+
+
+def test_practised_languages_lists_only_what_the_learner_has_worked_on(instance: Path) -> None:
+    """Seeded Spanish has attempts; French does not, so only Spanish comes back."""
+    practised = store.get_practised_languages("sample-learner", instance_path=instance)
+
+    assert [(language.code, language.name) for language in practised] == [("es", "Spanish")]
+    assert practised[0].attempts >= 1
+    assert practised[0].completed >= 1
+
+
+def test_practised_languages_counts_attempts_and_completions_separately(instance: Path) -> None:
+    """A retried lesson is two attempts but one completion; the tutor says different things."""
+    lesson = store.get_progress("sample-learner", "fr", instance_path=instance).next_lesson
+    for outcome in ("partial", "partial", "completed"):
+        assert store.record_result("sample-learner", lesson.id, outcome, instance_path=instance).recorded is True
+
+    french = next(
+        language
+        for language in store.get_practised_languages("sample-learner", instance_path=instance)
+        if language.code == "fr"
+    )
+    assert french.attempts == 3
+    assert french.completed == 1
+
+
+def test_a_skipped_lesson_is_not_practice(instance: Path) -> None:
+    """Declining a lesson must not be reported back as having worked on the language."""
+    lesson = store.get_progress("sample-learner", "fr", instance_path=instance).next_lesson
+    assert store.record_result("sample-learner", lesson.id, "skipped", instance_path=instance).recorded is True
+
+    practised = store.get_practised_languages("sample-learner", instance_path=instance)
+    assert [language.code for language in practised] == ["es"], "a skipped-only language is not practised"
+
+    # The skip is still recorded; it simply does not count as practice.
+    assert store.record_result("sample-learner", lesson.id, "partial", instance_path=instance).recorded is True
+    french = next(
+        language
+        for language in store.get_practised_languages("sample-learner", instance_path=instance)
+        if language.code == "fr"
+    )
+    assert (french.attempts, french.completed) == (1, 0), french
+
+
+def test_practised_languages_is_ordered_by_name(instance: Path) -> None:
+    """A stable order, so the tutor does not name languages differently each time."""
+    lesson = store.get_progress("sample-learner", "fr", instance_path=instance).next_lesson
+    store.record_result("sample-learner", lesson.id, "completed", instance_path=instance)
+
+    practised = store.get_practised_languages("sample-learner", instance_path=instance)
+    assert [language.name for language in practised] == ["French", "Spanish"]
+
+
+def test_practised_languages_never_reaches_another_learner(instance: Path) -> None:
+    """The scoping boundary, checked on real rows rather than on the statement alone."""
+    _add_learner(instance, "housemate")
+    lesson = store.get_progress("housemate", "fr", instance_path=instance).next_lesson
+    store.record_result("housemate", lesson.id, "completed", instance_path=instance)
+
+    assert [language.code for language in store.get_practised_languages("sample-learner", instance_path=instance)] == [
+        "es"
+    ]
+    assert [language.code for language in store.get_practised_languages("housemate", instance_path=instance)] == ["fr"]
+
+
+def test_practised_languages_is_empty_for_an_unknown_learner(instance: Path) -> None:
+    """An unknown learner has practised nothing; that is an empty tuple, not an error."""
+    assert store.get_practised_languages("no-such-learner", instance_path=instance) == ()
+
+
+def test_practised_languages_is_empty_when_the_store_is_unreadable(tmp_path: Path) -> None:
+    """It must not raise; the caller checks store_is_available to tell the two apart."""
+    assert store.get_practised_languages("sample-learner", instance_path=tmp_path) == ()
+    assert store.store_is_available(tmp_path) is False
 
 
 def test_outcomes_match_the_schema_constraint() -> None:
