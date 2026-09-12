@@ -10,6 +10,10 @@ agents.local.md
 
 # Stride runtime state. Per-run hook artifacts, never versioned.
 .stride/
+
+# Exploratory-testing artifacts. They transcribe application output, which is exactly
+# the material the redaction rules keep out of anything published.
+.exploratory/
 .stride-changed-files.json
 .stride-diff-upload-state
 .stride-dirty-baseline
