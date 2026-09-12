@@ -61,7 +61,8 @@ python -m reachy_language_tutor.main --ui --no-camera
 ```
 
 The settings UI is served at <http://127.0.0.1:7860/>. Use `--no-camera` when running against
-the simulator, which has none.
+the simulator: a **standalone SDK script** gets no camera there. The daemon in mockup-sim is a
+different path and does have one — see `docs/SETUP.md`.
 
 Full setup instructions — including the SDK/daemon version trap that breaks all motion — are
 in `docs/SETUP.md` at the repository root. Run `scripts/check-env.sh` to verify an environment.

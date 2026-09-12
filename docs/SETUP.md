@@ -62,7 +62,11 @@ curl -s localhost:8000/api/daemon/status | python3 -m json.tool
 You want `"state": "running"`. Note the `"version"` — you will need it in step 5.
 
 > The lightweight **mockup-sim** (`"mockup_sim_enabled": true`) is what we use day to day.
-> It has no camera, which is why the app is run with `--no-camera` below.
+> A **standalone SDK script** gets no camera there, which is why the app is run with
+> `--no-camera` below. That is not the same as "mockup-sim has no camera": the **daemon** does
+> open the Mac's webcam in this mode. The loose phrasing is what sent D22 down the wrong path —
+> see the Troubleshooting entry on the 8443 timeout, where the camera turns out to work and
+> something else is broken.
 
 ## 3. The project
 
@@ -213,7 +217,9 @@ cd ~/dev/reachy/learn_language/reachy_language_tutor
 ```
 
 - Web UI: **http://127.0.0.1:7860/**
-- `--no-camera` because the simulator has no camera
+- `--no-camera` because a **standalone SDK script** gets no camera in simulation — not because
+  mockup-sim lacks one. The daemon there does open the Mac's webcam, and as of D24 deadlocks
+  while serving it (Troubleshooting, the 8443 timeout)
 - `--debug` for verbose logging, and the only way to get the conversation's actual
   words into the log. Without it the log records that a turn happened and how long
   it was (`role=user content=str(len=32)`) but not what was said, so a log captured
@@ -334,68 +340,109 @@ Only one app may drive the robot at a time. Quitting the other one is usually th
 
 ### The dashboard camera says "Timed out waiting for WebRTC stream from ws://localhost:8443"
 
-Diagnosed in D22 on 2026-09-12, and **the honest summary is that the fault was located but not
-explained.** What follows separates what was measured from what was inferred, because an
-earlier draft of this entry stated a mechanism nobody had measured and the next person would
-have inherited it as fact.
+**Answered in D24 on 2026-09-12. This is a deadlock inside GStreamer's `webrtcsink`
+(`gst-plugin-webrtc` 0.15.3), it reproduces on every daemon start, and nothing in this
+repository is on the failing path or can fix it.** D22 located the fault and left three
+candidate recoveries untested; D24 tested them and found the mechanism. **None of the three
+recoveries works**, and the reason none of them could is that the camera was never the problem.
 
-**What was measured**, all read-only, all against the daemon that was failing (PID 4545,
-started 07:43, `--desktop-app-daemon --mockup-sim`):
+**The short version.** About ten seconds after the daemon starts, the first WebRTC session
+deadlocks four threads inside `libgstrswebrtc`. The camera is *fine and still capturing*: its
+frames pile up behind the `tee` that feeds both the WebRTC branch and the camera IPC branch.
+A `tee` pushes to its branches serially, so the jammed WebRTC branch head-of-line blocks the
+capture thread and starves the IPC branch as well. One deadlock, both symptoms — no frames on
+`/tmp/reachymini_camera_socket`, and no reply on 8443.
 
-1. **The camera IPC socket delivers nothing.** The daemon publishes captured frames to a unix
-   socket at `/tmp/reachymini_camera_socket` (`CAMERA_SOCKET_PATH` in `daemon/utils.py`, fed by
-   `media/media_server.py`). Attaching a `unixfdsrc` consumer gave `state: paused` and
-   **0 frames in 6 seconds**, with no error and no warning on the bus. Command below.
-2. **The signalling server accepts TCP and then says nothing.** Two clients — `websockets` and a
-   hand-rolled socket doing the HTTP upgrade — both connected to `ws://localhost:8443` and
-   received **zero bytes**, then timed out.
-3. **The same daemon was answering on 8443 at its own boot.** Its log shows eight WebSocket
-   connections between `11:43:50` and `11:44:05.189` UTC, each completing and registering —
-   seven as `[Listener]` and one as **`[Producer]` at 11:43:54.679**. So something registered as
-   a producer that morning, and the server was replying then, which it is not now. Note the
-   limit of that: the log shows a producer *registering*, not a single video frame flowing. It
-   is evidence the process was answering, not proof the camera was ever delivering today.
-4. **macOS still sees the camera.** `system_profiler SPCameraDataType` lists `USB Camera
-   VID:1133 PID:2085` — the only video device on this machine, which has no built-in FaceTime
-   camera — and GStreamer's device monitor enumerates it with full caps. Enumerating is not
-   delivering.
-5. **Corroboration, with a caveat that matters.** `autovideosrc ! videoconvert ! fakesink` driven
-   to PLAYING in the daemon's own interpreter returns `GST_STATE_CHANGE_ASYNC`, stuck at PAUSED
-   with PLAYING pending, silently. Treat this as weak: it opens the camera itself and runs under
-   the *terminal's* macOS camera (TCC) identity, not the daemon's, so a terminal-side permission
-   denial would produce the same stall for a reason that says nothing about the daemon. It was
-   not ruled out — `TCC.db` is unreadable under SIP.
+That answers D22's open question. Its "single GLib mainloop" idea was right that the two stalls
+**share a cause**, and wrong about which one: the shared resource is a `std::sync::Mutex` in
+`BaseWebRTCSink`, not a mainloop.
 
-**What that establishes, and what it does not.** Two independent things in one process are both
-stalled and both silent: frame delivery on the IPC socket, and the signalling server's replies.
-Measurement 1 is the load-bearing one, because a socket consumer reads frames the daemon has
-already published rather than opening the device — so it is not confounded by the daemon holding
-the camera exclusively, nor by the prober's own camera permission. What is **not** established is
-why, or whether the two stalls share a cause. In particular, do **not** read the zero-byte 8443
-result as "there is no producer to announce": that server sends its `Welcome` on connect
-regardless of producers, and the log records the Central Relay confirming exactly that for the
-11:43:50 connection — "Local WebRTC connection verified (welcome received)" — four seconds
-before any peer registered as a producer. (That confirmation appears for the 11:43:50 peer
-only; the 11:43:53 one shows a registration but no logged welcome, so do not count it.) A
-connection receiving nothing at all is therefore a stall in the signalling server itself, not a
-consequence of having no video.
+#### What was measured (D24)
 
-The SDK runs that server on a single GLib mainloop thread (`ThreadId(01)` throughout the log),
-which is a plausible way for one wedged component to take the other down — but that is a
-**hypothesis nobody measured**, recorded here so the next person can test it rather than believe
-it. Likewise unmeasured: whether the IPC branch's own failure modes (`media_server.py`'s
-`unixfdsink` handling) could account for measurement 1 without capture being at fault.
+All read-only. Nothing captured, stored or transmitted an image; the probe counts buffers.
 
-**Nothing in this repository is on either path.** The failing components are the desktop app's
-managed daemon and its GStreamer stack; the app under development here was not even running.
+1. **The fault reproduced first, unchanged.** Against the daemon D22 diagnosed (PID 4545, then
+   five hours old): the socket probe below gave `state: paused` and **0 frames in 6 s**, and a
+   WebSocket upgrade to `ws://localhost:8443` returned **0 bytes** before timing out.
+2. **The process was not wedged as a whole.** Its Python asyncio side was healthy the entire
+   time — `central_signaling_relay` logged a `setPeerStatus` every 10 s, and `webrtc_utils`
+   retried TURN every ~30 s, right up to the moment of the test. Only some components stopped:
 
-**The decisive test — read-only, six seconds, and development-Mac only.** Ask the socket for
+   | Component | Last logged | Still alive? |
+   |---|---|---|
+   | `gst_plugin_webrtc_signalling::server` (Rust) | 11:44:05 | no |
+   | `reachy_mini.media.media_server` | 11:50:49 | no (event-driven; see caveat) |
+   | `reachy_mini.media.webrtc_utils` | 16:43:19 | **yes** |
+   | `reachy_mini.media.central_signaling_relay` | 16:43:31 | **yes** |
+   | `uvicorn.access` | 16:39:48 | **yes** |
+
+   The caveat on `media_server`: it logs on events, so silence alone is not proof it stalled.
+   The signalling server is different — a connection **arrived** at 16:41 and it logged nothing
+   about it and answered nothing, so its accept path really is dead, not merely idle.
+3. **The stack sample is the decisive measurement**, and it is what turns all of the above from
+   symptoms into a mechanism. `sample 4545 3` showed four threads blocked in **100 % of samples**
+   (1570/1570), in a cycle:
+
+   | Thread | Where it is blocked | What it is waiting for |
+   |---|---|---|
+   | `webrtcbin-…:pc` | `BaseWebRTCSink::on_remote_description_set` → `SessionInner::connect_input_stream` → `gst_bin_sync_children_states` → `gst_element_set_state_func` | a GStreamer element state lock — **while holding the session `Mutex`** |
+   | `queue_webrtc:src` | rswebrtc pad chain fn → `Mutex::lock` | that same session `Mutex` |
+   | `tokio-rt-worker` | `Signaller::connect` → `emit_by_name` → `BaseWebRTCSink::start_session` → `Mutex::lock` | that same session `Mutex` |
+   | `tokio-rt-worker` | `gst_element_set_state_func` → `gst_webrtc_bin_change_state` → `g_cond_wait` | a state change `webrtcbin` can no longer complete |
+
+   And the two threads that carry the visible symptoms:
+
+   | Thread | Where it is blocked | What that proves |
+   |---|---|---|
+   | `autovideosrc1-actual-src-avfvide:src` | `gst_base_src_loop` → … → `gst_tee_chain` → `gst_queue_chain_buffer_or_list` → `g_cond_wait` | **the camera is working.** It is blocked *delivering* a captured frame into a **full** queue |
+   | `queue_ipc:src` | `gst_queue_loop` → `g_cond_wait` | the IPC queue is **empty** — starved, which is why `unixfdsrc` sees nothing |
+
+4. **It is a deadlock, not a slow path.** A second sample three minutes later showed all four
+   threads at the same leaves, 1959/1959.
+5. **It reproduces on a fresh process.** After quitting and reopening the app, the new daemon
+   (PID 27910) was sampled ~90 s after boot and showed the **identical** four-thread cycle,
+   1879/1879, with a different session UUID. Both of today's boots wedged the same way: 16 s
+   after the 11:43 boot (after five short-lived sessions) and 11 s after the 16:47 boot (after
+   one). Timeline of the second: daemon up `16:47:27`; a `[Listener]` registers `16:47:28`; the
+   `[Producer]` registers `16:47:30`; a session starts and the SDP exchange runs at `16:47:32`;
+   last signalling line ever, `16:47:38`.
+
+**What this establishes, and what it does not.** The deadlock is established — four threads,
+two processes, 100 % of samples, a named cycle. That the camera hardware and the app's macOS
+camera permission are both *working* is established too, and by the strongest available
+evidence: the capture thread is inside a push call, which it can only reach by having produced
+a frame, and the queue it is pushing into is full, which takes many. What is **not** established
+is the exact lock-order inversion in upstream's source — the cycle above is read off symbols,
+and `libgstrswebrtc` was not read. Nor was it tested whether the camera IPC socket delivers in
+the ten-second window before the first session starts; it plausibly does, but nobody measured it.
+
+#### The recoveries D22 listed, and what each one actually did
+
+1. **Quit and reopen Reachy Mini Control — tried, did not work.** Done at 16:47. The camera
+   socket still reported 0 frames and 8443 still returned 0 bytes, and the fresh daemon was
+   sampled in the same deadlock. This is now the *expected* result rather than a surprise: a
+   restart cannot help, because the bug is reached from a clean boot every time.
+2. **Check System Settings → Privacy & Security → Camera — not needed, refuted as a cause.**
+   Measurement 3 shows the capture thread holding a captured frame and a full downstream queue.
+   A denied camera does not produce frames. The permission is granted and working.
+3. **Unplug and replug the webcam — not performed, and refuted as a cause by the same evidence.**
+   It needs hands at the machine and there is nothing for it to fix; the device is delivering.
+
+**So: the camera and 8443 did not clear, and they did not clear *together* — neither one
+cleared.** The shared-cause question is still answered, just not by the recovery: it is answered
+by the sample, which shows both symptoms hanging off the one `Mutex`.
+
+#### The diagnostic commands
+
+**The six-second socket probe — read-only, and development-Mac only.** It asks the socket for
 frames rather than guessing from the dashboard. Do **not** carry this habit onto a deployed
 robot: the same socket on a Wireless unit carries live household video, and the distance between
 this frame counter and a recorder is one token (`fakesink dump=True`, or a `filesink` in place
 of it). Here it counts buffers and reads no pixels.
 
 ```bash
+# Development Mac only. On a Wireless unit this socket carries live household video.
+# This pipeline counts buffers and reads no pixels -- keep it that way.
 DV="$HOME/Library/Application Support/com.pollen-robotics.reachy-mini/.venv/bin/python3"
 "$DV" - <<'PY'
 import gi; gi.require_version("Gst", "1.0")
@@ -414,38 +461,102 @@ print("frames in 6s:", n["f"]); p.set_state(Gst.State.NULL)
 PY
 ```
 
-Frames arriving means delivery is healthy and the problem is further along. Zero frames with
-`state: paused` and a silent bus is what it said on 2026-09-12.
+**The stack sample — this is the one that answers the question.** Read-only, three seconds, no
+privileges beyond your own process:
 
-**What to try, in order. None of these was verified to fix it** — the cause sits below anything
-this repository owns, and restarting a daemon out from under someone using it was out of scope.
+```bash
+# Write it to a private directory, not a fixed name in shared /tmp.
+OUT="$(mktemp -d)/daemon-sample.txt"
+sample "$(pgrep -f 'reachy_mini.daemon.app.main' | tail -1)" 3 -file "$OUT"
+grep -A4 'Thread.*queue_webrtc:src' "$OUT"   # Mutex::lock  => this bug
+grep -A4 'Thread.*avfvide' "$OUT"            # tee/queue    => camera is fine
+rm -f "$OUT"                                 # see the warning below before keeping it
+```
 
-1. Quit and reopen Reachy Mini Control, since the process was healthy at its own boot and
-   degraded in place.
-2. Check System Settings → Privacy & Security → Camera for Reachy Mini Control. A denial there
-   is a candidate consistent with a silent never-delivering session; it was not confirmed, and
-   the 24-hour system log showed no denial line (which is weak evidence — a headless process can
-   hang rather than log).
-3. Unplug and replug the webcam. It is the only video device on this machine, so a USB camera in
-   a bad state leaves the daemon with nothing to capture.
+**Never attach that file to an upstream issue.** `sample` output is not only the thread stacks
+you grepped: it embeds the sampled process's full executable path, its command line, and a
+Binary Images section listing the absolute path of every loaded dylib — so on this machine it
+contains literal `/Users/<your-username>/Library/Application Support/…` strings. Sending the raw
+file to a third party would ship your username and home layout with it. Send the grepped thread
+lines and the version list below, and nothing else. That is why the command writes to a
+`mktemp -d` directory and deletes it: a fixed, predictable name in a world-readable `/tmp` is
+also readable by any other local account.
 
-**Negative results, recorded so nobody re-checks them.**
+`queue_webrtc:src` sitting in `Mutex::lock` inside `libgstrswebrtc` is the signature. If you see
+it, stop investigating the camera.
 
-- **An agent session did not cause this.** The one time an agent touched port 8443 it was a
-  read-only WebSocket probe against daemon PID 6670. That process no longer exists: the daemon
-  that failed is PID 4545, started fresh the next morning, and its own log shows it handshaking
-  correctly — including registering a `[Producer]` — before degrading. No SDK file was modified.
+#### The upstream report
+
+Affected versions, all confirmed on this machine in this session:
+
+- `reachy-mini` 1.10.0, daemon started `--desktop-app-daemon --mockup-sim`
+- `gst-plugin-webrtc` (`rswebrtc`) **0.15.3-e92296285** — `webrtcsink`
+- GStreamer core, `webrtcbin`, `unixfd`, `applemedia` — all **1.28.7**
+- macOS 26.6.1 (25G76), arm64
+
+The report to `pollen-robotics/reachy_mini` is: **`webrtcsink` deadlocks during the first
+session's `on_remote_description_set`, and because the daemon puts the camera IPC branch behind
+the same `tee` as the WebRTC branch, the deadlock also kills the local camera socket.** Include
+the two thread tables above and the version list; there is no exploit and nothing to weaponise.
+Two things are worth saying to upstream beyond the bug itself, because they are what turned one
+broken feature into two:
+
+- The cycle is between `SessionInner`'s `Mutex` and GStreamer element state locks, reached from
+  three directions at once (`connect_input_stream`, the pad chain function, and `start_session`
+  via the signalling callback).
+- `media_server.py` links the IPC branch and the WebRTC branch to one `tee` with a plain
+  `queue` on each. A `leaky=downstream` queue on the WebRTC branch would have contained the
+  damage to WebRTC instead of taking the camera socket down with it. That is a remark for
+  upstream, **not a change to make here** — see below.
+
+#### Nothing in this repository changes because of this
+
+The failing components are the desktop app's managed daemon and its GStreamer stack. The app
+under development here was not even running. Do not add a workaround to this repository for an
+environmental fault in a dependency — that was D22's finding and D24 confirms it at the level of
+mechanism.
+
+**What it costs us.** Milestone 4 (face recognition) wants camera frames. Until this is fixed
+upstream, the daemon's camera path on this Mac is unusable: `/tmp/reachymini_camera_socket` is
+not a source you can build on, and neither is the daemon's own face detection. The
+`face_target` block on `/api/daemon/status` still answers, but three polls in this state all
+returned `{"detected": false, "x": null, "y": null, "roll": null, "ts": null}` — a null `ts`, so
+nothing has ever been detected. (Nobody was deliberately in frame, so that is consistent with
+starvation rather than proof of it.) Prototype against a camera directly instead.
+
+Which camera is worth knowing, because D22 recorded only one and there are **two**. Measured in
+D24 with `system_profiler SPCameraDataType` and GStreamer's device monitor, which agree:
+
+| Device | Notes |
+|---|---|
+| `USB Camera VID:1133 PID:2085` | the wired webcam; this is the one the daemon opens |
+| `iPhone Camera` (`iPhone17,3`) | Continuity Camera — present only when the phone is nearby and willing |
+
+This machine has **no built-in FaceTime camera**, so those two are the whole inventory. Whether
+the daemon holds the USB webcam *exclusively* while it runs was **not** tested, so do not assume
+you can open it alongside the daemon — try it, and fall back to stopping the daemon first.
+
+#### Negative results, recorded so nobody re-checks them
+
+- **An agent session did not cause this.** D22 established it (the probed daemon, PID 6670, no
+  longer exists; no SDK file was modified) and D24 settles it: the bug reproduces from a clean
+  boot with nothing attached but the desktop app's own dashboard.
 - **`--mockup-sim` is supposed to have a camera.** It maps to `SimulationMode.MOCKUP`, which
   builds an `autovideosrc` capture chain; `daemon/daemon.py` says mockup-sim "behaves exactly
   like a real robot for apps (they open webcam directly)". "The simulation has no camera" is true
   of standalone `no_media` SDK scripts and not of this path.
 - **No version drift between the two interpreters that were compared.** GStreamer core is 1.28.7
-  in both the daemon venv and `reachy_mini_env`, so an earlier note about a 1.28.3 / 1.28.7
-  discrepancy did not reproduce, and the venv symlinks predate the session that was suspected.
-  Narrower than "not a version change": `apps_venv` was never compared, and the SDK version rests
-  on a dist-info folder name with no earlier snapshot to diff against.
-- **Port 8443 is not closed and nothing is refusing the connection.** It is listening on PID 4545
-  and the TCP handshake completes; the silence is afterwards.
+  in both the daemon venv and `reachy_mini_env`. Narrower than "not a version change":
+  `apps_venv` was never compared.
+- **Port 8443 is not closed and nothing is refusing the connection.** It listens and the TCP
+  handshake completes; the silence is afterwards, and measurement 3 says why — the tokio worker
+  that would answer is blocked on the same `Mutex`.
+- **Do not read the zero-byte 8443 result as "there is no producer to announce".** That server
+  sends its `Welcome` on connect regardless of producers. The silence is a blocked accept path.
+- **The TURN warnings in the log are a red herring.** `Failed to fetch TURN credentials` for
+  `turn.fastrtc.org` repeats every ~30 s because DNS does not resolve it here. The dashboard is
+  a loopback peer and needs host candidates only; the daemon logs `No TURN servers held;
+  offering host/srflx only` and proceeds to a full SDP exchange.
 
 ## Creating a new app from the template (rarely needed)
 

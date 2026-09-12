@@ -107,7 +107,9 @@ cd reachy_language_tutor
 ~/dev/reachy/reachy_mini_env/bin/python -m reachy_language_tutor.main --ui --no-camera
 ```
 
-`--no-camera` because the simulator has no camera. Expect two harmless startup complaints in
+`--no-camera` because a **standalone SDK script** gets no camera in simulation — not because
+mockup-sim lacks one; the daemon there does open the Mac's webcam (`docs/SETUP.md`,
+Troubleshooting). Expect two harmless startup complaints in
 sim — `No Reachy Mini Audio USB device found!` and `ReSpeaker device not found.` — after which
 audio falls back to the Mac's default mic and speakers with software echo cancellation.
 
@@ -118,6 +120,20 @@ The 1.10.0 daemon's `/api/daemon/status` now returns a `face_target` block
 That isn't recognition — it won't tell one household member from another — but it means
 milestone 4 may only need to add the *identification* layer on top of daemon-provided detection,
 rather than owning the whole camera pipeline. Worth checking before building anything with OpenCV.
+
+**Caveat added by D24.** Both halves of the idea above need re-checking, because the daemon's
+camera path is deadlocked on this Mac by an upstream `webrtcsink` bug:
+
+- `/tmp/reachymini_camera_socket` delivers nothing and is not a source to build on.
+- `face_target` is served by the same daemon and did not survive in any useful form. The
+  endpoint still answers, but three polls all returned
+  `{"detected": false, "x": null, "y": null, "roll": null, "ts": null}` — a null `ts`, so no
+  detection has ever been timestamped. Nobody was deliberately in frame, so treat this as
+  consistent with starvation rather than proof of it; either way it reported nothing usable.
+
+So prototype against a camera directly. The machine has two — the USB webcam the daemon opens,
+and an iPhone Continuity Camera — and no built-in one. Whether the daemon holds the webcam
+exclusively while running was not tested. See `docs/SETUP.md`, Troubleshooting, the 8443 timeout.
 
 ## Open questions (not blocking milestone 1)
 
