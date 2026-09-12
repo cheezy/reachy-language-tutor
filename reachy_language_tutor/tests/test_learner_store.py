@@ -702,6 +702,644 @@ def test_every_module_level_query_touching_personal_data_is_scoped() -> None:
             assert value in store._LEARNER_SCOPED_SQL, f"{name} touches personal data unscoped"
 
 
+# --------------------------------------------------------------- the scoping rule
+
+# Each of these reads every learner while naming a learner filter somewhere in its
+# text, and each was ACCEPTED by the substring rule this replaced. The second element
+# is the phrase the refusal must contain: a refusal for some other reason would be
+# this test going green without checking the thing it is about.
+_CROSS_LEARNER_STATEMENTS: dict[str, tuple[str, str]] = {
+    "a self-join": (
+        "SELECT r2.learner_id, r2.outcome FROM lesson_results AS r "
+        "JOIN lesson_results AS r2 ON r2.lesson_id = r.lesson_id WHERE r.learner_id = ?",
+        "nothing constrains lesson_results (as r2)",
+    ),
+    "an OR-widened predicate": (
+        "SELECT outcome FROM lesson_results WHERE learner_id = ? OR outcome = 'completed'",
+        "a WHERE clause with a top-level OR does not constrain what it looks like it does",
+    ),
+    "an unfiltered UNION leg": (
+        "SELECT outcome FROM lesson_results WHERE learner_id = ? UNION ALL SELECT outcome FROM lesson_results",
+        "other legs carry no filter of their own",
+    ),
+    "a correlated-subquery DELETE": (
+        "DELETE FROM lesson_results WHERE lesson_id IN "
+        "(SELECT lesson_id FROM lesson_results WHERE learner_id = ?)",
+        "two relations are both called lesson_results",
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_CROSS_LEARNER_STATEMENTS))
+def test_a_statement_that_reads_every_learner_is_refused(shape: str) -> None:
+    """A learner filter somewhere in the text is not the same as a scoped statement.
+
+    A household comparison view writes the self-join and a "forget this lesson" action
+    writes the DELETE, so none of these is an exotic shape -- they are the statements
+    the next two features would produce.
+    """
+    sql, reason = _CROSS_LEARNER_STATEMENTS[shape]
+
+    with pytest.raises(ValueError) as refusal:
+        store._learner_scoped(sql)
+
+    assert reason in str(refusal.value), (shape, str(refusal.value))
+
+
+def test_every_registered_statement_is_still_accepted() -> None:
+    """A rule that refuses a statement this module uses stops the app booting.
+
+    Importing this file already proves it once, because a refusal would have raised
+    during store's import. Saying it again here is what makes the failure name the
+    statement instead of arriving as a collection error against every test in the file.
+    """
+    assert len(store._LEARNER_SCOPED_SQL) == 7
+
+    for sql in store._LEARNER_SCOPED_SQL:
+        assert store._learner_scoped(sql) == sql
+
+
+def test_an_insert_is_scoped_by_its_first_column_and_carries_no_filter_at_all() -> None:
+    """The insert rule stays separate because an insert has no WHERE clause to read."""
+    sql = "INSERT INTO lesson_results (learner_id, lesson_id, outcome) VALUES (?, ?, ?)"
+    assert "WHERE" not in sql.upper(), "this test is about a statement with no filter"
+
+    assert store._learner_scoped(sql) == sql
+
+    writes_someone_else_first = "INSERT INTO lesson_results (lesson_id, learner_id) VALUES (?, ?)"
+    with pytest.raises(ValueError, match="first column"):
+        store._learner_scoped(writes_someone_else_first)
+
+
+def test_an_insert_that_also_reads_has_to_satisfy_both_rules() -> None:
+    """INSERT ... SELECT is a read as well as a write.
+
+    Writing learner_id first says nothing about the rows the SELECT reaches, so the
+    first-column rule alone would let one learner's history be copied onto another.
+    """
+    reads_everyone = "INSERT INTO lesson_results (learner_id, lesson_id) SELECT learner_id, lesson_id FROM lesson_results"
+    reads_one = (
+        "INSERT INTO lesson_results (learner_id, lesson_id) "
+        "SELECT r.learner_id, r.lesson_id FROM lesson_results AS r WHERE r.learner_id = ?"
+    )
+
+    with pytest.raises(ValueError, match="nothing constrains lesson_results"):
+        store._learner_scoped(reads_everyone)
+
+    assert store._learner_scoped(reads_one) == reads_one
+
+
+def test_a_filter_inside_not_exists_is_what_scopes_the_statement_around_it() -> None:
+    """NEXT_LESSON_SQL is this shape, so it is a live statement rather than a case.
+
+    The filter is removed to show which text the acceptance rests on. Without that,
+    "it passes" would be equally true of a rule that had stopped reading subqueries.
+    """
+    assert store._learner_scoped(store.NEXT_LESSON_SQL) == store.NEXT_LESSON_SQL
+
+    without_the_filter = store.NEXT_LESSON_SQL.replace("r.learner_id = ? AND ", "", 1)
+    assert without_the_filter != store.NEXT_LESSON_SQL, "the filter was not where this test thought"
+
+    with pytest.raises(ValueError, match="nothing constrains lesson_results"):
+        store._learner_scoped(without_the_filter)
+
+
+def test_one_filter_does_not_cover_a_second_personal_relation() -> None:
+    """Two personal relations need two filters, even when SQL would infer the second.
+
+    `b.id = a.learner_id` does scope `learners` in practice, transitively. This rule
+    does not follow transitivity, so it refuses and the statement gets an explicit
+    filter instead. That is the conservative direction on purpose.
+    """
+    sql = "SELECT a.outcome FROM lesson_results AS a JOIN learners AS b ON b.id = a.learner_id WHERE a.learner_id = ?"
+
+    with pytest.raises(ValueError, match="nothing constrains learners"):
+        store._learner_scoped(sql)
+
+    spelled_out = sql + " AND b.id = ?"
+    assert store._learner_scoped(spelled_out) == spelled_out
+
+
+def test_an_unqualified_filter_is_trusted_only_where_it_cannot_be_ambiguous() -> None:
+    """`learner_id = ?` names no relation, so it proves scoping only when there is one."""
+    alone = "SELECT outcome FROM lesson_results WHERE learner_id = ?"
+    joined = "SELECT r.outcome FROM lesson_results AS r JOIN lessons AS l ON l.id = r.lesson_id WHERE learner_id = ?"
+
+    assert store._learner_scoped(alone) == alone
+
+    with pytest.raises(ValueError, match="does not say which relation it constrains"):
+        store._learner_scoped(joined)
+
+
+# The same defect as the four above, in shapes two earlier passes at this rule still let
+# through: the filter is present, addressed to the right relation, and constrains
+# nothing. Every one was found by probing the rule -- the first five by me after the
+# task's own tests were green, the rest by the reviewers after those were green too.
+# None of them was found by reading the code.
+_NEUTRALISED_FILTERS: dict[str, tuple[str, str]] = {
+    "a filter inside NOT EXISTS": (
+        "SELECT r.outcome FROM lesson_results AS r "
+        "WHERE NOT EXISTS (SELECT 1 FROM lessons AS l WHERE r.learner_id = ?)",
+        "nothing constrains lesson_results (as r)",
+    ),
+    "a filter inside an IN subquery": (
+        "SELECT r.outcome FROM lesson_results AS r "
+        "WHERE r.lesson_id IN (SELECT l.id FROM lessons AS l WHERE r.learner_id = ?)",
+        "nothing constrains lesson_results (as r)",
+    ),
+    "a filter written only in an outer join's ON": (
+        "SELECT r.outcome FROM lesson_results AS r LEFT JOIN lessons AS l ON r.learner_id = ?",
+        "nothing constrains lesson_results (as r)",
+    ),
+    "an ON filter laundered behind a subquery": (
+        "SELECT r.learner_id, r.outcome FROM lesson_results AS r "
+        "LEFT JOIN lessons AS l ON l.id IN (SELECT id FROM lessons WHERE 1 = 1) AND r.learner_id = ?",
+        "nothing constrains lesson_results (as r)",
+    ),
+    "a filter smuggled into an ORDER BY": (
+        "SELECT learner_id, outcome FROM lesson_results ORDER BY (SELECT 1 WHERE 1 = 1), learner_id = ?",
+        "nothing constrains lesson_results",
+    ),
+    "a filter smuggled into a SET list": (
+        "UPDATE lesson_results SET outcome = (SELECT 'skipped' WHERE 1 = 1), learner_id = ?",
+        "writes the column that says which learner the row belongs to",
+    ),
+    "an update that re-attributes the row": (
+        "UPDATE lesson_results SET learner_id = 'bob' WHERE learner_id = ?",
+        "writes the column that says which learner the row belongs to",
+    ),
+    "an update that re-attributes a learner": (
+        "UPDATE learners SET id = 'bob' WHERE id = ?",
+        "writes the column that says which learner the row belongs to",
+    ),
+    "a negated filter": (
+        "SELECT outcome FROM lesson_results WHERE NOT learner_id = ?",
+        "not as a conjunct of its own",
+    ),
+    "a negation laundered behind a subquery": (
+        "SELECT outcome FROM lesson_results WHERE lesson_id IN (SELECT id FROM lessons) "
+        "AND NOT (1 IN (SELECT 1 WHERE 1 = 1) AND learner_id = ?)",
+        "not as a conjunct of its own",
+    ),
+    "a filter neutralised by CASE": (
+        "SELECT outcome FROM lesson_results WHERE CASE WHEN learner_id = ? THEN 1 ELSE 1 END = 1",
+        "not as a conjunct of its own",
+    ),
+    "a filter neutralised by IIF": (
+        "SELECT outcome FROM lesson_results WHERE IIF(learner_id = ?, 1, 1)",
+        "not as a conjunct of its own",
+    ),
+    "a filter neutralised by a function call": (
+        "SELECT outcome FROM lesson_results WHERE max(learner_id = ?, 1)",
+        "not as a conjunct of its own",
+    ),
+    "a filter compared against a constant": (
+        "SELECT outcome FROM lesson_results WHERE (learner_id = ?) = 0",
+        "not as a conjunct of its own",
+    ),
+    "a filter in a chained comparison": (
+        "SELECT outcome FROM lesson_results WHERE learner_id = ? = 0",
+        "not as a conjunct of its own",
+    ),
+    "an aggregate's FILTER clause": (
+        "SELECT group_concat(r.learner_id) AS who, COUNT(*) FILTER (WHERE r.learner_id = ?) AS mine "
+        "FROM lesson_results AS r",
+        "a WHERE straight after an opening bracket",
+    ),
+    "an aggregate's FILTER clause in HAVING": (
+        "SELECT r.lesson_id FROM lesson_results AS r GROUP BY r.lesson_id "
+        "HAVING COUNT(*) FILTER (WHERE r.learner_id = ?) >= 0",
+        "a WHERE straight after an opening bracket",
+    ),
+    "an aggregate's FILTER clause driving a write": (
+        "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) "
+        "SELECT ?, r.lesson_id, r.outcome, r.score, r.recorded_at FROM lesson_results AS r "
+        "GROUP BY r.id HAVING COUNT(*) FILTER (WHERE r.learner_id = ?) >= 0",
+        "a WHERE straight after an opening bracket",
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_NEUTRALISED_FILTERS))
+def test_a_filter_that_does_not_constrain_its_own_relation_is_refused(shape: str) -> None:
+    """Present, correctly addressed, and constraining nothing.
+
+    `WHERE NOT learner_id = ?` is the cheapest cross-learner read in this list; the SET
+    entry is worse than a read, being an UPDATE with no WHERE clause at all that
+    reassigns every row in lesson_results to one learner; and the FILTER entries read
+    every learner while the rule credits the aggregate's own WHERE as a row filter.
+
+    The rule refuses all of these by requiring the WHERE conjunct to BE the filter rather
+    than merely to contain one. Naming the ways a filter can be neutralised was the
+    earlier design and it is why this list kept growing -- `IIF` alone is SQLite's
+    documented equivalent of the `CASE` form a denylist had already been taught.
+
+    Each shape carries the phrase its refusal must contain. A bare "it raised" would let
+    a regression that refused one of these for an unrelated reason -- "two relations are
+    both called r", say, or a readability refusal -- report green, and this file has
+    already shipped one assertion loose enough to do that.
+    """
+    sql, reason = _NEUTRALISED_FILTERS[shape]
+
+    with pytest.raises(ValueError) as refusal:
+        store._learner_scoped(sql)
+
+    assert reason in str(refusal.value), (shape, str(refusal.value))
+
+
+def test_the_verdict_does_not_depend_on_the_order_the_predicates_were_written_in() -> None:
+    """A subquery in one conjunct must not change how the next conjunct is read.
+
+    These two statements are the same statement. An earlier version accepted one and
+    refused the other, because the subquery's own WHERE leaked into everything after its
+    closing bracket -- which accepted a filter that constrained nothing in one order and
+    refused a real filter in the other. Both directions of that are in this assertion.
+    """
+    subquery_first = (
+        "SELECT outcome FROM lesson_results WHERE lesson_id IN (SELECT id FROM lessons) AND learner_id = ?"
+    )
+    filter_first = (
+        "SELECT outcome FROM lesson_results WHERE learner_id = ? AND lesson_id IN (SELECT id FROM lessons)"
+    )
+
+    assert store._learner_scoped(subquery_first) == subquery_first
+    assert store._learner_scoped(filter_first) == filter_first
+
+
+def test_bracketing_a_predicate_for_readability_does_not_move_it() -> None:
+    """Depth counts subqueries, not brackets.
+
+    The counterpart to the NOT EXISTS case above: a filter one subquery deep cannot
+    scope the statement around it, but a filter in brackets is in the same clause it
+    looks like it is in, and refusing it would be a rule that punishes formatting.
+    """
+    bracketed = "SELECT outcome FROM lesson_results WHERE (learner_id = ?)"
+
+    assert store._learner_scoped(bracketed) == bracketed
+
+
+# SQLite's whole conflict-handling surface, not the spellings this module happens to
+# look for. The first version of this test was parameterized over exactly the two
+# branches the implementation grepped for, so it reported green while REPLACE INTO --
+# the shortest spelling of the same construct, and SQLite's documented alias for
+# INSERT OR REPLACE -- skipped the write rule entirely and replaced another learner's
+# row. A test written from the code cannot find what the code forgot.
+_WRITES_THAT_ARE_NOT_A_PLAIN_INSERT: dict[str, str] = {
+    "REPLACE INTO": "REPLACE INTO lesson_results (learner_id, lesson_id) VALUES (?, ?)",
+    "REPLACE INTO another learner's row": "REPLACE INTO learners (id, display_name, created_at) VALUES (?, ?, ?)",
+    "INSERT OR REPLACE": "INSERT OR REPLACE INTO lesson_results (learner_id, lesson_id) VALUES (?, ?)",
+    "INSERT OR IGNORE": "INSERT OR IGNORE INTO lesson_results (learner_id, lesson_id) VALUES (?, ?)",
+    "ON CONFLICT DO UPDATE": (
+        "INSERT INTO lesson_results (learner_id, lesson_id) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET lesson_id = 1"
+    ),
+    "ON CONFLICT DO NOTHING": (
+        "INSERT INTO lesson_results (learner_id, lesson_id) VALUES (?, ?) ON CONFLICT(id) DO NOTHING"
+    ),
+    "a column list that is not written first": "INSERT INTO lesson_results (lesson_id, learner_id) VALUES (?, ?)",
+    "no column list at all": "INSERT INTO lesson_results VALUES (?, ?, ?, ?, ?)",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_WRITES_THAT_ARE_NOT_A_PLAIN_INSERT))
+def test_only_a_plain_insert_into_is_scoped_by_the_column_it_writes_first(shape: str) -> None:
+    """The first-column proof only covers a row this statement brings into existence.
+
+    REPLACE and ON CONFLICT overwrite whoever already holds the conflicting row, and the
+    first column says nothing about who that is. Verified against a real database during
+    review: REPLACE INTO learners replaced a second household member's row and
+    cascade-deleted every one of their lesson_results.
+
+    The rule names the one shape it accepts rather than the shapes it forbids, which is
+    why this list can grow without the rule having to.
+    """
+    with pytest.raises(ValueError, match="learner-scoped write"):
+        store._learner_scoped(_WRITES_THAT_ARE_NOT_A_PLAIN_INSERT[shape])
+
+
+@pytest.mark.parametrize(
+    ("shape", "sql"),
+    [
+        ("a read", "SELECT learner_id, outcome FROM lesson_results WHERE lesson_id = ? /* AND learner_id = ?"),
+        ("an update", "UPDATE lesson_results SET outcome = ? /* WHERE learner_id = ?"),
+        ("a delete", "DELETE FROM lesson_results /* WHERE learner_id = ?"),
+        (
+            "brackets inside the dead text",
+            "SELECT outcome FROM lesson_results WHERE lesson_id = ? /* ) ) ) AND learner_id = ?",
+        ),
+    ],
+)
+def test_a_statement_the_database_would_truncate_is_refused(shape: str, sql: str) -> None:
+    """SQLite ends an unterminated block comment at the end of the input.
+
+    So the filter after the `/*` never reaches the database, while a reader that does not
+    know this sees one. That is the dangerous direction -- the rule seeing MORE than the
+    database does is exactly how a filter counts while constraining nothing. The trigger
+    is a forgotten `*/` when commenting out the trailing clause of a multi-line SQL
+    constant, which is the author mistake this guard exists to catch.
+    """
+    with pytest.raises(ValueError, match="unterminated block comment"):
+        store._learner_scoped(sql)
+
+
+@pytest.mark.parametrize(
+    ("shape", "sql"),
+    [
+        (
+            "more than one statement",
+            "INSERT INTO lesson_results (learner_id, lesson_id) VALUES (?, ?); DELETE FROM lesson_results",
+        ),
+        ("an unterminated literal", "INSERT INTO lesson_results (learner_id, lesson_id) VALUES (?, 'partial)"),
+    ],
+)
+def test_a_write_whose_text_cannot_be_read_is_refused_like_any_other(shape: str, sql: str) -> None:
+    """Whether a statement can be READ is asked before which rule should judge it.
+
+    The write branch used to return before these checks, so an insert carrying a second
+    statement or a broken literal was accepted by a guard that had not read it. sqlite3
+    would reject both at execution, but that is sqlite3's behaviour rather than anything
+    this module asserts.
+    """
+    with pytest.raises(ValueError, match="one this rule can read"):
+        store._learner_scoped(sql)
+
+
+def test_a_comma_join_gets_the_same_verdict_as_the_join_it_is_shorthand_for() -> None:
+    """A formatting choice must not change what the rule proves.
+
+    `FROM a, b` puts a relation where the rule does not read one, which left it out of
+    the count the unqualified-filter check depends on -- so writing a comma instead of
+    JOIN silently disabled that check. Refused rather than counted: the JOIN spelling of
+    the same query is read correctly, so nothing is lost except the shorthand.
+    """
+    spelled_with_join = "SELECT outcome FROM lesson_results JOIN lessons WHERE learner_id = ?"
+    spelled_with_comma = "SELECT outcome FROM lesson_results, lessons WHERE learner_id = ?"
+
+    with pytest.raises(ValueError):
+        store._learner_scoped(spelled_with_join)
+    with pytest.raises(ValueError, match="separated by a comma"):
+        store._learner_scoped(spelled_with_comma)
+
+
+# BETWEEN spells its own AND, and that AND is not a conjunction. A splitter that reads it
+# as one hands back a tail that looks exactly like a learner filter while the database
+# binds it as the BETWEEN's upper bound. Every one of these was executed against a
+# two-learner database during review: the first returned the other learner's rows, the
+# second and third emptied tables, the fourth rewrote everyone's history, and the fifth
+# copied another learner's lesson into this one's.
+_BETWEEN_SPELLS_ITS_OWN_AND: dict[str, str] = {
+    "a read": "SELECT learner_id, lesson_id, outcome, score FROM lesson_results WHERE NOT score BETWEEN 0 AND learner_id = ?",
+    "a delete": "DELETE FROM lesson_results WHERE NOT recorded_at BETWEEN 0 AND learner_id = ?",
+    "a delete of every learner": "DELETE FROM learners WHERE NOT created_at BETWEEN 0 AND id = ?",
+    "an update": "UPDATE lesson_results SET outcome = 'skipped' WHERE NOT score BETWEEN 0 AND learner_id = ?",
+    "a subquery inside a VALUES list": (
+        "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) VALUES "
+        "(?, (SELECT r.lesson_id FROM lesson_results AS r WHERE NOT r.score BETWEEN 0 AND r.learner_id = ? "
+        "ORDER BY r.id DESC LIMIT 1), ?, ?, ?)"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_BETWEEN_SPELLS_ITS_OWN_AND))
+def test_a_top_level_between_is_refused_because_its_and_is_not_a_conjunction(shape: str) -> None:
+    """The top-level OR defect, in the one other operator that overloads AND.
+
+    `WHERE NOT score BETWEEN 0 AND learner_id = ?` is read by a splitter as
+    `(NOT score BETWEEN 0) AND (learner_id = ?)` and by SQLite as
+    `NOT ((score BETWEEN 0 AND learner_id) = ?)`, which is true for every row.
+
+    BETWEEN is the only SQLite operator that spells its own AND, so refusing it is not
+    the start of a denylist -- it is the complete set. Naming a complete set is the same
+    move the filter allow-list makes.
+    """
+    with pytest.raises(ValueError, match="top-level BETWEEN"):
+        store._learner_scoped(_BETWEEN_SPELLS_ITS_OWN_AND[shape])
+
+
+def test_an_update_may_not_hand_a_row_to_a_different_learner() -> None:
+    """Which rows a write touches says nothing about who it attributes them to.
+
+    `UPDATE lesson_results SET learner_id = 'bob' WHERE learner_id = ?` has a real
+    filter that constrains exactly one learner's rows -- and then hands those rows to
+    somebody else. Executed against a two-learner database during review, it moved the
+    bound learner's row to a second, entirely unconstrained id; no second parameter is
+    needed, a literal suffices.
+
+    This is the asymmetry the insert rule exists for ("an insert has no WHERE clause"),
+    in the one statement that has both halves. Refusing outright costs nothing today --
+    no registered statement rewrites a learner id -- and a future merge-profiles feature
+    should have to declare itself rather than inherit the read rule's silence.
+    """
+    ordinary = "UPDATE lesson_results SET outcome = ? WHERE learner_id = ?"
+    assert store._learner_scoped(ordinary) == ordinary
+
+    for reassigns in (
+        "UPDATE lesson_results SET learner_id = 'bob' WHERE learner_id = ?",
+        "UPDATE lesson_results SET learner_id = ? WHERE learner_id = ?",
+        "UPDATE learners SET id = 'bob' WHERE id = ?",
+    ):
+        with pytest.raises(ValueError, match="writes the column that says which learner"):
+            store._learner_scoped(reassigns)
+
+
+def test_a_filter_in_one_subquery_does_not_scope_a_relation_in_its_sibling() -> None:
+    """A subquery is an identity, not a depth: two siblings are not the same query.
+
+    A depth counter cannot tell them apart, so a filter written in the second subquery
+    was credited to the relation read in the first. Executed against a two-learner
+    database during review, this statement returned every learner's outcomes while the
+    decoy subquery carried the filter that appeared to scope them.
+    """
+    decoy = (
+        "SELECT (SELECT group_concat(learner_id || ':' || outcome) FROM lesson_results), "
+        "(SELECT 1 FROM (SELECT ? AS learner_id) WHERE learner_id = ?)"
+    )
+
+    with pytest.raises(ValueError, match="nothing constrains lesson_results"):
+        store._learner_scoped(decoy)
+
+
+def test_a_bracketed_between_is_accepted_because_it_cannot_reach_past_its_brackets() -> None:
+    """The counterpart, and the rewrite the refusal asks for.
+
+    Refusing every BETWEEN would cost a statement the tutor will plausibly want -- "the
+    lessons I scored between 0 and 100" -- for nothing, and this rule runs at import, so
+    a false refusal is a robot that does not start.
+    """
+    bracketed = "SELECT outcome FROM lesson_results WHERE learner_id = ? AND (score BETWEEN 0 AND 100)"
+
+    assert store._learner_scoped(bracketed) == bracketed
+
+
+@pytest.mark.parametrize(
+    ("shape", "sql"),
+    [
+        ("a bracketed conjunction", "SELECT outcome FROM lesson_results WHERE (learner_id = ? AND outcome = 'x')"),
+        ("reversed operands", "SELECT outcome FROM lesson_results WHERE ? = learner_id"),
+        ("a named placeholder", "SELECT outcome FROM lesson_results WHERE learner_id = :learner"),
+    ],
+)
+def test_a_filter_the_rule_can_see_but_not_read_says_so(shape: str, sql: str) -> None:
+    """Three refusals where the author DID write a learner filter.
+
+    Told only that nothing constrains the statement, they go looking for a filter they
+    already wrote -- and the obvious wrong fix for that is to widen the predicate until
+    something passes, which is how a scoping bug gets written deliberately. The message
+    has to distinguish "you wrote no filter" from "I cannot read the one you wrote".
+    """
+    with pytest.raises(ValueError, match="not as a conjunct of its own"):
+        store._learner_scoped(sql)
+
+
+def test_an_or_is_refused_where_it_can_widen_the_filter_and_allowed_where_it_cannot() -> None:
+    """AND binds tighter than OR, so a top-level OR wins over the whole conjunction.
+
+    `WHERE learner_id = ? AND outcome = 'a' OR 1 = 1` reads as
+    `(learner_id = ? AND outcome = 'a') OR 1 = 1` and returns every row -- splitting on
+    AND alone cannot see that, so an OR at the clause's own level is refused. Inside
+    brackets it cannot reach past them, and refusing it there would reject a correctly
+    scoped statement for nothing: this rule runs at import, so a false refusal is a robot
+    that does not start.
+    """
+    widens_everything = "SELECT outcome FROM lesson_results WHERE learner_id = ? AND outcome = 'a' OR 1 = 1"
+    benign = "SELECT outcome FROM lesson_results WHERE learner_id = ? AND (outcome = 'completed' OR outcome = 'partial')"
+
+    with pytest.raises(ValueError, match="top-level OR"):
+        store._learner_scoped(widens_everything)
+
+    assert store._learner_scoped(benign) == benign
+
+
+@pytest.mark.parametrize(
+    ("shape", "sql"),
+    [
+        (
+            "copying another learner's row",
+            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) "
+            "VALUES (?, (SELECT lesson_id FROM lesson_results WHERE learner_id <> ? LIMIT 1), ?, ?, ?)",
+        ),
+        (
+            "attributing the row to another learner",
+            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) "
+            "VALUES ((SELECT id FROM learners WHERE id <> ? LIMIT 1), ?, ?, ?, ?)",
+        ),
+    ],
+)
+def test_a_values_list_that_reads_is_judged_like_any_other_read(shape: str, sql: str) -> None:
+    """A VALUES list reads the moment it contains a scalar subquery.
+
+    The write rule once checked the SELECT form of an insert and returned early on the
+    VALUES form, which is an asymmetry with no reason behind it. Verified during review
+    by execution against a two-learner database: the first of these copied another
+    household member's completed lesson and score into the current learner's history,
+    where the tutor reads it back and speaks it.
+    """
+    with pytest.raises(ValueError, match="attribute its row to one learner"):
+        store._learner_scoped(sql)
+
+
+@pytest.mark.parametrize(
+    ("shape", "sql"),
+    [
+        ("a double-quoted table", 'SELECT outcome FROM "lesson_results" WHERE learner_id = ?'),
+        ("a backtick-quoted table", "SELECT outcome FROM `lesson_results` WHERE learner_id = ?"),
+        ("a bracket-quoted table", "SELECT outcome FROM [lesson_results] WHERE learner_id = ?"),
+        (
+            "a quoted span hiding an OR",
+            "SELECT learner_id, score FROM lesson_results WHERE learner_id = ? AND \"'\" OR 1 OR \"'\"",
+        ),
+        ("an unterminated double quote", 'SELECT outcome FROM lesson_results WHERE outcome = " AND learner_id = ?'),
+    ],
+)
+def test_an_identifier_quote_is_refused_rather_than_lexed(shape: str, sql: str) -> None:
+    """SQLite has three identifier quotes and this lexer knows none of them.
+
+    So a `'` inside a double-quoted span pairs differently here than in the database,
+    which hides live SQL as a literal. The fourth case is the one that shows why this
+    matters: the guard read it as `... AND " <literal> "` and never saw the top-level OR,
+    while SQLite evaluated the OR and returned every learner's rows -- verified during
+    review against a real database. Refused rather than lexed, because teaching the lexer
+    three more quoting forms re-opens the question at the next one.
+    """
+    with pytest.raises(ValueError, match="quotes an identifier"):
+        store._learner_scoped(sql)
+
+
+def test_an_ambiguous_bare_filter_is_told_what_to_change() -> None:
+    """The refusal has to name the cause, or it sends the author the wrong way.
+
+    This statement IS correctly scoped; what it lacks is an alias on the filter. Told
+    only that nothing constrains it, an author goes looking for a filter they already
+    wrote -- and the obvious wrong fix for that is to widen the predicate until something
+    passes, which is how a scoping bug gets written on purpose.
+    """
+    scoped_but_ambiguous = (
+        "SELECT r.outcome FROM lesson_results AS r JOIN lessons AS l ON l.id = r.lesson_id WHERE learner_id = ?"
+    )
+
+    with pytest.raises(ValueError, match=r"write r\.learner_id = \? instead"):
+        store._learner_scoped(scoped_but_ambiguous)
+
+    named = scoped_but_ambiguous.replace("WHERE learner_id = ?", "WHERE r.learner_id = ?")
+    assert named != scoped_but_ambiguous, "the replacement did not apply"
+    assert store._learner_scoped(named) == named
+
+
+def test_an_unqualified_filter_is_judged_against_the_relations_it_can_see() -> None:
+    """A subquery's own tables are not in scope where the outer filter is written.
+
+    The counterpart to the ambiguity test above. Refusing this would make the rule
+    reject a statement whose filter is unambiguous, and a rule that cries wolf is one
+    people route around.
+    """
+    one_relation_in_scope = "SELECT outcome FROM lesson_results WHERE learner_id = ? AND lesson_id IN (SELECT id FROM lessons)"
+
+    assert store._learner_scoped(one_relation_in_scope) == one_relation_in_scope
+
+
+@pytest.mark.parametrize(
+    ("shape", "sql"),
+    [
+        (
+            "a common table expression",
+            "WITH mine AS (SELECT * FROM lesson_results WHERE learner_id = ?) SELECT outcome FROM mine",
+        ),
+        ("a schema-qualified table", "SELECT outcome FROM main.lesson_results WHERE learner_id = ?"),
+        ("a statement that reaches no personal table", "SELECT code, name FROM languages WHERE code = ?"),
+        ("more than one statement", "SELECT outcome FROM lesson_results WHERE learner_id = ?; DROP TABLE learners"),
+    ],
+)
+def test_a_shape_the_rule_cannot_read_is_refused_rather_than_waved_through(shape: str, sql: str) -> None:
+    """Refusing what cannot be judged is the rule, not an accident of how it is written.
+
+    Every one of these has a learner filter in it, and the first two are things a
+    developer might reasonably write. They are refused anyway, because accepting a
+    statement this rule has not actually read is what made the previous bypasses
+    invisible. The cost is a rewrite; the cost of the other direction is a household
+    member reading someone else's history.
+    """
+    with pytest.raises(ValueError):
+        store._learner_scoped(sql)
+
+
+@pytest.mark.parametrize(
+    ("shape", "sql"),
+    [
+        ("a line comment", "SELECT outcome FROM lesson_results -- WHERE learner_id = ?"),
+        ("a block comment", "SELECT outcome FROM lesson_results /* WHERE learner_id = ? */"),
+        ("a string literal", "SELECT outcome FROM lesson_results WHERE outcome = 'learner_id = ?'"),
+    ],
+)
+def test_text_the_database_never_runs_as_sql_cannot_satisfy_the_rule(shape: str, sql: str) -> None:
+    """A filter written in a comment filters nothing, and one inside quotes is a value.
+
+    The AST guard below used to strip comments before consulting this rule because the
+    rule itself could not tell the difference. It can now, which removes the asymmetry
+    where the same statement was refused by the test and accepted at import time.
+    """
+    with pytest.raises(ValueError, match="nothing constrains lesson_results"):
+        store._learner_scoped(sql)
+
+
 # A statement is proved scoped by what the source literally says. Anything a
 # runtime value supplies becomes this sentinel, which matches no scoping marker and
 # no table name -- so interpolation can never be what makes a statement look safe.
@@ -1060,30 +1698,44 @@ def unverified_inline_queries(source: str) -> list[str]:
     What this does NOT catch, stated plainly because a guard nobody knows the edges of
     gets trusted for things it never checked:
 
-    * It inherits store._learner_scoped's rule, which is a substring test for a learner
-      filter and has no notion of WHICH rows that filter constrains. A statement that
-      joins a personal table to itself satisfies it while reading everyone:
-      "SELECT r2.outcome FROM lesson_results AS r JOIN lesson_results AS r2
-       ON r2.lesson_id = r.lesson_id WHERE r.learner_id = ?" reports green here.
-      The same goes for "... WHERE learner_id = ? OR outcome = 'completed'" and for
-      the second leg of a UNION. Reusing the rule rather than restating it is
-      deliberate -- two copies would diverge -- so closing those means strengthening
-      _learner_scoped itself, in store.py, and both call sites would inherit it.
-      A marker inside a SQL comment is NOT in this list: comments are stripped before
-      the rule is consulted, which normalises the input rather than restating the
-      rule. Note the asymmetry that creates -- store._learner_scoped is also called at
-      import time, on the raw literal, so a comment marker still satisfies the
-      import-time check. This guard is now stricter than the thing it reuses. Moving
-      the strip into _learner_scoped would remove the asymmetry and is the better
-      home for it, in store.py.
-    * A hole outside the table clause is allowed through. `WHERE learner_id = ? AND
-      id = {lesson}` passes, and so does `WHERE learner_id = ? OR {extra}`, where the
-      hole widens the very predicate the marker is trusted for. So what this proves is
-      narrower than it looks: that a scoping MARKER appears in the literal text. That
-      is weaker than scoping, and weaker still than the absence of injection -- an
-      interpolated value in a WHERE clause remains an injection point. Refusing those
-      would also refuse the scoped interpolated spellings this guard is required to
-      keep accepting, so the limit is stated rather than closed.
+    * It inherits store._learner_scoped's rule, so that rule's limits are this guard's
+      limits. That rule no longer searches for a substring: it reads which relations a
+      statement names and demands a learner filter that actually constrains each of them:
+      a WHERE conjunct, written in that relation's own subquery, that IS `alias.column = ?`
+      rather than merely containing it. So a self-join, an OR-widened predicate, an
+      unfiltered UNION leg, a correlated-subquery DELETE, a filter inside NOT EXISTS or
+      IN, a filter written only in a join's ON, `WHERE NOT learner_id = ?`, and a filter
+      wrapped in CASE, IIF or any other call are all refused. Every one of those used to
+      report green here. The whole-conjunct requirement is an allow-list on purpose: the
+      version of this rule that instead named the ways a filter can be neutralised was
+      defeated four more times before the list stopped growing. Reusing it rather than restating
+      it stays deliberate -- two copies would diverge -- so anything still open is closed
+      in store.py and both call sites inherit it. What remains open:
+      it proves the SHAPE of a filter and never its value, so nothing in "r.learner_id
+      = ?" says the application binds the learner standing in front of the robot; and it
+      refuses what it cannot read rather than reasoning about it, and it accepts a filter
+      only as a WHERE conjunct that IS "alias.column = ?", written in that relation's own
+      subquery (or bare "column = ?" where one relation is visible there; brackets around
+      the whole conjunct are stripped first, so "WHERE (r.learner_id = ?)" is accepted). A good many correctly scoped statements are
+      refused as a result, and THE LIST OF THEM LIVES IN docs/learner-database.md AND
+      NOWHERE ELSE -- deliberately. It was kept in two places for one round and the copy
+      here promptly fell an entry short, which is the exact failure this docstring exists
+      to prevent. That document also says why the list is what has been found rather than
+      a closed set. The cost falls on legitimate statements, which is the direction
+      chosen: a refusal stops the module importing and gets fixed, an acceptance reads
+      another household member's data quietly.
+      A marker inside a SQL comment, or inside a string literal, is NOT in this list:
+      the rule drops both itself now, so the import-time check and this one read the
+      same statement. The asymmetry this bullet used to describe is gone.
+    * A hole outside the table clause is allowed through: `WHERE learner_id = ? AND
+      id = {lesson}` passes. What that leaves open is INJECTION, not scoping -- an
+      interpolated value in a WHERE clause is an injection point, and nothing here
+      refuses it. It is no longer a scoping hole: the reconstructed text keeps every
+      literal operator, so `WHERE learner_id = ? OR {extra}` is refused by the rule's
+      top-level-OR check even though what the hole would widen the predicate with is
+      unknown. Refusing every interpolated statement would also refuse the scoped
+      interpolated spellings this guard is required to keep accepting, so the injection
+      limit is stated rather than closed.
     * It reads store.py only. A query written in any other module is outside it.
     * It reads through `_learner_scoped(...)` by name, and refuses when that name is
       bound more than once. What it cannot notice is the function itself being
@@ -1204,11 +1856,11 @@ def unverified_inline_queries(source: str) -> list[str]:
         if exempt:
             continue
         try:
-            # Comments stripped for this check only. Normalising the input is not the
-            # same as restating the rule: store._learner_scoped is still the only thing
-            # that decides what scoping means, it is just no longer shown text the
-            # database will never execute.
-            store._learner_scoped(_SQL_COMMENT.sub(" ", sql))
+            # The statement goes in as written. Stripping comments here used to be
+            # necessary because the rule could not tell a comment from SQL; it drops
+            # them itself now, and stripping twice would only create a second place for
+            # the two to disagree about what the database is going to run.
+            store._learner_scoped(sql)
         except ValueError:
             offenders.append(f"line {argument.lineno}: {_shown(sql)}")
     return offenders
@@ -1710,10 +2362,12 @@ def test_a_statement_built_inside_exec_or_eval_is_refused(builtin: str) -> None:
 def test_a_scoping_marker_inside_a_comment_does_not_count(shape: str, statement: str) -> None:
     """The database never reads a comment, so a filter written in one filters nothing.
 
-    _learner_scoped searches for the marker as a substring and cannot tell the
-    difference. Stripping comments before consulting it is not restating the rule --
-    the rule still decides what scoping means; it is just no longer shown text that
-    will never be executed.
+    _learner_scoped drops closed comments before it reads a statement -- and refuses a
+    statement with an unterminated one -- so this is the same answer the import-time
+    check gives. It used to be a different one: the rule was a
+    substring search that could not tell a comment from SQL, and this guard stripped
+    them on its way in, which left the identical statement refused here and accepted at
+    import. The strip moved into the rule, so there is one answer now.
     """
     assert unverified_inline_queries(f"connection.execute({statement})"), f"{shape} passed as scoping"
 

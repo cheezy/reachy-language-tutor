@@ -423,9 +423,9 @@ as its first column. Two different things enforce that, and they cover different
 statements — which matters, because only one of them is an import-time guarantee.
 
 Every module-level statement that touches personal data is passed through
-`_learner_scoped`, which refuses one that names no learner filter. Those really do fail
-as the module loads, so the whole suite fails at once instead of one household member's
-data quietly reaching another. The catalog statements are deliberately not wrapped —
+`_learner_scoped`, which refuses one it cannot prove reaches a single learner. Those
+really do fail as the module loads, so the whole suite fails at once instead of one
+household member's data quietly reaching another. The catalog statements are deliberately not wrapped —
 see the paragraph below — so "every module-level statement" would be the wrong reading.
 
 A statement written inline inside a function body can still be wrapped — `_learner_scoped`
@@ -435,11 +435,17 @@ Those statements are covered by a test that reads this module's own source and r
 any `execute()` argument it cannot prove scoped — a test rather than an import-time
 guarantee, so it catches them when the suite runs rather than when the module loads.
 
-**What both halves do catch is the accident they exist for**: a statement with no
-learner filter at all. `SELECT outcome FROM lesson_results` is refused by
-`_learner_scoped` at import and reported by the test. Every hole below needs an author
-to have written a filter and then widened or neutered it, which is a more deliberate
-act than the omission.
+**What both halves catch** is a statement whose personal relations are not all
+constrained to one learner. That covers the plain omission — `SELECT outcome FROM
+lesson_results` is refused at import and reported by the test — and it covers the
+widenings that defeated the older substring rule: a self-join on a personal table, an
+`OR`-widened predicate, an unfiltered `UNION` leg, a `DELETE` whose only filter sits in
+a subquery, a filter inside a `NOT EXISTS` or `IN (...)`, a filter written only in a
+join's `ON`, `WHERE NOT learner_id = ?`, and a filter wrapped in `CASE`, `IIF` or any
+other call. Each of those names a learner filter somewhere in its text while reading
+everyone, and each is refused. So is an `UPDATE ... SET outcome = (SELECT 'x' WHERE
+1 = 1), learner_id = ?` — a statement with no `WHERE` clause at all that reassigns every
+row in `lesson_results` to one learner.
 
 Neither half is a proof, though, and the holes are worth knowing by name. The first one
 is the one this document is read for.
@@ -451,27 +457,128 @@ review and by nothing mechanical — the opening sentence of this section is a s
 about the queries in this module, not a property the application enforces wherever you
 put one. Put the query here, or accept that nothing will stop you.
 
-Both consult the same substring rule, which looks for a learner filter and has no
-notion of *which* rows that filter constrains — a self-join, an `OR`, or the second leg
-of a `UNION` satisfies it while reading everyone. That is tracked as **D11**.
+Both consult the same rule, so it is one rule read at two times rather than two
+checks. It reads which relations a statement names and demands a learner filter
+that actually constrains each of them: a `WHERE` conjunct, written in that relation's
+own subquery, that **is** `alias.column = ?` rather than merely containing it — and it
+refuses a shape it cannot read rather than passing it over.
+
+Requiring the whole conjunct is an allow-list, and that is the point. The version of this
+rule that instead listed the ways a filter can be present without constraining anything
+was defeated by `IIF(learner_id = ?, 1, 1)`, by `max(learner_id = ?, 1)`, by
+`(learner_id = ?) = 0` and by `learner_id = ? = 0` — each of which returns somebody
+else's rows, and the first of which is SQLite's own documented equivalent of the `CASE`
+form that list had already been taught. A list of what is forbidden can always be one
+entry short; a list of what is permitted cannot. Two limits follow from that, and they pull in opposite directions.
+
+It proves the **shape** of a filter and never its value. `r.learner_id = ?` says a
+parameter constrains that relation; nothing here says the application binds the learner
+standing in front of the robot. That is the app's job, and this rule does not check it.
+
+A sharper form of the same gap, worth naming because it is not obvious: a statement may
+carry **more than one** learner parameter, and the rule does not require them to name the
+same learner. `SELECT l.id, r.learner_id FROM learners AS l JOIN lesson_results AS r ON 1
+WHERE l.id = ? AND r.learner_id = ?` is accepted, and binding two different ids returns
+two different people. Every relation is constrained — the rule's contract is kept — but
+"constrained to one learner each" is weaker than "constrained to the same learner". No
+statement here has two learner parameters and the store's functions take a single
+`learner_id`, so nothing reaches this today; a "compare with a household member" or
+"merge two profiles" feature is the shape that would, and it should be read as writing a
+cross-learner statement deliberately rather than as passing this guard.
+
+**What the rule accepts as a filter** is narrow, and worth stating before the refusals,
+because most of them follow from it: a `WHERE` conjunct that **is** `alias.column = ?`,
+written in that relation's own subquery — or bare `column = ?` when exactly one relation
+is visible from where it is written. A subquery is identified, not counted by depth, so a
+filter in one subquery cannot scope a relation read in its sibling. Brackets
+enclosing the whole conjunct are stripped first, so `WHERE (r.learner_id = ?)` is the
+same statement as `WHERE r.learner_id = ?` and is accepted.
+
+It therefore refuses plenty of statements that are perfectly well scoped. Known refusals,
+as of this change — read this as what has been found, not as a closed list, because the
+rule refuses by default and nobody has enumerated every shape it cannot read:
+
+- an unqualified `learner_id = ?` where more than one relation is in scope. **This is the
+  one a developer hits first**, and the refusal says to write `r.learner_id = ?`, because
+  telling someone nothing constrains a statement they did filter sends them looking for
+  the wrong thing.
+- a filter spelled any other way: `? = learner_id`, `learner_id IS ?`, or a placeholder
+  written `?1` or `:learner_id`.
+- a filter in an `ON` clause rather than a `WHERE`, and a join scoped transitively through
+  `ON b.id = a.learner_id`.
+- a CTE; a compound query (`UNION`, `EXCEPT`, `INTERSECT`); a `FROM a, b` comma join.
+- a quoted identifier in any of SQLite's three spellings — `"x"`, `` `x` ``, `[x]` — and a
+  schema-qualified name like `main.lesson_results`.
+- an `OR` at a `WHERE` clause's own level, even one that never touches the learner filter,
+  and a `BETWEEN` at that level for the same reason — `BETWEEN x AND y` spells its own
+  `AND`, which is not a conjunction. Bracketing fixes both: `WHERE learner_id = ? AND
+  (score BETWEEN 0 AND 100)` is accepted.
+- a `WHERE` whose whole conjunction is bracketed — `WHERE (learner_id = ? AND outcome =
+  'completed')` — because the filter is then not a conjunct of its own.
+- a bare `learner_id = ?` in a query that also has a derived table (`FROM (SELECT ...)`),
+  because a derived table counts as a relation in scope and the filter then names none of
+  them. Qualify it.
+- a `WHERE` written straight after an opening bracket, which in SQLite means an
+  aggregate's `FILTER (WHERE ...)`. That predicate chooses what the aggregate
+  accumulates, not which rows the statement reads, so counting it would credit a
+  constraint the database never applies. Refused by shape rather than by name, so any
+  future clause spelled the same way is refused too.
+- every write that is not a plain `INSERT INTO <table> (learner_id, ...)`: `REPLACE INTO`,
+  `INSERT OR REPLACE`, `INSERT OR IGNORE`, and any `ON CONFLICT` clause.
+- an `UPDATE` whose `SET` writes the column that says which learner a row belongs to —
+  `SET learner_id = ...` on `lesson_results`, `SET id = ...` on `learners`. Proving which
+  rows a write touches says nothing about who it hands them to, and
+  `UPDATE lesson_results SET learner_id = 'bob' WHERE learner_id = ?` has a filter that
+  is entirely real. A merge-profiles feature that genuinely needs this should have to
+  declare itself rather than inherit the read rule's silence.
+
+An `OR` inside brackets is fine: `WHERE learner_id = ? AND (outcome = 'completed' OR
+outcome = 'partial')` is accepted. Only a top-level `OR` is refused, because `AND` binds
+tighter — `WHERE learner_id = ? AND outcome = 'a' OR 1 = 1` reads as
+`(learner_id = ? AND outcome = 'a') OR 1 = 1` and returns every row.
+
+Both insert forms are read, not just `INSERT ... SELECT`. A `VALUES` list reads too the
+moment it holds a scalar subquery, and writing `learner_id` first says nothing about the
+rows that subquery reaches: `VALUES (?, (SELECT lesson_id FROM lesson_results WHERE
+learner_id <> ? LIMIT 1), ...)` copies another household member's history into this
+learner's. That cost falls on legitimate work, and it is the direction chosen on
+purpose — a refusal stops the module importing and gets fixed the same hour, while an
+acceptance reads another household member's history and nobody finds out.
 
 A runtime value is refused when the guard cannot reconstruct the statement's text from
 the source — a bare name, a call and a concatenation with a name are all reported, and
-so is an interpolated table name. What it CAN reconstruct, it then judges by the
-substring rule above, and that is where the hole is: an f-string, a `%`-format or a
-`.format()` with a literal table and a literal marker is reconstructed and then passed,
-so `f"... WHERE learner_id = ? OR {extra}"` stays green — a cross-learner read and an
-injection point in one.
+so is an interpolated table name. What it CAN reconstruct it hands to the rule above,
+which now reads the reconstructed shape: `f"... WHERE learner_id = ? OR {extra}"` is
+refused, because the `OR` is in the literal text even though what it widens the
+predicate with is not.
 
-They also disagree, in **both** directions, so neither is uniformly the stronger. The
-test strips SQL comments before consulting the rule and `_learner_scoped` sees the raw
-literal, so `-- learner_id = ?` in a trailing comment satisfies the import-time guard
-while the test flags it — tracked as **D12**. In the other direction the test exempts a
-plain learner-creating `INSERT` before consulting the rule at all, which
-`_learner_scoped` refuses.
+The hole that remains is the **value** hole, and it is a real one:
+`f"... WHERE learner_id = ? AND id = {lesson}"` is accepted. The statement is genuinely
+scoped to one learner, so the rule is not wrong about scoping — but the hole is an
+injection point, and nothing here refuses it. Refusing every interpolated statement
+would also refuse the scoped spellings the guard is required to keep accepting, so the
+limit is stated rather than closed.
 
-Read this section as "two overlapping nets that catch the omission and miss the
-widening", not as "this cannot happen" — and not as "this does not help".
+They still disagree in one direction: the test exempts a plain learner-creating
+`INSERT INTO learners (id, ...)` before consulting the rule at all, on the grounds that
+a statement writing one row under an id it supplies reaches nobody else's data, while
+`_learner_scoped` refuses it — an insert is scoped there by writing `learner_id` first,
+and this one writes `id`. So that statement is written inline rather than wrapped.
+
+They no longer disagree about comments. The rule drops closed comments and hides string
+literals before reading a statement, so `-- learner_id = ?` in a trailing comment is
+refused at import as well as flagged by the test; the two read the same statement the
+database would run. An **unterminated** `/*` is a different matter and is refused
+outright: SQLite ends one at the end of the input and discards everything after it, so
+`WHERE lesson_id = ? /* AND learner_id = ?` reaches the database with no learner filter
+while a reader that does not know this sees one — the rule seeing more than the database
+does is exactly how a filter counts while constraining nothing. That asymmetry was tracked as **D12**, and closing it here is what made the
+rule's reading of structure sound — a comment could otherwise forge the shape the rule
+now depends on.
+
+Read this section as "one rule, checked at two times, that catches an unconstrained
+personal relation and refuses what it cannot read" — not as "this cannot happen", and
+not as "this does not help". The value hole above is the one it does not reach.
 
 The lesson catalog and the language list are deliberately **not** learner-scoped. They
 are shared reference data, and treating them as personal would be a false positive.

@@ -22,6 +22,7 @@ tools: nothing is shared, so sqlite3's same-thread check can never fire.
 
 from __future__ import annotations
 import os
+import re
 import json
 import math
 import time
@@ -493,8 +494,6 @@ def utc_now_ms() -> int:
 _SQLITE_INT_MIN = -(2**63)
 _SQLITE_INT_MAX = 2**63 - 1
 
-_LEARNER_FILTER_MARKERS = ("learner_id = ?", "learners.id = ?")
-
 # What a reader absorbs instead of raising. Their contract is a value, never an
 # exception: the caller is a conversation tool, and an exception there ends the turn.
 #
@@ -618,6 +617,513 @@ def _cannot_be_a_catalog_code(value: object) -> str | None:
     return None
 
 
+# The two tables that hold anything about a person, and the column in each that says
+# which person. Everything else in this schema -- languages, lessons, schema_meta --
+# is shared reference data that no filter has to constrain.
+#
+# This is the rule's own copy, and it lives here because this module is where the rule
+# lives. The AST guard in the tests reuses this function rather than restating it.
+_PERSONAL_TABLES: dict[str, str] = {"learners": "id", "lesson_results": "learner_id"}
+
+# The columns that say which learner a row belongs to. Writing one re-attributes the
+# row, which no amount of filtering on the way in can make safe.
+_LEARNER_COLUMNS = frozenset(_PERSONAL_TABLES.values())
+
+# The keywords that introduce a relation. A personal table named anywhere else is in a
+# position this rule has not been taught to read, and is refused rather than passed
+# over -- a check that ignores what it cannot account for is the defect being fixed.
+_RELATION_KEYWORDS = frozenset({"FROM", "JOIN", "INTO", "UPDATE"})
+
+# The keywords that end one clause and begin the next. A learner filter only proves
+# something in a clause that chooses rows, so only WHERE and a join's ON count.
+_CLAUSE_KEYWORDS = frozenset(
+    {
+        "SELECT",
+        "FROM",
+        "WHERE",
+        "GROUP",
+        "ORDER",
+        "HAVING",
+        "LIMIT",
+        "OFFSET",
+        "ON",
+        "SET",
+        "VALUES",
+        "JOIN",
+        "INTO",
+        "UPDATE",
+        "DELETE",
+        "INSERT",
+        "USING",
+        "RETURNING",
+    }
+)
+
+# A word that can follow a relation name without being its alias.
+_NOT_AN_ALIAS = _CLAUSE_KEYWORDS | frozenset(
+    {
+        "AS",
+        "INNER",
+        "LEFT",
+        "RIGHT",
+        "FULL",
+        "OUTER",
+        "CROSS",
+        "NATURAL",
+        "AND",
+        "OR",
+        "NOT",
+        "UNION",
+        "EXCEPT",
+        "INTERSECT",
+        "WITH",
+    }
+)
+
+# Constructs that change what a filter constrains in ways this rule does not work out.
+# Each is refused with its reason. A statement this rule cannot judge is exactly the
+# statement the substring test used to wave through.
+_UNJUDGEABLE_WORDS: dict[str, str] = {
+    "UNION": "a compound query's other legs carry no filter of their own",
+    "EXCEPT": "a compound query's other legs carry no filter of their own",
+    "INTERSECT": "a compound query's other legs carry no filter of their own",
+    "WITH": "a common table expression renames relations, which this rule does not follow",
+}
+
+# One SQL token. Comments and string literals are matched first so that neither can
+# contribute a word to anything below: "-- learner_id = ?" is text the database never
+# reads, and 'lesson_results' in quotes names no table.
+_SQL_TOKEN = re.compile(
+    r"(?P<comment>--[^\n]*|/\*.*?\*/)"
+    r"|(?P<string>'(?:[^']|'')*')"
+    r"|(?P<word>[A-Za-z_][A-Za-z_0-9]*)"
+    r"|(?P<number>[0-9]+(?:\.[0-9]+)?)"
+    r"|(?P<operator><>|<=|>=|!=)"
+    r"|(?P<other>\S)",
+    re.DOTALL,
+)
+
+
+def _sql_tokens(sql: str) -> list[str]:
+    """Split a statement into tokens, dropping comments and hiding literal text.
+
+    Every character is accounted for: the last alternative matches any single
+    non-whitespace character, so nothing is skipped silently. That matters more for a
+    rule that reads structure than it did for one that searched for a substring -- a
+    token this misses is a shape this misreads.
+    """
+    tokens: list[str] = []
+    for match in _SQL_TOKEN.finditer(sql):
+        if match.lastgroup == "comment":
+            continue
+        tokens.append("<literal>" if match.lastgroup == "string" else match.group())
+    return tokens
+
+
+def _is_a_name(token: str) -> bool:
+    """Report whether a token could be an identifier rather than punctuation."""
+    return token[:1].isalpha() or token.startswith("_")
+
+
+def _addressed_as(tokens: list[str], words: list[str], index: int) -> str:
+    """Return the name a relation reference is addressed by: its alias, else itself."""
+    if index + 2 < len(tokens) and words[index + 1] == "AS":
+        return tokens[index + 2].lower()
+    if index + 1 < len(tokens) and _is_a_name(tokens[index + 1]) and words[index + 1] not in _NOT_AN_ALIAS:
+        return tokens[index + 1].lower()
+    return tokens[index].lower()
+
+
+def _bracket_map(tokens: list[str], words: list[str]) -> tuple[list[tuple[int, int]], dict[int, int]]:
+    """Give every token its bracket depth and the subquery it belongs to, plus the nesting.
+
+    The subquery is an IDENTITY, not a depth. A counter cannot tell two sibling
+    subqueries apart, and a filter written in one would then be credited to a relation
+    read in the other: `SELECT (SELECT group_concat(learner_id) FROM lesson_results),
+    (SELECT 1 FROM (SELECT ? AS learner_id) WHERE learner_id = ?)` reads every learner
+    while the second subquery's filter appears to scope the first's relation.
+
+    Bracket depth is counted separately because brackets group predicates as well as open
+    subqueries, and only a subquery moves a filter out of reach of the rows around it.
+    `WHERE (learner_id = ?)` is the same statement as `WHERE learner_id = ?`; `WHERE NOT
+    EXISTS (SELECT ... WHERE learner_id = ?)` is not.
+
+    No clause is inferred here. An earlier version carried a single flat `clause`
+    variable that was never restored when a bracket closed, so a subquery's WHERE leaked
+    into everything after the closing bracket. Clauses are found by token instead, in
+    _clause_region, which has no state to leak.
+    """
+    rows: list[tuple[int, int]] = []
+    opened_subquery: list[bool] = []
+    scope: list[int] = [0]
+    encloses: dict[int, int] = {0: 0}
+    next_scope = 1
+    for index, token in enumerate(tokens):
+        if token == "(":
+            starts_subquery = index + 1 < len(tokens) and words[index + 1] == "SELECT"
+            opened_subquery.append(starts_subquery)
+            if starts_subquery:
+                encloses[next_scope] = scope[-1]
+                scope.append(next_scope)
+                next_scope += 1
+        elif token == ")" and opened_subquery:
+            if opened_subquery.pop():
+                scope.pop()
+        rows.append((len(opened_subquery), scope[-1]))
+    return rows, encloses
+
+
+def _is_visible_from(encloses: dict[int, int], relation_scope: int, filter_scope: int) -> bool:
+    """Report whether a relation's subquery is the filter's own, or encloses it."""
+    at = filter_scope
+    while True:
+        if at == relation_scope:
+            return True
+        if at == 0:
+            return False
+        at = encloses[at]
+
+
+def _clause_region(
+    tokens: list[str], words: list[str], rows: list[tuple[int, int]], index: int
+) -> tuple[list[int], int, int]:
+    """Return the tokens belonging to the clause opened at index, with its two depths.
+
+    The clause ends where the next clause keyword appears at the same bracket level, or
+    where the bracket enclosing it closes. Anything more deeply bracketed -- a subquery,
+    a grouped predicate, an insert's column list -- belongs to the clause rather than
+    ending it.
+    """
+    level, sub_depth = rows[index]
+    members: list[int] = []
+    for ahead in range(index + 1, len(tokens)):
+        if rows[ahead][0] < level or (rows[ahead][0] == level and words[ahead] in _CLAUSE_KEYWORDS):
+            break
+        members.append(ahead)
+    return members, level, sub_depth
+
+
+def _unwrapped(predicate: list[str]) -> list[str]:
+    """Drop brackets that enclose the whole predicate, which change nothing about it."""
+    while len(predicate) >= 2 and predicate[0] == "(" and predicate[-1] == ")":
+        depth = 0
+        for position, token in enumerate(predicate):
+            depth += token == "("
+            depth -= token == ")"
+            if depth == 0 and position < len(predicate) - 1:
+                return predicate
+        predicate = predicate[1:-1]
+    return predicate
+
+
+def _learner_filters(
+    tokens: list[str], words: list[str], rows: list[tuple[int, int]]
+) -> tuple[set[tuple[str, str, int]], set[tuple[str, int]], set[tuple[str, int]], str | None]:
+    """Collect the WHERE conjuncts that ARE a learner filter, and nothing else.
+
+    A conjunct counts only when the whole of it is `alias.column = ?` or `column = ?`.
+    That is an allow-list, deliberately: the first version of this named the ways a
+    filter can be present without constraining anything -- NOT, CASE -- and a list like
+    that can never be finished. `IIF(learner_id = ?, 1, 1)`, `max(learner_id = ?, 1)`,
+    `(learner_id = ?) = 0` and `learner_id = ? = 0` all defeated it, and each returns
+    rows belonging to somebody else. Requiring the conjunct to BE the filter refuses
+    every one of them, including the ones nobody has thought of.
+
+    Only a WHERE clause is read. A join's ON constrains whichever side of an outer join
+    is not the preserved one, and this rule does not work out which that is, so a filter
+    written there has to move to the WHERE clause.
+    """
+    qualified: set[tuple[str, str, int]] = set()
+    bare: set[tuple[str, int]] = set()
+    mentioned: set[tuple[str, int]] = set()
+    for index in range(len(tokens)):
+        if words[index] != "WHERE":
+            continue
+        if index and tokens[index - 1] == "(":
+            # An aggregate's `FILTER (WHERE ...)` is the one construct that spells
+            # "(WHERE", and its predicate chooses what the aggregate accumulates rather
+            # than which rows the statement reads -- so counting it as a filter credits
+            # the relation with a constraint the database never applies. Refused by shape
+            # rather than by naming FILTER: a row-choosing WHERE is never adjacent to an
+            # opening bracket, because a subquery's WHERE is separated from its "(" by
+            # SELECT ... FROM ..., so this covers any future clause of the same shape.
+            return set(), set(), set(), "a WHERE straight after an opening bracket does not choose the rows read"
+        members, level, sub_depth = _clause_region(tokens, words, rows, index)
+        # AND binds tighter than OR, so `a = ? AND b OR c` is `(a = ? AND b) OR c` and
+        # the filter constrains nothing. Splitting on AND alone cannot see that, so an
+        # OR at this clause's own level is refused. Deeper down it is inside a bracket
+        # and cannot reach past it, which is why a benign `AND (x OR y)` still passes.
+        if any(words[at] == "OR" and rows[at][0] == level for at in members):
+            return (
+                set(),
+                set(),
+                set(),
+                "a WHERE clause with a top-level OR does not constrain what it looks like it does",
+            )
+        # BETWEEN spells its own AND, and that AND is not a conjunction. Splitting on it
+        # reads `NOT score BETWEEN 0 AND learner_id = ?` as two conjuncts, the second of
+        # which looks exactly like a learner filter -- while the database binds it as the
+        # BETWEEN's upper bound and returns every row. BETWEEN is the only SQLite operator
+        # that overloads AND this way, which is why naming it is not the start of a
+        # denylist: it is the complete set.
+        if any(words[at] == "BETWEEN" and rows[at][0] == level for at in members):
+            return (
+                set(),
+                set(),
+                set(),
+                "a WHERE clause with a top-level BETWEEN spells its own AND, which is not a conjunction",
+            )
+        conjunct: list[str] = []
+        conjuncts: list[list[str]] = []
+        for at in members:
+            if words[at] == "AND" and rows[at][0] == level:
+                conjuncts.append(conjunct)
+                conjunct = []
+                continue
+            conjunct.append(tokens[at])
+            if rows[at][1] == sub_depth:
+                # Same subquery only -- identity, not depth. A token one subquery down belongs to that
+                # query's WHERE, not this one, and crediting it here would report a
+                # filter as badly written when in truth it constrains something else.
+                mentioned.add((tokens[at].lower(), sub_depth))
+        conjuncts.append(conjunct)
+        for predicate in (_unwrapped(each) for each in conjuncts):
+            if (
+                len(predicate) == 5
+                and predicate[1] == "."
+                and predicate[3] == "="
+                and predicate[4] == "?"
+                and _is_a_name(predicate[0])
+                and _is_a_name(predicate[2])
+            ):
+                qualified.add((predicate[0].lower(), predicate[2].lower(), sub_depth))
+            elif len(predicate) == 3 and predicate[1] == "=" and predicate[2] == "?" and _is_a_name(predicate[0]):
+                bare.add((predicate[0].lower(), sub_depth))
+    return qualified, bare, mentioned, None
+
+
+def _personal_relations(
+    tokens: list[str], words: list[str], rows: list[tuple[int, int]], write_target_exempt: bool
+) -> tuple[list[tuple[str, str, int]], list[int], str | None]:
+    """Return the personal relations a statement reads, every relation's depth, and any refusal."""
+    for index in range(len(tokens)):
+        if words[index] not in _RELATION_KEYWORDS:
+            continue
+        members, level, _ = _clause_region(tokens, words, rows, index)
+        # `FROM a, b` names a relation in a position the loop below does not read, which
+        # would leave it out of the count the unqualified-filter rule depends on. Refused
+        # rather than counted: a comma join is a spelling, and the JOIN spelling of the
+        # same query is read correctly.
+        if any(tokens[at] == "," and rows[at][0] == level for at in members):
+            return [], [], "it lists relations separated by a comma, which this rule does not read"
+
+    relations: list[tuple[str, str, int]] = []
+    relation_depths: list[int] = []
+    names_a_personal_table = False
+    for index, token in enumerate(tokens):
+        before = words[index - 1] if index else ""
+        after = words[index + 1] if index + 1 < len(tokens) else ""
+        sub_depth = rows[index][1]
+        if before in _RELATION_KEYWORDS and _is_a_name(token):
+            relation_depths.append(sub_depth)
+        elif before in _RELATION_KEYWORDS and token == "(":
+            # A derived table -- `FROM (SELECT ...)`. It names no relation this rule
+            # can read, but it IS one, and leaving it out of the count would let a
+            # bare `learner_id = ?` be trusted where two relations are in scope.
+            relation_depths.append(rows[index - 1][1])
+        if token.lower() not in _PERSONAL_TABLES or after == ".":
+            continue
+        if before not in _RELATION_KEYWORDS:
+            return [], [], f"it names {token.lower()} in a position this rule cannot read"
+        names_a_personal_table = True
+        if before == "INTO" and write_target_exempt:
+            # The insert's own row, scoped by the column it writes first -- a separate
+            # rule, because an insert has no WHERE clause. Only the insert branch may
+            # set this; anything else naming a personal table after INTO is a write this
+            # rule has not been taught, and is refused below like any other.
+            continue
+        relations.append((_addressed_as(tokens, words, index), token.lower(), sub_depth))
+    if not names_a_personal_table:
+        return [], [], "it names no personal relation, so there is nothing here for this rule to prove"
+    return relations, relation_depths, None
+
+
+def _unreadable(tokens: list[str], words: list[str]) -> str | None:
+    """Say why a statement's text cannot be read at all, or None when it can.
+
+    Every check here is about the TEXT rather than about scoping, so every statement
+    passes through it -- an insert included. An insert that cannot be read is no more
+    judgeable than a select that cannot be.
+
+    The unterminated block comment is the one worth naming. SQLite ends an unterminated
+    `/*` at the end of the input and discards everything after it, so
+    `WHERE lesson_id = ? /* AND learner_id = ?` reaches the database with no learner
+    filter at all, while a reader that does not know this sees one. That is the only
+    direction that matters: the rule seeing MORE than the database does is how a filter
+    counts while constraining nothing.
+    """
+    if "'" in tokens:
+        return "it has an unterminated string literal, so its text cannot be read"
+    if any(token == "/" and tokens[index + 1] == "*" for index, token in enumerate(tokens[:-1])):
+        return "it has an unterminated block comment, and SQLite discards everything after one"
+    if ";" in tokens:
+        return "it is more than one statement"
+    if any(token in ('"', "`", "[", "]") for token in tokens):
+        # SQLite has three identifier quotes and this lexer knows none of them, so a
+        # quote inside one pairs differently here than in the database -- which hides
+        # live SQL as a literal and lets a top-level OR through unseen. Refused rather
+        # than lexed: no registered statement uses one, and teaching the lexer three
+        # more quoting forms re-opens the question at the next one.
+        return "it quotes an identifier, which this rule does not read"
+    for word, why in _UNJUDGEABLE_WORDS.items():
+        if word in words:
+            return f"it uses {word}, and {why}"
+    return None
+
+
+def _unconstrained_personal_relation(sql: str, write_target_exempt: bool = False) -> str | None:
+    """Say why a statement cannot be proved scoped to one learner, or None when it can.
+
+    The question is not whether a learner filter appears anywhere. That was the
+    substring test this replaces, and it had no notion of WHICH rows a filter
+    constrains: a self-join, an OR-widened predicate, an unfiltered UNION leg and a
+    correlated-subquery DELETE all satisfied it while reading every learner.
+
+    What is asked here is whether EVERY personal relation the statement names is
+    constrained by a conjunct that IS a learner filter for it -- addressed to that
+    relation, in a WHERE clause, in that relation's own subquery, and forming the
+    whole of the conjunct rather than sitting inside a larger expression. A statement
+    naming lesson_results twice needs two filters, and a filter on `r` says nothing
+    about `r2`.
+
+    Anything this cannot work out is refused rather than accepted, and the direction is
+    deliberate: a statement wrongly refused stops the module importing and gets
+    rewritten, while one wrongly accepted reads another household member's data and
+    nobody finds out.
+    """
+    tokens = _sql_tokens(sql)
+    words = [token.upper() for token in tokens]
+    unreadable = _unreadable(tokens, words)
+    if unreadable is not None:
+        return unreadable
+
+    rows, encloses = _bracket_map(tokens, words)
+    relations, relation_depths, refused = _personal_relations(tokens, words, rows, write_target_exempt)
+    if refused is not None:
+        return refused
+
+    # An UPDATE has a WHERE and a SET, and until now only the WHERE was read. That let
+    # `UPDATE lesson_results SET learner_id = 'bob' WHERE learner_id = ?` through: the
+    # filter is real, it constrains exactly one learner's rows, and the statement then
+    # hands those rows to somebody else. Proving which rows a write touches says nothing
+    # about who it attributes them to -- the same asymmetry the insert rule exists for,
+    # in the one statement that has both halves.
+    for index in range(len(tokens)):
+        if words[index] != "SET":
+            continue
+        members, level, _ = _clause_region(tokens, words, rows, index)
+        assigned = [
+            at
+            for at in members
+            if tokens[at].lower() in _LEARNER_COLUMNS
+            and rows[at][0] == level
+            and at + 1 < len(tokens)
+            and tokens[at + 1] == "="
+        ]
+        if assigned:
+            return "it writes the column that says which learner the row belongs to"
+        if any(tokens[at].lower() in _LEARNER_COLUMNS for at in members):
+            # Mentioned inside a SET expression rather than assigned -- a catalog lookup
+            # keyed on lessons.id, say, or a subquery reading the learner's own best
+            # score. Refused as well, because a SET expression can read any table and
+            # this rule does not follow it; but saying it WRITES the column would be
+            # false, and an author sent after the wrong fix widens something.
+            return "a SET expression mentions a learner column, and this rule does not read inside one"
+    qualified, bare, mentioned, refused = _learner_filters(tokens, words, rows)
+    if refused is not None:
+        return refused
+
+    addressed = [alias for alias, _, _ in relations]
+    for alias, table, depth in relations:
+        if addressed.count(alias) > 1:
+            return f"two relations are both called {alias}, so a filter naming it constrains neither"
+        column = _PERSONAL_TABLES[table]
+        if (alias, column, depth) in qualified:
+            continue
+        # An unqualified filter names no relation, so it proves something only where one
+        # relation is visible: those at its own depth and those enclosing it. With two in
+        # scope, `learner_id = ?` does not say which of them it constrains.
+        if sum(1 for at in relation_depths if _is_visible_from(encloses, at, depth)) == 1 and (column, depth) in bare:
+            continue
+        if (column, depth) in bare:
+            # The filter is there and is the right one; what is missing is which relation
+            # it names. Saying "nothing constrains this" would send the author looking for
+            # a filter they already wrote, and the obvious wrong fix for that is to widen
+            # the predicate until something passes.
+            return (
+                f"{column} = ? does not say which relation it constrains, and more than one is in "
+                f"scope here -- write {alias}.{column} = ? instead"
+            )
+        readable_elsewhere = (column, depth) in bare or any(
+            other == column and at == depth for _, other, at in qualified
+        )
+        if (column, depth) in mentioned and not readable_elsewhere:
+            # The column is in this query's own WHERE clause but not as a conjunct of
+            # its own -- bracketed together with something else, spelled `? = learner_id`,
+            # or using a placeholder this rule does not read. Saying nothing constrains the
+            # statement would be false there and would send the author the wrong way.
+            #
+            # Only when no READABLE filter on that column exists at this depth. A
+            # self-join has one, correctly written, that simply names the other relation;
+            # there the honest message is that nothing constrains THIS relation.
+            return (
+                f"a filter on {column} is in the WHERE clause but not as a conjunct of its own, so this "
+                f"rule cannot tell what it constrains -- write {alias}.{column} = ? as its own conjunct"
+            )
+        as_written = table if alias == table else f"{table} (as {alias})"
+        return f"nothing constrains {as_written} to one learner"
+    return None
+
+
+def _insert_is_attributed(sql: str, tokens: list[str], words: list[str]) -> str | None:
+    """Say why an insert cannot be trusted to write one learner's row, or None when it can.
+
+    This accepts ONE shape: `INSERT INTO <personal table> (learner_id, ...)` followed by
+    VALUES or a SELECT this module can itself prove scoped. Naming the accepted shape
+    rather than the forbidden ones is the same choice _learner_filters makes, and for
+    the same reason -- the version that listed forbidden spellings missed `REPLACE INTO`,
+    which is SQLite's documented alias for `INSERT OR REPLACE` and overwrites whoever
+    already holds the row. A list of what is forbidden can always be one entry short.
+    """
+    if words[:2] != ["INSERT", "INTO"]:
+        return "only a plain INSERT INTO is scoped by the column it writes first"
+    if "CONFLICT" in words:
+        return "an ON CONFLICT clause can rewrite a row this statement did not create"
+    if "(" not in tokens:
+        return "it names no column list, so nothing says which learner the row belongs to"
+    opening = tokens.index("(")
+    if tokens[opening + 1 : opening + 2] != ["learner_id"]:
+        return "learner_id is not the first column it writes"
+    depth = 0
+    closing = opening
+    for position in range(opening, len(tokens)):
+        depth += tokens[position] == "("
+        depth -= tokens[position] == ")"
+        if depth == 0:
+            closing = position
+            break
+    follows = words[closing + 1] if closing + 1 < len(words) else ""
+    if follows not in ("VALUES", "SELECT"):
+        return "its column list is followed by something other than VALUES or a SELECT"
+    # Both forms go through the read rule, not just the SELECT. A VALUES list reads too
+    # the moment it contains a scalar subquery, and writing learner_id first says nothing
+    # about the rows that subquery reaches: `VALUES (?, (SELECT lesson_id FROM
+    # lesson_results WHERE learner_id <> ? LIMIT 1), ...)` copies another household
+    # member's history into this learner's. Checking only the SELECT form was an
+    # asymmetry with no reason behind it, and that is what it cost.
+    return _unconstrained_personal_relation(sql, write_target_exempt=True)
+
+
 def _learner_scoped(sql: str) -> str:
     """Return the statement, refusing at import time one that is not learner-scoped.
 
@@ -625,15 +1131,35 @@ def _learner_scoped(sql: str) -> str:
     another. A missing filter should not be a review comment -- it should stop the
     module from importing at all, which is what this does.
 
-    A read is scoped by filtering on the learner id. A write is scoped by naming it as
-    the first column it writes, which is the equivalent guarantee for an insert: the
-    row cannot be attributed to anyone else.
+    A read is scoped when every personal relation it names is constrained by a WHERE
+    conjunct that IS a learner filter for it; see _unconstrained_personal_relation. A
+    write is scoped by naming the learner id as the first column it writes, which is the
+    equivalent guarantee for an insert: the row cannot be attributed to anyone else. The
+    two are separate branches on purpose -- an insert has no WHERE clause, so one rule
+    cannot serve both. What they share is _unreadable, because a statement whose text
+    cannot be read is unjudgeable whichever branch it belongs to.
+
+    Where a statement cannot be judged it is REFUSED, not accepted. Every bypass this
+    rule has had -- and there have been eighteen -- was a statement it accepted while
+    misreading it, never one it knowingly let through.
     """
-    if any(marker in sql for marker in _LEARNER_FILTER_MARKERS):
+    tokens = _sql_tokens(sql)
+    words = [token.upper() for token in tokens]
+
+    unreadable = _unreadable(tokens, words)
+    if unreadable is not None:
+        raise ValueError(f"a learner-scoped statement has to be one this rule can read: {unreadable}")
+
+    if words[:1] in (["INSERT"], ["REPLACE"]):
+        refusal = _insert_is_attributed(sql, tokens, words)
+        if refusal is not None:
+            raise ValueError(f"a learner-scoped write must attribute its row to one learner: {refusal}")
         return sql
-    if sql.lstrip().upper().startswith("INSERT") and "(learner_id," in sql.replace(" ", ""):
-        return sql
-    raise ValueError("a learner-scoped statement must filter on, or write, the learner id")
+
+    refusal = _unconstrained_personal_relation(sql)
+    if refusal is not None:
+        raise ValueError(f"a learner-scoped statement must constrain every personal relation it reads: {refusal}")
+    return sql
 
 
 _PROFILE_SQL = _learner_scoped("SELECT id, display_name, created_at FROM learners WHERE learners.id = ?")
