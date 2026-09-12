@@ -255,19 +255,66 @@ single line of it reaches the database.
    1985 and Italy opened its armed forces to women in 1999. It is false today, and it is
    not what these robots should be saying in family homes.
 
+### Source decision: Basic and FAST, never Headstart
+
+**Use the FSI Basic and FAST courses. Do not use the Headstart series.** Headstart is
+Defense Language Institute material written for service personnel, and it shows: Italian
+Headstart Unit 1 teaches ranks, its dialogue is two naval officers, and one note claims
+women do not serve in Italy's armed forces. None of that belongs in a family home.
+
+FAST stands for Familiarization And Short-Term Training. Italian FAST was published by
+FSI in 1992 for diplomatic staff: 30 lessons over 32 units, dialogues set in different
+Italian regions, aimed at everyday situations. Measured against Headstart over comparable
+samples, it is better on both counts that matter:
+
+| | Headstart (DLI, 1985) | FAST (FSI, 1992) |
+|---|---|---|
+| Military terms per ~120 pages | pervasive; Unit 1 *is* ranks | **0** |
+| Accented characters lost to OCR | 38% (58 bad / 93 good) | **19%** (79 bad / 333 good) |
+
+The FAST scans also carry a different OCR pathology worth knowing about: `l` is frequently
+read as `/`, giving `usual/y`, `on/y`, `se/ecting` - 194 instances in 121 pages. Unlike the
+accent loss this is largely a mechanical repair, but not blindly: `americano/a` and `s/he`
+are legitimate slashes in the source.
+
+**The language itself is natural and still current.** *Scusi, Lei è americano?*, *Ha
+qualcosa da dichiarare?*, *No, non ho niente da dichiarare* - all idiomatic Italian today,
+thirty years on. The drills are substitution models with a question and an expected answer,
+ten or so variations each, which is directly runnable as speech.
+
+### What still has to change, and it is the situations rather than the sentences
+
+FAST is written for an adult diplomat arriving at post, and that premise surfaces in the
+content even though the grammar and register are fine:
+
+- **Scenarios.** Lesson II is going through customs - *doganiere*, *guardia di finanza*,
+  *stecche di sigarette*, *liquori*, *profumi*. Duty-free allowances are not early
+  vocabulary for a child.
+- **Identity.** Drills practise *Sono dell'Ambasciata*, "I am from the Embassy." Nobody
+  using this app is.
+- **Dated practicalities.** A 1992 customs lesson describes a border regime the EU single
+  market replaced in 1993.
+- **A human instructor.** The text says things like "with the instructor taking the part of
+  the Italian." Our tutor *is* that instructor, so the framing has to be rewritten rather
+  than transcribed.
+
+So the modernisation pass is real work, but it is narrower than it first looks: keep the
+sentences and the drill structure, replace the situations. A customs queue becomes a
+shop, a station, a kitchen. *Sono dell'Ambasciata* becomes something a person in a house
+would actually say.
+
 ### What follows from that
 
-**Curate, do not import.** The asset is the *structure* and the *method*; the text needs
-correction and the content needs selection. A realistic shape:
+**Curate, do not import.** The asset is the *structure*, the *method* and the *sentences*;
+the situations need replacing and the text needs correcting. A realistic shape:
 
 - Prove the pipeline on **one** language end to end before touching the other four.
-- Evaluate the diplomatic **Basic/Fast** courses against the military **Headstart** ones
-  for each language - the Headstart series is the most practical and the most military,
-  and that trade-off may resolve differently per language.
 - Keep a provenance record per lesson: course, module, unit, page. It is what makes a
   correction auditable and a rights question answerable later.
-- The audio (42 files, 15+ hours for Italian Headstart alone) is native-speaker reference.
-  The tutor speaks through realtime TTS and does not need it now. Do not ingest it yet.
+- Record every curation decision - what was replaced and why - so a human can review the
+  judgement rather than only the result.
+- The audio (13+ hours for Italian FAST alone) is native-speaker reference. The tutor
+  speaks through realtime TTS and does not need it now. Do not ingest it yet.
 
 ## 10. Appendix: shared public locations
 
@@ -282,7 +329,6 @@ If the robots were ever placed in shared settings such as classrooms or librarie
 ## 11. Open questions and next steps
 
 - Which languages will be offered first, and does the chosen voice backend handle them well?
-- For each language, is the Headstart course or the Basic/Fast course the better source?
 - Re-OCR the scans, or correct the existing text layer unit by unit? Section 9 measures the
   accent loss that makes this a real decision rather than a detail.
 - Will most homes have one learner or several? This decides whether face recognition is needed.
