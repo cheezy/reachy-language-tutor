@@ -50,7 +50,11 @@ coverage.xml
 # Editors and tooling
 .vscode/
 .idea/
-.claude/
+# Local Claude state stays out, but skills are project knowledge and are versioned:
+# a skill that vanishes on a fresh clone cannot reduce anything. (Git cannot re-include
+# a path under an excluded DIRECTORY, hence the /* form rather than a bare .claude/.)
+.claude/*
+!.claude/skills/
 *.swp
 *.swo
 
