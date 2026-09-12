@@ -127,6 +127,19 @@ def build_tool_dependencies(
     )
 
 
+# The --ui development server binds here. Loopback, not 0.0.0.0: this server mounts the
+# JSON-RPC control surface from console.py, whose methods make the robot speak and mute or
+# UNMUTE its microphone, and it carries no authentication of any kind. On a Reachy Mini
+# Wireless sitting on a family's Wi-Fi, binding every interface hands those to anyone on
+# the network. README_OLD.md has always documented this as 127.0.0.1; the code did not
+# agree, and this is the code agreeing.
+#
+# This is NOT the address the app binds when the robot daemon launches it. That one is
+# derived by the SDK from ReachyLanguageTutor.custom_app_url below -- see the comment
+# there before changing either.
+UI_BIND_HOST = "127.0.0.1"
+
+
 def main() -> None:
     """Entrypoint for the Reachy Mini conversation app."""
     args, _ = parse_args()
@@ -345,10 +358,10 @@ def run(
         import uvicorn
 
         own_ui_server = uvicorn.Server(
-            uvicorn.Config(effective_settings_app, host="0.0.0.0", port=7860, log_level="warning")
+            uvicorn.Config(effective_settings_app, host=UI_BIND_HOST, port=7860, log_level="warning")
         )
         threading.Thread(target=own_ui_server.run, daemon=True, name="ui-server").start()
-        logger.info("Web UI available at http://localhost:7860")
+        logger.info("Web UI available at http://%s:7860", UI_BIND_HOST)
 
     try:
         app_lifecycle.initialize_tools_with_default_fallback(instance_path, logger)
@@ -422,7 +435,31 @@ def run(
 class ReachyLanguageTutor(ReachyMiniApp):  # type: ignore[misc]
     """Reachy Mini Apps entry point for the conversation app."""
 
-    custom_app_url = "http://0.0.0.0:7860/"
+    # Loopback, and this literal is load-bearing in two ways.
+    #
+    # It is not a display string: the SDK urlparses it and binds uvicorn to its hostname
+    # (reachy_mini/apps/app.py, wrapped_run), so this IS the address the app listens on
+    # when the robot daemon launches it. That path is the one every deployed unit uses --
+    # the --ui server above is guarded by `settings_app is None` and never runs there --
+    # and console.py mounts the JSON-RPC surface onto it. Those methods make the robot
+    # speak, UNMUTE its microphone, and rewrite the speech backend's host and port, with
+    # no authentication. On 0.0.0.0 that was every device on the household Wi-Fi.
+    #
+    # It is also read out of this file as TEXT, by a regex taking the FIRST match
+    # (reachy_mini/apps/sources/local_common_venv.py, _get_custom_app_url_from_file), so
+    # an earlier assignment to this attribute anywhere above would shadow this one -- and
+    # writing one in prose is enough to do it, which is not hypothetical: the first draft
+    # of this very comment quoted the assignment syntax and the test below caught it
+    # extracting the ellipsis as the robot's URL. That test pins that the first match in
+    # the file is still the line directly beneath it.
+    #
+    # The daemon still reaches the app: its relay maps a URL's host to the loopback and
+    # connects there regardless (reachy_mini/daemon/jsonrpc_relay.py, _rpc_ws_url). What
+    # was NOT verifiable without a Wireless unit is whether the dashboard also loads this
+    # page directly from the browser; if the app's settings UI turns out unreachable from
+    # the dashboard on real hardware, this line is the one to revert, and authenticating
+    # the surface becomes the alternative -- see D15.
+    custom_app_url = "http://127.0.0.1:7860/"
     dont_start_webserver = False
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
