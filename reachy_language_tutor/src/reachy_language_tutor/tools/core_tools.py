@@ -11,7 +11,7 @@ import importlib.util
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Callable, ClassVar, Sequence, TypedDict
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import field, dataclass
 
 from reachy_mini import ReachyMini
 from reachy_language_tutor.utils import describe_json_for_log
@@ -19,6 +19,7 @@ from reachy_language_tutor.config import config, list_tool_module_names
 from reachy_language_tutor.mcp_client import McpToolTimeoutError, McpToolInvocationError
 from reachy_language_tutor.tool_spaces import build_remote_client, read_installed_tool_spaces
 from reachy_language_tutor.profile_store import DEFAULT_PROFILE_NAME
+from reachy_language_tutor.lesson_session import LessonSessionHolder
 from reachy_language_tutor.profile_toolsets import read_profile_tool_names
 from reachy_language_tutor.tools.tool_constants import SystemTool
 
@@ -35,8 +36,26 @@ class MissingToolFileError(FileNotFoundError):
     """Raised when a requested tool file is absent on disk."""
 
 
-class CurrentLearnerIsReadOnlyError(AttributeError):
+class SealedDependencyError(AttributeError):
+    """Raised when something tries to repoint a dependency that startup fixed."""
+
+
+class CurrentLearnerIsReadOnlyError(SealedDependencyError):
     """Raised when something tries to repoint who the app is serving after startup."""
+
+
+class RunningLessonIsReadOnlyError(SealedDependencyError):
+    """Raised when something tries to swap the holder of the running lesson."""
+
+
+# Interpolates nothing, for the same reason the learner refusal does not: this text is
+# rendered into a tool error and handed to the model.
+_RUNNING_LESSON_IS_FIXED = (
+    "ToolDependencies.lesson_session is fixed when the dependencies are built. The holder is what changes -- "
+    "open() and clear() move the lesson inside it -- while the holder itself is bound at startup to the one "
+    "learner the app is serving, so nothing reachable from a conversation can swap in a holder carrying a "
+    "lesson nobody started."
+)
 
 
 @dataclass
@@ -56,6 +75,26 @@ class ToolDependencies:
     # identified, and a tool must refuse rather than guess: guessing would serve one
     # household member another person's data. Sealed after construction: see below.
     current_learner_id: str | None = None
+
+    # What lesson is running, held beside who the app is serving and sealed with it.
+    # The holder is mutable; this reference to it is not. open() and clear() move the
+    # lesson inside the holder, which is the whole of the mutation this design wants,
+    # so sealing the reference costs nothing and closes the one thing the holder's own
+    # guards cannot reach.
+    #
+    # What they cannot reach: LessonSessionHolder.read_for proves the LEARNER dimension
+    # only. It checks that a session was opened for the learner asking, and it has no
+    # way to attest that the LESSON was chosen by the app rather than echoed out of a
+    # conversation. So a holder swapped wholesale for one bound to the same learner but
+    # carrying a lesson nobody started would read back clean -- which is exactly the
+    # harm lesson_session.py exists to prevent. An earlier version of this comment cited
+    # the read guard as if it covered both dimensions and left the reference writable on
+    # the strength of that; it covers one, and the seal is the other.
+    #
+    # default_factory, so the field is never None and no tool needs an "is there a
+    # holder" branch on a path where the answer must never be ambiguous. It binds to
+    # nobody, and a holder bound to nobody pins nothing.
+    lesson_session: LessonSessionHolder = field(default_factory=LessonSessionHolder)
 
     # Not fields: ClassVar is excluded from dataclasses.fields(), so repr, __eq__,
     # asdict and every test deriving identity fields from fields() are untouched.
@@ -82,7 +121,14 @@ class ToolDependencies:
         # ordinary attribute write this hook SEES and would otherwise permit, and the
         # replacement carries no seal flag -- so the guard would not merely be bypassed,
         # it would be switched off for every write afterwards.
-        {"current_learner_id", "_identity_sealed", "_SEALED_ATTRIBUTES", "__class__", "__dict__"}
+        {
+            "current_learner_id",
+            "lesson_session",
+            "_identity_sealed",
+            "_SEALED_ATTRIBUTES",
+            "__class__",
+            "__dict__",
+        }
     )
     _identity_sealed: ClassVar[bool] = False
 
@@ -93,7 +139,7 @@ class ToolDependencies:
         object.__setattr__(self, "_identity_sealed", True)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        """Refuse to repoint the current learner after the dependencies are built."""
+        """Refuse to repoint a sealed dependency after the bundle is built."""
         # The allow-list is read through the __class__ closure cell, not through
         # type(self): `type` is a module global, and a guard must not consult
         # anything an attacker can rebind. That is the mistake this file made
@@ -102,6 +148,10 @@ class ToolDependencies:
             # No value is interpolated, deliberately. _dispatch_tool_call turns a tool's
             # exception into {"error": f"{type(e).__name__}: {e}"} and hands that to the
             # model, so an id in this text would be a learner id echoed to the LLM.
+            # The attribute NAME is not a value -- it is a field of this class, fixed at
+            # source -- so choosing the refusal by it discloses nothing.
+            if name == "lesson_session":
+                raise RunningLessonIsReadOnlyError(_RUNNING_LESSON_IS_FIXED + " It cannot be reassigned in place.")
             raise CurrentLearnerIsReadOnlyError(
                 "ToolDependencies.current_learner_id is fixed when the dependencies are built, and so is the "
                 "seal that keeps it that way. Who the app is serving is decided once, at application startup, "
@@ -124,6 +174,8 @@ class ToolDependencies:
         # anything an attacker can rebind. That is the mistake this file made
         # three times -- the allow-list, the instance dict, and then this.
         if self._identity_sealed and name in __class__._SEALED_ATTRIBUTES:
+            if name == "lesson_session":
+                raise RunningLessonIsReadOnlyError(_RUNNING_LESSON_IS_FIXED + " It cannot be deleted either.")
             raise CurrentLearnerIsReadOnlyError(
                 "ToolDependencies.current_learner_id is fixed when the dependencies are built, and so is the "
                 "seal that keeps it that way. It cannot be deleted any more than it can be reassigned: who the "

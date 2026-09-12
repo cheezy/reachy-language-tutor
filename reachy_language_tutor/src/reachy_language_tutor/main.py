@@ -116,14 +116,30 @@ def build_tool_dependencies(
     Extracted from run() so the wiring can be tested without a robot: this is the one
     place the current learner is set, and a test that cannot reach it cannot prove it.
     """
+    from reachy_language_tutor.lesson_session import LessonSessionHolder
     from reachy_language_tutor.tools.core_tools import ToolDependencies
+
+    # Resolved once and used twice, deliberately: the holder is bound to the SAME
+    # learner the dependencies are sealed to. Calling the resolver a second time would
+    # leave two answers that could in principle differ, and a holder bound to somebody
+    # other than the learner the app is serving is precisely the state this design
+    # exists to make unrepresentable.
+    current_learner_id = resolve_current_learner_id(instance_path, logger)
 
     return ToolDependencies(
         reachy_mini=robot,
         movement_manager=movement_manager,
         instance_path=instance_path,
         camera_enabled=camera_enabled,
-        current_learner_id=resolve_current_learner_id(instance_path, logger),
+        current_learner_id=current_learner_id,
+        # Named here rather than left to the field's default_factory, because this is
+        # the one wiring site -- the same argument this function's docstring makes for
+        # the current learner. The factory is the fail-closed invariant for every other
+        # construction path (it binds to nobody, and a holder bound to nobody pins
+        # nothing); this line is the one a reader looking for "where does the app decide
+        # what is running, and for whom" will find. It starts empty: a robot that has
+        # just booted is not in the middle of a lesson.
+        lesson_session=LessonSessionHolder(current_learner_id),
     )
 
 

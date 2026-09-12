@@ -157,6 +157,17 @@ from reachy_language_tutor.tools.core_tools import ToolDependencies
 
 
 FIELD = "current_learner_id"
+# Every field the seal names, derived from the seal rather than hand-listed. The scan
+# below protects all of them, so a field added to _SEALED_ATTRIBUTES inherits the whole
+# rule -- the exotic spellings included -- instead of getting whichever half its author
+# remembered. W14 added lesson_session and a security review found the asymmetry:
+# object.__setattr__(bundle, "lesson_session", ...) went around the runtime seal AND
+# past a scan that only knew one name, while the identical shape for the learner id was
+# caught. That is the sibling-parity defect CLAUDE.md records as the most repeated one
+# on this board, so the fix is the inversion rather than a second name in a second list.
+SEALED_FIELDS = frozenset(
+    f.name for f in dataclasses.fields(ToolDependencies) if f.name in ToolDependencies._SEALED_ATTRIBUTES
+)
 # The machinery the seal is made of. Rebinding any of these on the CLASS turns the seal
 # off for every instance at once, which __setattr__ cannot refuse because it governs
 # instances rather than the class object.
@@ -407,16 +418,41 @@ def test_the_refusal_names_no_learner() -> None:
     assert "fixed when the dependencies are built" in message
 
 
+def test_the_write_scan_covers_every_name_the_seal_protects() -> None:
+    """The union of the two lists must account for the whole seal, with none left over.
+
+    SEALED_FIELDS is derived from dataclasses.fields, so a future entry in
+    _SEALED_ATTRIBUTES that is NOT a field -- a ClassVar, a property -- would fall into
+    neither list and its writes would be missed in silence. That is the same asymmetry
+    the derivation was introduced to fix, one level up: the derivation closed the
+    family it could see, and this asserts there is nothing it cannot see.
+
+    Stated as a covering rule rather than an equality, because SEAL_MACHINERY
+    deliberately names more than the seal does -- __new__, __init__, __getattribute__
+    and the module globals a guard must not consult are all shapes the scan flags
+    without _SEALED_ATTRIBUTES listing them.
+    """
+    uncovered = set(ToolDependencies._SEALED_ATTRIBUTES) - SEALED_FIELDS - SEAL_MACHINERY
+
+    assert uncovered == set(), uncovered
+
+
 def test_every_other_field_is_still_writable_after_construction() -> None:
-    """Only the identity is sealed. Derived from the dataclass, not hand-listed.
+    """Only what the seal names is sealed. Derived from it, not hand-listed.
 
     run() assigns deps.go_to_sleep well after startup has built the dependencies, so a
     blanket freeze would break the app at the point it tries to become interruptible.
+
+    The exception list is read from _SEALED_ATTRIBUTES rather than naming FIELD, so a
+    field added to the seal is excused here automatically and this test keeps saying
+    what it means -- "everything the seal does not name stays writable" -- instead of
+    quietly becoming a second, staler copy of the seal's contents. W14 added
+    lesson_session to that set, which is what made the difference visible.
     """
     deps = _deps(current_learner_id=SEEDED_LEARNER)
 
     for field in dataclasses.fields(ToolDependencies):
-        if field.name == FIELD:
+        if field.name in ToolDependencies._SEALED_ATTRIBUTES:
             continue
         setattr(deps, field.name, getattr(deps, field.name))
 
@@ -515,7 +551,7 @@ def _flatten(targets: list[ast.expr]) -> list[ast.expr]:
 
 
 def _field_write_offenders(source: str, label: str) -> list[str]:
-    """Return every write to the sealed identity field this rule can see in one module.
+    """Return every write to a sealed field this rule can see in one module.
 
     Covers the shapes the runtime seal cannot: the seal hooks __setattr__, so anything
     that goes around the attribute protocol -- an instance-dict subscript, vars(), an
@@ -568,7 +604,9 @@ def _field_write_offenders(source: str, label: str) -> list[str]:
             continue
         elif isinstance(node, ast.Delete):
             for target in _flatten(list(node.targets)):
-                if isinstance(target, ast.Attribute) and (target.attr in SEAL_MACHINERY or target.attr == FIELD):
+                if isinstance(target, ast.Attribute) and (
+                    target.attr in SEAL_MACHINERY or target.attr in SEALED_FIELDS
+                ):
                     offenders.append(f"{label} line {target.lineno}: deletes {target.attr}, disarming the seal")
                 elif isinstance(target, ast.Subscript) and _is_instance_dict(target.value):
                     # del deps.__dict__["_identity_sealed"] unseals through the dict.
@@ -582,7 +620,7 @@ def _field_write_offenders(source: str, label: str) -> list[str]:
             name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
             if name in ("setattr", "__setattr__", "delattr", "__delattr__"):
                 sealed_name = isinstance(named, ast.Constant) and (
-                    named.value == FIELD or named.value in SEAL_MACHINERY
+                    named.value in SEALED_FIELDS or named.value in SEAL_MACHINERY
                 )
                 installs_the_seal = (
                     isinstance(named, ast.Constant)
@@ -599,8 +637,8 @@ def _field_write_offenders(source: str, label: str) -> list[str]:
                     continue
                 if isinstance(first, ast.Name) and first.id == "deps":
                     offenders.append(f"{label} line {node.lineno}: {name} on deps")
-                elif isinstance(named, ast.Constant) and named.value == FIELD:
-                    offenders.append(f"{label} line {node.lineno}: {name} of {FIELD}")
+                elif isinstance(named, ast.Constant) and named.value in SEALED_FIELDS:
+                    offenders.append(f"{label} line {node.lineno}: {name} of {named.value}")
                 elif isinstance(named, ast.Constant) and named.value in SEAL_MACHINERY:
                     offenders.append(f"{label} line {node.lineno}: {name} of {named.value}, disarming the seal")
             elif name in MUTATING_FUNCTIONS and any(_is_instance_dict(argument) for argument in node.args):
@@ -615,8 +653,8 @@ def _field_write_offenders(source: str, label: str) -> list[str]:
                 offenders.append(f"{label} line {node.lineno}: mutates an instance dict through {name}()")
             continue
         for target in targets:
-            if isinstance(target, ast.Attribute) and target.attr == FIELD:
-                offenders.append(f"{label} line {target.lineno}: assigns {FIELD}")
+            if isinstance(target, ast.Attribute) and target.attr in SEALED_FIELDS:
+                offenders.append(f"{label} line {target.lineno}: assigns {target.attr}")
             elif _is_instance_dict(target) or _is_instance_dict(getattr(target, "value", None)):
                 # deps.__dict__ |= {...}, deps.__dict__[...] = ..., vars(deps)[...] = ...
                 offenders.append(f"{label} line {target.lineno}: writes an instance dict, going around the seal")
@@ -627,8 +665,8 @@ def _field_write_offenders(source: str, label: str) -> list[str]:
             # deps.__dict__["current_learner_id"] = ... and vars(deps)[...] = ...
             elif isinstance(target, ast.Subscript):
                 key = target.slice
-                if isinstance(key, ast.Constant) and key.value == FIELD:
-                    offenders.append(f"{label} line {target.lineno}: writes {FIELD} through a subscript")
+                if isinstance(key, ast.Constant) and key.value in SEALED_FIELDS:
+                    offenders.append(f"{label} line {target.lineno}: writes {key.value} through a subscript")
     return offenders
 
 
