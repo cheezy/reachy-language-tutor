@@ -12,6 +12,7 @@ import logging
 import ipaddress
 from typing import Any, List, Optional
 from pathlib import Path
+from urllib.parse import urlsplit
 from collections.abc import Callable
 
 import numpy as np
@@ -56,12 +57,13 @@ from reachy_language_tutor.conversation_handler import ConversationHandler
 
 try:
     # FastAPI is provided by the Reachy Mini Apps runtime
-    from fastapi import FastAPI, Response
+    from fastapi import FastAPI, Response, WebSocket
     from pydantic import BaseModel
     from fastapi.responses import FileResponse
     from starlette.staticfiles import StaticFiles
 except Exception:  # pragma: no cover - only loaded when settings_app is used
     FastAPI = object  # type: ignore
+    WebSocket = object  # type: ignore
     FileResponse = object  # type: ignore
     StaticFiles = object  # type: ignore
     BaseModel = object  # type: ignore
@@ -123,6 +125,160 @@ def _is_an_hf_host(host: str) -> bool:
         return isinstance(ipaddress.ip_address(candidate), ipaddress.IPv6Address)
     except ValueError:
         return False
+
+
+# The only /rpc methods a caller may invoke, and an ALLOW-LIST on purpose.
+#
+# The app's UI port has to be LAN-reachable (D15/D20) and nothing distinguishes the
+# dashboard's iframe from anything else on that network, so every method registered here is
+# reachable by anyone in the house. D20's first attempt neutered the two methods the task
+# named -- conversation.mic and backend.config -- and left eight other writers reachable
+# while restoring the LAN bind: personalities.save/delete/apply, voices.apply,
+# tool_spaces.add/remove and profile_tools.save/reset, of which tool_spaces.add installs a
+# caller-named Hugging Face Space as a tool the conversation can call. Opening the port
+# having closed two of ten doors was a net loss.
+#
+# Naming the dangerous ones is the same losing shape as D19's four-character deny-list and
+# D11's substring rule: such a list is only ever as complete as the last person to read it.
+# So this names what is EXPOSED and refuses everything else -- including any method added
+# later, by this file or by the register_*_methods helpers, which is the property that
+# survives the next change rather than the next reading.
+#
+# conversation.say and conversation.interrupt are here deliberately and are not reads: they
+# make the robot speak and cut it off. They persist nothing, the dashboard's conversation
+# view is what they are for, and keeping them is an exposure accepted in writing in
+# docs/rpc-control-surface.md rather than an oversight.
+#
+# Re-allowing a writer means re-adding whatever restriction made it safe -- notably
+# backend.config, whose host-validation and .env-sink checks stop being reachable once it is
+# gated off here -- re-exposing it means deciding again what target it may be given.
+_RPC_METHODS_EXPOSED_ON_THE_NETWORK = frozenset(
+    {
+        "conversation.status",
+        "conversation.say",
+        "conversation.interrupt",
+        "conversation.mic",
+        "personalities.list",
+        "personalities.all",
+        "personalities.load",
+        "personalities.avatar",
+        "voices.list",
+        "voices.current",
+        "tool_spaces.list",
+        "profile_tools.get",
+    }
+)
+
+
+def _refuse_over_the_network(name: str) -> Any:
+    """Build the handler that stands in for a method this instance does not expose."""
+
+    async def _refused(_params: dict[str, Any]) -> Any:
+        raise JsonRpcError(
+            f"{name} is not available over the network; this instance is configured from its .env and files",
+            reason="not_available_over_the_network",
+            code=-32601,
+        )
+
+    return _refused
+
+
+class _NetworkRestrictedRpcServer(JsonRpcServer):
+    """A JsonRpcServer that refuses any method not named in the allow-list above.
+
+    `JsonRpcServer.method()` delegates to `register()`, so overriding the one covers both
+    registration paths: the decorator this file uses and the explicit `rpc.register(...)`
+    calls in personality_routes, tool_space_routes and profile_tool_routes. A method is
+    therefore refused by DEFAULT -- someone adding one has to come here to expose it, which
+    is the opposite of the situation that made D20's first attempt wrong.
+    """
+
+    def register(self, name: str, handler: Any) -> None:
+        """Register a handler, or a refusal in its place when the method is not exposed."""
+        if name not in _RPC_METHODS_EXPOSED_ON_THE_NETWORK:
+            handler = _refuse_over_the_network(name)
+        super().register(name, handler)
+
+
+def _origin_is_this_server(origin: str, host_header: str) -> bool:
+    """Say whether this Origin is the page this very server sent, and not a DNS rebind.
+
+    Comparing Origin to the Host header alone proves nothing, because a caller supplies
+    both: a page on evil.example whose name is rebound to the robot's LAN address sends
+    `Origin: http://evil.example` with `Host: evil.example:7860`, they agree, and the check
+    that only compares them admits it. That is DNS rebinding, and it is a browser attack --
+    exactly the thing an Origin check exists to stop -- so the comparison has to be anchored
+    to something the attacker cannot restate.
+
+    The anchor is WHICH NAMES CAN BE REBOUND FROM OFF THE LINK. Rebinding is a remote attack:
+    it needs a name the attacker controls in the public DNS, pointed at this robot, so that a
+    page they serve to a browser anywhere becomes same-origin with it. An IP literal cannot
+    be used that way, `localhost` cannot, and `.local` has no public delegation, so none of
+    the three gives a remote attacker an origin here. Every other name does, and is refused.
+
+    `.local` is NOT unspoofable, and the comment should not claim it is: mDNS is
+    unauthenticated, so somebody already on the link can answer for a `.local` name. That
+    adversary is not the one this check is for -- they are on the network the port is open
+    to, where the Origin header is theirs to write anyway, and where the real mitigation is
+    that every writer is refused. What this check buys is the remote browser case, and there
+    `.local` is genuinely out of reach.
+
+    `.local` is admitted deliberately rather than by oversight: the dashboard builds its URL
+    from whatever host the desktop app connected to, which is frequently the robot's mDNS
+    name rather than its address, so refusing names outright would have locked the dashboard
+    out of the app -- the exact failure D20 exists to undo, reintroduced by its own fix.
+
+    A refusal is logged, because a handshake closed with 1008 and no explanation is the kind
+    of thing that costs somebody an afternoon.
+    """
+    if urlsplit(origin).netloc != host_header:
+        logger.warning("Refused an /rpc handshake: Origin %r does not match Host %r", origin, host_header)
+        return False
+    hostname = (urlsplit(f"//{host_header}").hostname or "").lower()
+    if hostname == "localhost" or hostname.endswith(".local"):
+        return True
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        logger.warning(
+            "Refused an /rpc handshake from %r: this server is addressed by IP, localhost or an "
+            "mDNS .local name, and a public DNS name can be rebound to it",
+            host_header,
+        )
+        return False
+    return True
+
+
+def _mount_rpc_with_origin_check(rpc: JsonRpcServer, app: "FastAPI", path: str = "/rpc") -> None:
+    """Mount /rpc behind a same-origin check, without patching the SDK.
+
+    `JsonRpcServer.mount` registers a route that calls `_serve`, which accepts the handshake
+    unconditionally. A WebSocket handshake is exempt from the same-origin policy and is not
+    preflighted, so any page in any browser that can reach this port could open
+    ws://<host>:7860/rpc cross-origin and call every method registered here. Registering the
+    same route ourselves and checking Origin first closes that, and leaves the SDK
+    untouched so the dependency stays replaceable.
+
+    Two boundaries this deliberately does NOT cross:
+
+    An ABSENT Origin is allowed, because the daemon's JSON-RPC relay connects to this
+    endpoint itself and sends no Origin -- refusing it would break the daemon's own access
+    rather than an attacker's, which is the trap D20 was filed with.
+
+    And this is not protection against a LAN client. Origin is a header a browser attaches
+    and anything else can forge, so a direct caller sets whatever it likes. The mitigation
+    against a direct caller is that the methods reachable here cannot do harm: the mic is
+    read-only and every writer is refused outright. docs/rpc-control-surface.md records
+    why no credential is available to this app to do better.
+    """
+
+    @app.websocket(path)
+    async def _rpc_ws(websocket: "WebSocket") -> None:  # pragma: no cover - I/O
+        origin = websocket.headers.get("origin")
+        if origin is not None and not _origin_is_this_server(origin, websocket.headers.get("host", "")):
+            await websocket.close(code=1008)
+            return
+        await rpc._serve(websocket)
 
 
 def log_handler_message(msg: dict) -> None:
@@ -720,7 +876,7 @@ class LocalStream:
         # The single wire format both the local browser UI and remote WebRTC
         # clients use (the daemon relays it over the DataChannel). Notifications
         # (conversation.turn/phase/transcript/activity) are pushed from activity.
-        rpc = JsonRpcServer()
+        rpc = _NetworkRestrictedRpcServer()
 
         # SDK isn't marked py.typed, so mypy sees rpc.method as untyped; safe here.
         @rpc.method("conversation.status")  # type: ignore[untyped-decorator]
@@ -749,9 +905,26 @@ class LocalStream:
 
         @rpc.method("conversation.mic")  # type: ignore[untyped-decorator]
         def _rpc_mic(params: dict[str, object]) -> dict[str, object]:
+            """Report whether the microphone is muted. Deliberately read-only.
+
+            This used to accept {"muted": false} and unmute. The app's UI port has to be
+            reachable on the household LAN or the desktop dashboard cannot load the app and
+            kills it after 60s (D15/D20), and nothing this app can check distinguishes the
+            dashboard's iframe from any other caller on that network -- there is no
+            credential the SDK can carry to it, which docs/rpc-control-surface.md records in
+            full. So the protection cannot be "only the right caller may unmute"; it has to
+            be that unmuting a microphone in someone's home is not offered here at all.
+
+            A `muted` parameter is refused rather than ignored, because silently returning
+            the unchanged state would read to a caller -- and to the dashboard -- as though
+            the mute had been applied.
+            """
             if "muted" in params:
-                self._mic_muted = bool(params["muted"])
-                logger.info("Microphone %s via /rpc", "muted" if self._mic_muted else "unmuted")
+                raise JsonRpcError(
+                    "the microphone cannot be controlled remotely",
+                    reason="mic_is_read_only",
+                    code=-32601,
+                )
             return {"muted": self._mic_muted}
 
         @rpc.method("backend.config")  # type: ignore[untyped-decorator]
@@ -793,7 +966,7 @@ class LocalStream:
                 message = "Connection saved. Restart Reachy Mini Conversation from the desktop app to apply it."
             return {"ok": True, "message": message, **_status_payload()}
 
-        rpc.mount(settings_app)
+        _mount_rpc_with_origin_check(rpc, settings_app)
         self._rpc = rpc
 
         try:

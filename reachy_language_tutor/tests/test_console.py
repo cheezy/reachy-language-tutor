@@ -92,17 +92,20 @@ def test_clear_audio_queue_drains_queue_in_place() -> None:
     assert queue.empty()
 
 
-def test_mic_reports_and_toggles_mute_state_over_rpc() -> None:
-    """The mic starts live; conversation.mic exposes and flips the pause state."""
+def test_mic_reports_but_does_not_change_mute_state_over_rpc() -> None:
+    """The mic starts live; conversation.mic reports the state and refuses to change it.
+
+    It used to flip the state. D20 made it read-only: the app's UI port must be reachable on
+    the household LAN or the dashboard stops the app, and no caller on that network can be
+    told apart from another, so unmuting a microphone in someone's home is not offered here.
+    """
     app = FastAPI()
     robot = SimpleNamespace(media=SimpleNamespace(audio=None, backend=None))
     stream = LocalStream(MagicMock(), robot, settings_app=app)
     stream._init_settings_ui_if_needed()
 
     assert _rpc_call(app, "conversation.mic")["result"] == {"muted": False}
-    assert _rpc_call(app, "conversation.mic", {"muted": True})["result"] == {"muted": True}
-    assert stream._mic_muted is True
-    assert _rpc_call(app, "conversation.mic", {"muted": False})["result"] == {"muted": False}
+    assert _rpc_call(app, "conversation.mic", {"muted": True})["error"]["data"]["reason"] == "mic_is_read_only"
     assert stream._mic_muted is False
 
     # headless streams keep the mic live
@@ -199,15 +202,12 @@ def test_backend_config_requests_in_process_restart_with_handler_factory(
     )
     stream._init_settings_ui_if_needed()
 
-    data = _rpc_call(app, "backend.config", {"hf_mode": "local", "hf_host": "localhost", "hf_port": 8765})["result"]
-
-    assert data["ok"] is True
-    assert data["message"] == "Connection saved. Reconnecting backend."
-    assert data["backend"] == "huggingface"
-    assert data["requires_restart"] is False
-    assert data["can_proceed"] is True
-    assert data["backend_connection_state"] == "connecting"
-    assert stream._restart_requested.is_set()
+    # backend.config is a writer, and D20 stopped exposing writers over /rpc: the app's UI
+    # port must be LAN-reachable and no caller on it can be authenticated, so configuration
+    # moved to .env. What this test used to assert about the call's effect is now asserted
+    # about the refusal; the gate itself is covered in test_rpc_control_surface.py.
+    assert _rpc_call(app, "backend.config", {"hf_mode": "local", "hf_host": "localhost", "hf_port": 8765})["error"]["data"]["reason"] == "not_available_over_the_network"
+    assert not stream._restart_requested.is_set(), "a refused call must not trigger a reconnect"
 
 
 def test_backend_config_persists_local_hf_selection_and_status(
@@ -227,19 +227,15 @@ def test_backend_config_persists_local_hf_selection_and_status(
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
     stream._init_settings_ui_if_needed()
 
-    data = _rpc_call(app, "backend.config", {"hf_mode": "local", "hf_host": "localhost", "hf_port": 8765})["result"]
+    # backend.config is a writer, and D20 stopped exposing writers over /rpc: the app's UI
+    # port must be LAN-reachable and no caller on it can be authenticated, so configuration
+    # moved to .env. What this test used to assert about the call's effect is now asserted
+    # about the refusal; the gate itself is covered in test_rpc_control_surface.py.
+    assert _rpc_call(app, "backend.config", {"hf_mode": "local", "hf_host": "localhost", "hf_port": 8765})["error"]["data"]["reason"] == "not_available_over_the_network"
 
-    assert data["ok"] is True
-    assert data["backend"] == "huggingface"
-    assert data["has_hf_ws_url"] is True
-    assert data["has_hf_connection"] is True
-    assert data["hf_connection_mode"] == "local"
-    assert data["hf_direct_host"] == "localhost"
-    assert data["hf_direct_port"] == 8765
 
-    env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "HF_REALTIME_CONNECTION_MODE=local" in env_text
-    assert "HF_REALTIME_WS_URL=ws://localhost:8765/v1/realtime" in env_text
+    # A refused writer must leave the file alone; nothing was persisted because nothing ran.
+    assert not (tmp_path / ".env").exists()
 
 
 def test_backend_config_persists_deployed_mode_without_clearing_local_hf_ws_url(
@@ -266,16 +262,20 @@ def test_backend_config_persists_deployed_mode_without_clearing_local_hf_ws_url(
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
     stream._init_settings_ui_if_needed()
 
-    data = _rpc_call(app, "backend.config", {"hf_mode": "deployed"})["result"]
+    # backend.config is a writer, and D20 stopped exposing writers over /rpc: the app's UI
+    # port must be LAN-reachable and no caller on it can be authenticated, so configuration
+    # moved to .env. What this test used to assert about the call's effect is now asserted
+    # about the refusal; the gate itself is covered in test_rpc_control_surface.py.
+    assert _rpc_call(app, "backend.config", {"hf_mode": "deployed"})["error"]["data"]["reason"] == "not_available_over_the_network"
 
-    assert data["ok"] is True
-    assert data["has_hf_session_url"] is True
-    assert data["has_hf_ws_url"] is True
-    assert data["hf_connection_mode"] == "deployed"
 
+    # A refused writer leaves the file as it was: the seeded local target survives and
+    # deployed mode was never written, because the call never ran.
     env_text = env_path.read_text(encoding="utf-8")
-    assert "HF_REALTIME_CONNECTION_MODE=deployed" in env_text
-    assert "HF_REALTIME_SESSION_URL=" not in env_text
+    assert "HF_REALTIME_CONNECTION_MODE=deployed" not in env_text
+    # The stale allocator URL this call used to clear is still here, precisely because the
+    # call never ran. Nothing a refused writer would have done has happened.
+    assert "HF_REALTIME_SESSION_URL=https://lb.example.test/session" in env_text
     assert "HF_REALTIME_WS_URL=ws://localhost:8765/v1/realtime" in env_text
 
 
@@ -301,13 +301,10 @@ def test_backend_config_switches_to_saved_local_hf_connection_without_payload_ta
     stream = LocalStream(MagicMock(), robot, settings_app=app, instance_path=str(tmp_path))
     stream._init_settings_ui_if_needed()
 
-    data = _rpc_call(app, "backend.config", {})["result"]
-
-    assert data["ok"] is True
-    assert data["backend"] == "huggingface"
-    assert data["hf_connection_mode"] == "local"
-    assert data["hf_direct_host"] == "192.168.1.42"
-    assert data["hf_direct_port"] == 8766
+    # backend.config is a writer and D20 stopped exposing writers over /rpc -- the port has
+    # to be LAN-reachable and no caller on it can be authenticated, so configuration moved to
+    # .env. The persisted target is still honoured; it just cannot be changed from here.
+    assert _rpc_call(app, "backend.config", {})["error"]["data"]["reason"] == "not_available_over_the_network"
 
     env_text = env_path.read_text(encoding="utf-8")
     assert "HF_REALTIME_CONNECTION_MODE=local" in env_text
@@ -334,7 +331,9 @@ def test_backend_config_rejects_invalid_hf_port_zero(
         {"backend": "huggingface", "hf_mode": "local", "hf_host": "localhost", "hf_port": 0},
     )
 
-    assert resp["error"]["data"]["reason"] == "invalid_hf_port"
+    # Since D20 the method is refused before its own validation runs; the port validator is
+    # still there for if it is ever re-exposed, and is covered by the deep security review.
+    assert resp["error"]["data"]["reason"] == "not_available_over_the_network"
 
 
 def test_status_reports_direct_hf_ws_url_as_ready(
@@ -788,8 +787,8 @@ def test_rpc_status_and_mic_over_websocket() -> None:
 
         ws.send_json({"jsonrpc": "2.0", "id": "2", "method": "conversation.mic", "params": {"muted": True}})
         resp = ws.receive_json()
-        assert resp["result"] == {"muted": True}
-    assert stream._mic_muted is True
+        assert resp["error"]["data"]["reason"] == "mic_is_read_only"
+    assert stream._mic_muted is False
 
 
 def test_rpc_interrupt_broadcasts_turn_listening() -> None:

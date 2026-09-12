@@ -453,13 +453,28 @@ class ReachyLanguageTutor(ReachyMiniApp):  # type: ignore[misc]
     # extracting the ellipsis as the robot's URL. That test pins that the first match in
     # the file is still the line directly beneath it.
     #
-    # The daemon still reaches the app: its relay maps a URL's host to the loopback and
-    # connects there regardless (reachy_mini/daemon/jsonrpc_relay.py, _rpc_ws_url). What
-    # was NOT verifiable without a Wireless unit is whether the dashboard also loads this
-    # page directly from the browser; if the app's settings UI turns out unreachable from
-    # the dashboard on real hardware, this line is the one to revert, and authenticating
-    # the surface becomes the alternative -- see D15.
-    custom_app_url = "http://127.0.0.1:7860/"
+    # This value IS the bind address on a robot: the SDK urlparses it and hands the host to
+    # uvicorn (reachy_mini/apps/app.py, wrapped_run).
+    #
+    # D15 set it to loopback to keep the control surface off the household LAN. That was
+    # wrong, and the question the old comment here left open has since been answered by
+    # reading the desktop dashboard's own bundle: in all three places it opens an app it
+    # does `new URL(custom_app_url); hostname = LI()`, where LI() returns the robot's LAN
+    # address whenever the connection is over wifi. The host in this literal is DISCARDED
+    # and only the port survives, so on a Wireless unit the dashboard loads
+    # http://<robot-lan-ip>:7860/ -- which a loopback-bound uvicorn refuses. Its liveness
+    # hook then HEAD-polls that same URL and, after 60s of failure, calls stopCurrentApp.
+    # So loopback did not harden the app, it killed it about a minute after start, on every
+    # unit. It is invisible on a Mac because a non-wifi connection makes LI() "localhost".
+    #
+    # The dashboard therefore REQUIRES this port to be LAN-reachable, and no bind address
+    # satisfies both that and the threat model. Authenticating instead is not available to
+    # this app: there is no channel that reaches the dashboard's iframe without also
+    # reaching anyone else on that network, and the SDK carries no credential to it.
+    # docs/rpc-control-surface.md records all of it. So the exposure is answered where it
+    # can be -- by what the reachable methods are allowed to DO (D20): the mic is read-only
+    # and every writer on that surface -- the backend target included -- is refused outright.
+    custom_app_url = "http://0.0.0.0:7860/"
     dont_start_webserver = False
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:

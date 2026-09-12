@@ -72,13 +72,97 @@ choosing.
   admits the peer binds all interfaces with no admission control. Report the chain, not a
   weaponized path. *(Filing this issue is an outward action left to a maintainer of this
   repo; the text above is the report.)*
-- **Keep shipping `conversation.mic` / `backend.config` for now.** They drive the app's own
-  settings dashboard (`static/js/api.js`); removing them breaks legitimate function, and
-  removal is the *only* in-app lever that would change anything, since the app cannot
-  distinguish the calls. Accepting that in writing is the honest interim state: no unit is
-  deployed yet.
-- **The real fix is authenticating `/rpc`** — a per-instance bearer token from `.env` (per
-  `CLAUDE.md`, never committed) plus an `Origin` check on the WebSocket handshake. That one
-  change closes this relay route, the cross-origin-WebSocket route, and lets the bind return
-  to LAN-reachable so the dashboard works. Filed as the `/rpc` authentication defect; not
-  landed here, because D18's remit was to answer the question, not to build the mitigation.
+- ~~**Keep shipping `conversation.mic` / `backend.config` for now.**~~ **Superseded by D20**,
+  which neutered both rather than keeping them: the mic is read-only and the backend target
+  every writer is refused. The reasoning below was right that removal is the only in-app lever —
+  it was wrong that the lever had to stay unpulled.
+- ~~**The real fix is authenticating `/rpc`** — a per-instance bearer token from `.env`.~~
+  **Superseded by D20, and this one was wrong rather than merely premature.** There is no
+  channel that delivers a secret to the dashboard's iframe without delivering it equally to
+  anyone else who can reach the port, and the SDK carries no credential to the app at all.
+  The three verifications are under "Why there is no credential" below. The `Origin` check
+  half of the idea survived and did land; the token half cannot be built. Anyone tempted to
+  re-file it should read that section first.
+
+## What was done about it (D20)
+
+D15 had bound the app's own UI port to loopback to keep these methods off the household
+LAN. That was wrong twice over, and the record is worth keeping because the reasoning is
+the part that generalises.
+
+**It broke the app on the deployment target.** The desktop dashboard discards the host in
+`custom_app_url` — in all three places it opens an app it does `new URL(url); hostname =
+LI()`, and `LI()` returns the robot's LAN address whenever the connection is over wifi —
+so on a Wireless unit it loads `http://<robot-lan-ip>:7860/`, which a loopback-bound
+uvicorn refuses. Its liveness hook HEAD-polls that same URL and calls `stopCurrentApp`
+after 60s, so the tutor died about a minute after starting, on every unit. A Mac never
+shows it, because a non-wifi connection makes `LI()` return `localhost`.
+
+**And it did not close the exposure anyway**, because the daemon relay above reaches the
+app on the loopback regardless.
+
+### Why there is no credential
+
+The obvious fix — authenticate `/rpc` — is not available to this app, verified three ways:
+
+- The dashboard *does* preserve `custom_app_url`'s query string, but that value is a static
+  literal the SDK regex-parses out of `main.py` **source**. A token there would be committed
+  to the repository and identical in every household, which is not a secret.
+- The app serves its own `index.html` on the same port, and that port must be LAN-reachable
+  for the dashboard to work, so a token embedded in the page is readable by exactly the
+  caller it would be meant to exclude.
+- `reachy_mini/apps/jsonrpc_server.py` carries no token, secret or auth mechanism, and
+  `_serve` calls `websocket.accept()` unconditionally.
+
+So the protection could not be *who may call*; it had to be *what a call can do*.
+
+### What changed
+
+- **The bind is LAN-reachable again**, because the dashboard requires it and no address
+  satisfies both it and the threat model.
+- **The surface is an allow-list.** `/rpc` registers **21** methods, and the first attempt
+  at this neutered the two the task happened to name — `conversation.mic` and
+  `backend.config` — while leaving eight further writers reachable: `personalities.save`,
+  `personalities.delete`, `personalities.apply`, `voices.apply`, `tool_spaces.add`,
+  `tool_spaces.remove`, `profile_tools.save`, `profile_tools.reset`. `tool_spaces.add`
+  installs a caller-named Hugging Face Space as a tool the conversation can call. Opening
+  the port having closed two of ten doors was a net loss, and naming the dangerous ones is
+  the same losing shape as D19's four-character deny-list and D11's substring rule. So a
+  `JsonRpcServer` subclass now refuses every method **not** named in
+  `_RPC_METHODS_EXPOSED_ON_THE_NETWORK`. `method()` delegates to `register()`, so the one
+  override covers both the decorator used in `console.py` and the explicit
+  `rpc.register(...)` calls in the three route modules — and a method added later is
+  refused **by default** until somebody comes here and exposes it deliberately.
+- **What stays exposed** is the read side — `conversation.status`, `personalities.list`,
+  `.all`, `.load`, `.avatar`, `voices.list`, `voices.current`, `tool_spaces.list`,
+  `profile_tools.get` — plus `conversation.mic` (which reports state and refuses a `muted`
+  parameter rather than ignoring it), and `conversation.say` / `conversation.interrupt`.
+  Those last two are **not** reads and are the accepted exposure here: they make the robot
+  speak and cut it off, they persist nothing, and the dashboard's conversation view is what
+  they are for. That is a decision, not an oversight.
+- **An `Origin` check** on the handshake, added by registering the route rather than
+  patching the SDK. It closes the cross-origin-browser route — a WebSocket handshake is
+  exempt from the same-origin policy and is not preflighted. Comparing Origin to the Host
+  header alone would not have been enough: a caller supplies both, so a page on
+  `evil.example` rebound by DNS to the robot's address sends a matching pair and would be
+  admitted. The check is therefore anchored on the fact that this server is only ever
+  addressed by something that cannot be **rebound** — an IP literal, `localhost`, or an mDNS
+  `.local` name, which has no public delegation. A public DNS name is refused. `.local` is
+  admitted deliberately: the dashboard often uses the robot's mDNS name, and refusing it would
+  have locked the dashboard out through this very fix. Note `.local` is not unspoofable —
+  mDNS is unauthenticated — but the adversary who can spoof it is already on the link, where
+  the Origin header is theirs to write and the real mitigation is that every writer is
+  refused. This check buys the remote-browser case. An
+  **absent** Origin stays allowed, because the daemon relay sends none and refusing it would
+  break the daemon rather than an attacker.
+
+### What this costs
+
+Configuration moves to `.env` and the instance's files. The settings UI still shows state,
+but it cannot save a personality, install a tool Space, change the voice, or repoint the
+speech backend over the network. `HF_REALTIME_WS_URL` in `.env` is how a realtime server is
+pointed at now, and that is the only way.
+
+That is the real price of the position this app is in: the port must be open, no caller on
+it can be told apart from any other, and so the only honest lever is what a call is allowed
+to do. Anything cheaper is a guess about who is calling.

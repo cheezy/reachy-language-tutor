@@ -45,8 +45,9 @@ def test_inactivity_timeout_thread_closes_stream_manager_without_sleep_callback(
 def test_the_ui_server_binds_loopback_and_the_readme_says_so() -> None:
     """The --ui server carries the JSON-RPC control surface, so who can reach it matters.
 
-    console.py mounts /rpc on this same app, and its methods make the robot speak, mute or
-    UNMUTE the microphone, and REWRITE the speech backend's host and port. The README has
+    console.py mounts /rpc on this same app. Its methods make the robot speak; since D20 the
+    mic is read-only and every writer is refused outright, but this dev server still has
+    no reason to listen beyond this machine. The README has
     always documented 127.0.0.1 and this server bound every interface; both halves are
     asserted here, because a guarantee a document makes and the code does not keep is
     worse than no guarantee.
@@ -97,15 +98,22 @@ def test_the_ui_server_binds_loopback_and_the_readme_says_so() -> None:
         assert urlparse(url).hostname == main_mod.UI_BIND_HOST, f"{name} documents {url}, which the app does not bind"
 
 
-def test_the_address_the_sdk_binds_on_a_robot_is_loopback() -> None:
+def test_the_address_the_sdk_binds_on_a_robot_is_lan_reachable() -> None:
     """This is the path a deployed Reachy Mini actually uses, and it is text, not code.
 
     When the daemon launches the app the SDK urlparses ReachyLanguageTutor.custom_app_url
-    and binds uvicorn to its hostname, and console.py mounts the JSON-RPC surface onto that
-    same server -- the methods that make the robot speak, unmute its microphone and rewrite
-    the speech backend's host and port, none of them authenticated.
+    and binds uvicorn to its hostname. It MUST be LAN-reachable: the desktop dashboard
+    discards this host and loads http://<robot-lan-ip>:7860/, then HEAD-polls the same URL
+    and calls stopCurrentApp after 60s of failure. D15 set it to loopback and would
+    therefore have killed the app about a minute after start on every Wireless unit; D20
+    restored it. This test is the one that would have caught that, so it asserts the
+    property that actually matters rather than the one that reads safer.
 
-    Both halves are asserted. The attribute has to be loopback, and the FIRST
+    The exposure this creates is answered by what the reachable methods may DO -- the mic
+    is read-only and every writer is refused outright -- not by the bind address. See
+    docs/rpc-control-surface.md.
+
+    Both halves are asserted. The attribute has to be LAN-reachable, and the FIRST
     `custom_app_url = "..."` match in the file has to be that same value, because the SDK
     extracts it from this source with a first-match regex rather than by importing the
     module -- so a stray assignment written above would silently become the address the
@@ -121,7 +129,11 @@ def test_the_address_the_sdk_binds_on_a_robot_is_loopback() -> None:
     declared = ReachyLanguageTutor.custom_app_url
     assert declared is not None
     host = urlparse(declared).hostname
-    assert host is not None and ip_address(host).is_loopback, declared
+    assert host is not None, declared
+    assert not ip_address(host).is_loopback, (
+        f"custom_app_url is {declared!r}: a loopback bind is refused by the dashboard, whose "
+        "liveness probe then stops the app after 60s on a Wireless unit (D15/D20)"
+    )
 
     source = Path(main_mod.__file__).resolve().read_text(encoding="utf-8")
     first = re.search(r'custom_app_url\s*(?::\s*[^=]+)?\s*=\s*["\']([^"\']+)["\']', source)
