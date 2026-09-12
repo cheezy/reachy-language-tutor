@@ -60,7 +60,7 @@ from reachy_language_tutor.profile_store import read_profile_from_directory
 
 # The tools this app exists to expose. Named here so that dropping one from the
 # profile fails with the name it dropped rather than as an arithmetic mismatch.
-LEARNER_TOOLS = {"get_profile", "get_progress", "record_result"}
+LEARNER_TOOLS = {"get_profile", "get_progress", "start_lesson", "record_result"}
 
 # The COMPLETE vocabulary a learner-reading tool may ask the model to fill in.
 #
@@ -147,8 +147,8 @@ def misfiled_tool():
 def _learner_reading_tools() -> set:
     """Discover which offered tools touch learner data, rather than naming them.
 
-    A guard that checks three hard-coded names says nothing about the fourth
-    learner tool somebody adds later, which is the case it most needs to cover.
+    A guard that checks a hard-coded list of names says nothing about the next
+    learner tool somebody adds, which is the case it most needs to cover.
 
     The module is resolved from each registered INSTANCE rather than by assembling
     ``reachy_language_tutor.tools.<name>``. That dotted path is only correct for
@@ -232,7 +232,7 @@ def test_each_declared_tool_lives_in_the_file_named_after_it() -> None:
         assert Path(module.__file__).stem == name
 
 
-def test_the_three_learner_tools_reach_the_conversation() -> None:
+def test_every_learner_tool_reaches_the_conversation() -> None:
     """The task this app exists for: a tool absent here cannot be called at all."""
     assert LEARNER_TOOLS <= set(_registry(_locked_profile().default_tools))
 
@@ -269,7 +269,7 @@ def test_no_learner_tool_asks_the_model_for_anything_outside_the_catalog_vocabul
 def test_the_prompt_tells_the_tutor_never_to_ask_who_it_is_talking_to() -> None:
     """A security consideration W10 names, pinned positively rather than by absence.
 
-    The three tools refuse an identity in their arguments, but nothing stopped the
+    The learner tools refuse an identity in their arguments, but nothing stopped the
     PROMPT from telling the model to ask a person for a name and work it in some
     other way. Absence tests cannot catch that -- only a positive requirement can.
 

@@ -3,6 +3,7 @@ from typing import Any
 
 from reachy_language_tutor.learners import get_progress, get_language_catalog
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
+from reachy_language_tutor.tools._language_choice import resolve_language
 
 
 logger = logging.getLogger(__name__)
@@ -88,11 +89,10 @@ class GetProgress(Tool):
             logger.error("get_progress: the language catalog could not be read")
             return {"error": "I cannot reach my records right now, so I cannot tell you where you are."}
 
-        wanted = spoken.strip().casefold()
-        matched = next(
-            (entry for entry in catalog if wanted in (entry.code.casefold(), entry.name.casefold())),
-            None,
-        )
+        # The matching rule itself lives in _language_choice, shared with start_lesson.
+        # It is the part that decides whether the robot denies teaching a language it
+        # teaches, so a second copy of it is the sibling-drift defect waiting to happen.
+        matched = resolve_language(catalog, spoken)
         if matched is None:
             logger.warning("get_progress: the requested language is not in the catalog")
             return {

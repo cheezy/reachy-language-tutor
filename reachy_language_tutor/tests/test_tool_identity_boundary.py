@@ -66,6 +66,7 @@ from reachy_language_tutor.learners import store
 # another test file purges and re-imports the tools package, which would leave these
 # names bound to dead classes and make such a check quietly return False. The `core`
 # fixture below exists for the same reason.
+from reachy_language_tutor.lesson_session import LessonSessionHolder
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 
@@ -251,7 +252,18 @@ def instance(tmp_path: Path) -> Path:
 
 
 def _deps(**overrides: Any) -> ToolDependencies:
-    """Build dependencies with the two required fields stubbed, as the other suites do."""
+    """Build dependencies the way main.build_tool_dependencies does, fields stubbed.
+
+    The lesson-session holder is bound to the same learner the bundle names, because
+    that is what production does (main.py) -- the holder is bound at construction and
+    refuses to pin anything for a bundle that names nobody. Leaving it at the field's
+    default would hand every start_lesson call an unbound holder, so the tool would
+    return the same refusal for both probe learners and the attack below would run
+    against it vacuously. That is a NARROWER attack surface, not a safer one: binding
+    it makes the holder live, so an injected identity now has something real to try to
+    move. Nothing else in this file changes what is attacked.
+    """
+    overrides.setdefault("lesson_session", LessonSessionHolder(overrides.get("current_learner_id")))
     return ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock(), **overrides)
 
 
@@ -535,6 +547,17 @@ async def _assert_identity_injection_is_ignored(
             assert deps.current_learner_id == PRIMARY_LEARNER, (
                 f"{tool_name} via {entry}: a dispatch with {sorted(payload) if isinstance(payload, dict) else payload} "
                 "changed the identity ON the shared dependencies, which would repoint every later turn"
+            )
+            # The same check for the OTHER piece of learner-scoped state the shared
+            # dependencies carry. Binding the holder in _deps made the pinned lesson a
+            # live write target, and a target the sweep can move but never reads back
+            # is a target it does not really test -- the "fix the class, not the
+            # member" shape CLAUDE.md names, with current_learner_id as the member
+            # that already had its guard. Nothing may pin a lesson for anyone but the
+            # learner this session is serving, whatever the payload said.
+            assert deps.lesson_session.read_for(HOUSEMATE_ID) is None, (
+                f"{tool_name} via {entry}: a dispatch with {sorted(payload) if isinstance(payload, dict) else payload} "
+                "pinned a lesson readable as the OTHER household member's, on the shared dependencies"
             )
             return result
 

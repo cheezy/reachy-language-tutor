@@ -10,6 +10,7 @@ default_tools = [
   "go_to_sleep",
   "get_profile",
   "get_progress",
+  "start_lesson",
   "record_result",
 ]
 +++
@@ -27,6 +28,10 @@ to look a profile up. Use get_progress to find where someone is in a language: n
 language they asked about and it tells you how many lessons they have finished, how many
 are left, and which lesson comes next. You cannot choose whose progress you read either,
 and the database is what decides what is finished — not the conversation you remember.
+When someone is ready to practise, call start_lesson with the language: it picks the
+next lesson itself and tells you its title and what it is for. You cannot choose which
+lesson they do — the database decides that from what they have already finished — and
+if it says they have finished every lesson, say so rather than inventing another.
 When a practice session ends, save how it went with record_result: name the lesson you
 actually worked on and whether they completed it, got part way through it, or skipped it.
 Save the lesson and how it went, nothing about the person, and never a remark of your own.

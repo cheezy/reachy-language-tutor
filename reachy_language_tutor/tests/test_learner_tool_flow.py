@@ -40,6 +40,7 @@ import pytest
 # that fetched the module per call to dodge exactly that. See tools_module_graph.py.
 from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.learners import store
+from reachy_language_tutor.lesson_session import LessonSessionHolder
 from reachy_language_tutor.tools.core_tools import ToolDependencies
 
 
@@ -54,11 +55,19 @@ def instance(tmp_path: Path) -> Path:
 
 
 def _deps(instance: Path, learner_id: str | None = SEEDED_LEARNER) -> ToolDependencies:
+    """Build the bundle the way main.build_tool_dependencies does, robot fields stubbed.
+
+    The lesson-session holder is bound to the same learner the bundle names, because
+    that is what production does -- a holder bound to nobody refuses every pin, so a
+    flow test that left it defaulted would exercise start_lesson's refusal path and
+    call it a working flow.
+    """
     return ToolDependencies(
         reachy_mini=MagicMock(),
         movement_manager=MagicMock(),
         instance_path=instance,
         current_learner_id=learner_id,
+        lesson_session=LessonSessionHolder(learner_id),
     )
 
 
@@ -177,3 +186,51 @@ async def test_a_tool_that_fails_mid_conversation_says_so_rather_than_inventing(
         assert answer["error"].strip(), f"{name} returned an empty error"
         if name == "record_result":
             assert answer["recorded"] is False, "a failed write must never look like a success"
+
+
+@pytest.mark.asyncio
+async def test_start_lesson_and_get_progress_agree_on_which_lesson_is_next(instance: Path) -> None:
+    """Two tools, one database: they must not tell the learner different things.
+
+    The handoff that matters here is not an id -- start_lesson deliberately returns
+    none -- but the POSITION and the counts, which are what the tutor says out loud.
+    If these diverged, the learner would hear "you are on lesson three" from one and
+    "four" from the other in the same conversation.
+    """
+    deps = _deps(instance)
+
+    progress = await _call("get_progress", {"language": "Spanish"}, deps)
+    started = await _call("start_lesson", {"language": "Spanish"}, deps)
+
+    assert "error" not in progress
+    assert started["started"] is True
+    assert started["lesson"]["position"] == progress["next_lesson"]["position"]
+    assert started["lesson"]["title"] == progress["next_lesson"]["title"]
+    assert started["remaining_count"] == progress["remaining_count"]
+    assert started["completed_count"] == progress["completed_count"]
+    # And the thing the pin is for: what the app believes is running is the lesson the
+    # store named, not one the model was told about and could repeat back differently.
+    pinned = deps.lesson_session.read_for(SEEDED_LEARNER)
+    assert pinned is not None
+    assert pinned.lesson_id == progress["next_lesson"]["id"]
+
+
+@pytest.mark.asyncio
+async def test_calling_start_lesson_twice_leaves_exactly_one_lesson_pinned(instance: Path) -> None:
+    """Asking again must not stack a lesson, nor quietly advance to the next one.
+
+    Through the real dispatch path, because the JSON round trip is where a second
+    call could differ from the first.
+    """
+    deps = _deps(instance)
+
+    first = await _call("start_lesson", {"language": "Spanish"}, deps)
+    second = await _call("start_lesson", {"language": "Spanish"}, deps)
+
+    assert first["started"] is True
+    assert first == second
+    expected = store.get_progress(SEEDED_LEARNER, "es", instance_path=instance)
+    assert expected is not None and expected.next_lesson is not None
+    pinned = deps.lesson_session.read_for(SEEDED_LEARNER)
+    assert pinned is not None
+    assert pinned.lesson_id == expected.next_lesson.id
