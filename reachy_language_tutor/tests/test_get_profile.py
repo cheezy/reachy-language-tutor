@@ -158,9 +158,9 @@ def test_the_tool_module_never_reads_an_identity_from_kwargs() -> None:
     Was a substring check for "kwargs.get" and "kwargs[", which caught two spellings
     and nothing else -- `kwargs.pop`, `dict(kwargs)`, an alias, or `**kwargs` forwarded
     into a store call all passed it while reading an identity. W9 swept the family:
-    the sibling guards in test_get_progress.py and test_record_result.py permit one
-    access SHAPE, and this one permits none, which is the strongest form available
-    to a tool that reads nothing.
+    the sibling guards in test_get_progress.py, test_start_lesson.py and
+    test_finish_lesson.py permit one access SHAPE, and this one permits none, which is
+    the strongest form available to a tool that reads nothing.
 
     The bound, stated rather than overclaimed: this reads the module's SYNTAX, so a
     string-mediated dynamic read (locals()["kwargs"], eval) is not an ast.Name mention

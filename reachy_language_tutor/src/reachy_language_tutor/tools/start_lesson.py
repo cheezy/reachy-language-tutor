@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # One sentence per meaning, and never a sentence shared between two meanings. The
 # tutor says these out loud, so they are the learner's register rather than the
 # developer's -- and none of them states a figure, because a figure the store did not
-# return is a figure this tool invented. Mirrors _REFUSALS in record_result.py.
+# return is a figure this tool invented. Same shape as _REFUSALS in finish_lesson.py.
 _REFUSALS: dict[str, str] = {
     "no_current_learner": "I do not know who I am talking to yet, so I cannot start a lesson.",
     # The value itself is never quoted back: it is unbounded text the model chose.

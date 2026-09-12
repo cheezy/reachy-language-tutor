@@ -296,7 +296,8 @@ class Recorder:
             )
         )
         # Shape, never values. `args_json_str` is exactly the material the no-PII rule
-        # exists for: record_result's arguments carry a lesson outcome.
+        # exists for: finish_lesson's arguments carry how a lesson went and what it
+        # scored.
         logger.info(
             "probe: turn %d recorded a tool call (tool=%s, args=%d chars, idle=%s)",
             self.current.index,

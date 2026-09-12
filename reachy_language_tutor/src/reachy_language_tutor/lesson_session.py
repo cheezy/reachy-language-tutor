@@ -67,8 +67,9 @@ class LessonSession:
     # Milliseconds since the epoch, the unit LessonAttempt.recorded_at uses -- a session
     # stamped in seconds would be 1000x off the attempt it eventually becomes.
     #
-    # tools/record_result.py notes that nothing wall-clock may enter a tool's result
-    # dict. A future finish_lesson reading this must not echo it to the model.
+    # tools/finish_lesson.py notes that nothing wall-clock may enter a tool's result
+    # dict -- the boundary suite calls a tool twice and demands identical answers -- so
+    # a caller reading this must not echo it to the model.
     opened_at: int
 
     def __repr__(self) -> str:

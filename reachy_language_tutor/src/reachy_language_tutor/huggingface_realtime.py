@@ -884,8 +884,8 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                         call_id: str = str(getattr(event, "call_id", uuid.uuid4()))
 
                         # Shape, not values: a tool's arguments carry a person's data as
-                        # readily as its result does. record_result is handed the lesson
-                        # outcome, so this line would print it in full.
+                        # readily as its result does. finish_lesson is handed how a lesson
+                        # went and what it scored, so this line would print it in full.
                         logger.info(
                             "Tool call received — tool_name=%r, call_id=%s, args=%s",
                             tool_name,

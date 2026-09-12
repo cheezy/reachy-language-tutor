@@ -325,7 +325,9 @@ async def test_a_tool_that_raises_does_not_put_its_message_in_the_log(
 ) -> None:
     """The error branch is ERROR, so it is written whether or not --debug is on.
 
-    Shaped after the tool that does not exist yet: W9's record_result is handed a
+    Shaped after a learner-writing tool -- W9's record_result, since replaced by
+    finish_lesson (W16); the NAME here is a synthetic string in a fabricated log line
+    and names no real tool. It is handed a
     lesson outcome, so an exception it raises is the likeliest way a learner's data
     reaches this line. Tools are required to return an error dict rather than raise,
     but this layer cannot tell a safe constant from an interpolated name.

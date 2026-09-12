@@ -60,7 +60,7 @@ from reachy_language_tutor.profile_store import read_profile_from_directory
 
 # The tools this app exists to expose. Named here so that dropping one from the
 # profile fails with the name it dropped rather than as an arithmetic mismatch.
-LEARNER_TOOLS = {"get_profile", "get_progress", "start_lesson", "record_result"}
+LEARNER_TOOLS = {"get_profile", "get_progress", "start_lesson", "finish_lesson"}
 
 # The COMPLETE vocabulary a learner-reading tool may ask the model to fill in.
 #
@@ -72,7 +72,12 @@ LEARNER_TOOLS = {"get_profile", "get_progress", "start_lesson", "record_result"}
 # language, which lesson, how it went. None of it identifies a person.
 #
 # Adding an entry is a decision about the security boundary, not housekeeping.
-PERMITTED_LEARNER_TOOL_PARAMETERS = {"language", "lesson_id", "outcome"}
+# W16 removed "lesson_id" when it deleted the only tool that declared one. That is the
+# load-bearing half of "exactly one conversation-reachable writer": the lesson a result
+# is recorded against now comes from the pinned session, so no learner tool -- today's
+# or tomorrow's -- may take one from the model. Adding it back is a decision about the
+# security boundary, not housekeeping.
+PERMITTED_LEARNER_TOOL_PARAMETERS = {"language", "outcome", "score"}
 
 
 def _locked_profile():
@@ -261,9 +266,113 @@ def test_no_learner_tool_asks_the_model_for_anything_outside_the_catalog_vocabul
     assert LEARNER_TOOLS <= discovered, "a known learner tool was not discovered"
 
     for name in sorted(discovered):
-        declared = set(specs[name]["parameters"].get("properties", {}))
+        declared = _declared_parameter_names(specs[name]["parameters"])
         outside = declared - PERMITTED_LEARNER_TOOL_PARAMETERS
         assert not outside, f"{name} declares {sorted(outside)}, outside the permitted vocabulary"
+
+
+# Every parameter any packaged tool may declare, named positively. This is NOT a list
+# of words to refuse: a deny-list of lesson-shaped spellings would admit lesson_ref,
+# lesson_number, unit, topic_id and whatever the next author reaches for, which is the
+# shape CLAUDE.md records as having failed four times in this repository (D11 twice,
+# D19, D20). Naming what is permitted closes the whole family at once.
+#
+# W16 is why this exists. It removed the only tool that took a lesson id, because the
+# lesson a result is recorded against is application state exactly as the learner is.
+# Nothing here names a lesson, and adding something that does is a decision about the
+# security boundary rather than housekeeping.
+#
+# Fourteen names across eighteen tools, so the list is small enough to read. The
+# non-learner entries (a move, an emotion, a direction) are here because the rule is
+# stated over EVERY packaged tool rather than over the ones a discovery predicate
+# happens to classify -- test_tool_identity_boundary.py's own docstring concedes that
+# predicate "can always be sidestepped by indirection", so a tool that took a lesson
+# name and handed it to a helper would fall outside a discovery-scoped rule. This one
+# has no such gap: if the loader can build it, its parameters are checked.
+PERMITTED_TOOL_PARAMETERS = {
+    "direction",
+    "dummy",
+    "emotion",
+    "enabled",
+    "fact",
+    "language",
+    "move",
+    "outcome",
+    "query",
+    "question",
+    "reason",
+    "repeat",
+    "score",
+    "tool_id",
+}
+
+
+def test_no_packaged_tool_declares_a_parameter_outside_the_permitted_vocabulary() -> None:
+    """W16's real deliverable, stated over every tool on disk as an allow-list.
+
+    The profile check above covers the tools the session is offered, discovered by a
+    predicate that concedes it can be sidestepped by indirection. This one covers every
+    tool the loader can build, offered or not, by a rule with no discovery step in it:
+    a module sitting unoffered in the tools package is one line of markdown away from
+    being offered, and a markdown edit gets no review on a security property.
+
+    What W16 closed is not "record_result is gone" -- it is "the conversation cannot
+    name a lesson". A guard that listed lesson-shaped spellings would be exactly as
+    complete as the last person to read it. This one fails on any name nobody has
+    approved, which is the only version of the rule that covers the tool nobody has
+    written yet.
+    """
+    every_tool = core_tools._build_tool_registry(core_tools._load_enabled_tools(_all_packaged_tool_names(), []))
+    assert every_tool, "no tool was built, so this guard would pass vacuously"
+    # Both schemas, because spec() is what the session is actually handed and a tool
+    # could in principle build one that differs from its own parameters_schema.
+    declared = {
+        name: _declared_parameter_names(tool.parameters_schema) | _declared_parameter_names(tool.spec()["parameters"])
+        for name, tool in every_tool.items()
+    }
+    assert any(declared.values()), "no tool declared a parameter, so this guard would pass vacuously"
+
+    offenders = {
+        name: sorted(properties - PERMITTED_TOOL_PARAMETERS)
+        for name, properties in declared.items()
+        if properties - PERMITTED_TOOL_PARAMETERS
+    }
+
+    assert offenders == {}, (
+        f"{offenders} declare parameters outside the permitted vocabulary. Adding one is a "
+        "decision about what the conversation may choose, so name it above deliberately."
+    )
+
+
+def test_the_permitted_vocabulary_names_no_lesson() -> None:
+    """The specific property W16 delivered, asserted over the allow-list itself.
+
+    Without this, someone could satisfy the guard above by adding "lesson_id" to the
+    permitted set and never notice they had reopened the surface the task closed.
+    """
+    for permitted in PERMITTED_TOOL_PARAMETERS:
+        assert "lesson" not in permitted, permitted
+
+
+def _declared_parameter_names(schema: dict) -> set:
+    """Every key a schema puts in front of the model: properties AND required.
+
+    Reading only `properties` is a guard narrower than the surface it protects -- D19's
+    exact shape. A schema of {"properties": {}, "required": ["lesson_id"]} hands the
+    model a lesson key while a properties-only check sees nothing declared, and
+    Tool.spec() returns parameters_schema verbatim, so it reaches the session that way.
+    The identity guard in test_tool_identity_boundary.py already reads both; this is its
+    sibling and now means the same thing.
+    """
+    schema = schema or {}
+    return set(schema.get("properties", {}) or {}) | set(schema.get("required", []) or [])
+
+
+def _all_packaged_tool_names() -> list[str]:
+    """Return every tool module in the package, so unoffered ones are covered too."""
+    names = [module.name for module in pkgutil.iter_modules(tools.__path__) if not module.name.startswith("_")]
+    assert names, "found no tool modules to check"
+    return names
 
 
 def test_the_prompt_tells_the_tutor_never_to_ask_who_it_is_talking_to() -> None:

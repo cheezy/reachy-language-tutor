@@ -433,7 +433,7 @@ def test_the_declared_enum_matches_the_seeded_catalog() -> None:
     # comparison would let somebody alphabetise this list without anything failing.
     assert tuple(declared) == tuple(name for _, name in store.SEED_LANGUAGES)
 
-    # The sibling of test_record_result.py's benign-arguments guard. _benign_args takes
+    # The sibling of test_start_lesson.py's enum guard. _benign_args takes
     # enum[0] for BOTH tools, and the boundary suite tells its two probe learners apart
     # by their differing history -- so a first entry naming a language neither has
     # practised makes get_progress answer identically for both and the injection test

@@ -66,7 +66,7 @@ from reachy_language_tutor.learners import store
 # another test file purges and re-imports the tools package, which would leave these
 # names bound to dead classes and make such a check quietly return False. The `core`
 # fixture below exists for the same reason.
-from reachy_language_tutor.lesson_session import LessonSessionHolder
+from reachy_language_tutor.lesson_session import LessonSessionHolder, LessonSessionRefusedError
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 
@@ -251,6 +251,15 @@ def instance(tmp_path: Path) -> Path:
     return tmp_path
 
 
+# The lesson the harness pins before every dispatch. A real id from the seeded catalog,
+# pinned to the primary learner's own language, so a write that lands is a write the
+# store really accepts rather than one it refuses as unknown_lesson -- which would leave
+# the write-direction control looking green while nothing was ever written. A test below
+# asserts both constants are still in the seeded catalog, so they cannot go stale.
+PINNED_LESSON = "es-01-greetings"
+PINNED_LANGUAGE = "es"
+
+
 def _deps(**overrides: Any) -> ToolDependencies:
     """Build dependencies the way main.build_tool_dependencies does, fields stubbed.
 
@@ -272,11 +281,17 @@ def _housemate_snapshot(instance: Path) -> tuple[Any, ...]:
 
     Every language, not just hers, and that is the whole point. This used to read only
     HOUSEMATE_LANGUAGE, which made the write-direction control vacuous the moment a
-    write tool existed: _ATTEMPTS_SQL is language-scoped, and _benign_args synthesises
-    the FIRST lesson enum value for a required property -- a Spanish lesson for
-    record_result. So a tool that wrote a Spanish row onto the housemate left this
+    write tool existed: _ATTEMPTS_SQL is language-scoped, and the write under attack was
+    a SPANISH one. So a tool that wrote a Spanish row onto the housemate left this
     snapshot byte-identical and passed the guard. Verified by building exactly that
     tool: it evaded the narrow snapshot and is caught by this one.
+
+    How a Spanish lesson reaches the dispatch has since changed, and the reason to keep
+    this wide has not. It used to be _benign_args synthesising the first value of
+    record_result's lesson enum; W16 deleted that tool, and the lesson now arrives
+    through PINNED_LESSON, which _run pins before every dispatch. Either way the write
+    lands in one language, so a snapshot narrowed to the housemate's own would go blind
+    to it again.
 
     _forbidden_tokens derives from this, so it inherited the same blind spot and is
     widened by the same fix.
@@ -370,6 +385,19 @@ async def _run(
     object at all and exercise _safe_load_obj's coercion.
     """
     monkeypatch.setattr(core, "get_tools", lambda: registry)
+    # Pin a lesson before every dispatch, because production always has one pinned when
+    # a lesson is finished -- start_lesson pinned it. A harness that pins nothing
+    # attacks finish_lesson at its "nothing is running" guard instead of in its body,
+    # which is a NARROWER surface, not a safer one: it would never reach the write. The
+    # same argument _deps already makes for binding the holder, one step further.
+    # Re-pinning after the tool clears it is what a real second turn does.
+    if deps.lesson_session.read_for(deps.current_learner_id) is None:
+        try:
+            deps.lesson_session.open(lesson_id=PINNED_LESSON, language_code=PINNED_LANGUAGE)
+        except LessonSessionRefusedError:
+            # A holder bound to nobody pins nothing, and that state is itself under
+            # test elsewhere in this file. Refusing here must not fail the dispatch.
+            pass
     payload = json.dumps(args)
     # Some tools choose at random -- dance picks a move -- so pin the RNG for the
     # duration of the dispatch. Without this, "the answer did not change" is a
@@ -1091,3 +1119,17 @@ def test_a_tool_that_declares_an_identity_fails_the_schema_check() -> None:
     """The other violation, caught by the other guard."""
     with pytest.raises(AssertionError, match="offers the model an identity"):
         _assert_declares_no_identity_parameter(_DeclaredIdentityTool())
+
+
+def test_the_pinned_lesson_the_harness_uses_is_in_the_seeded_catalog() -> None:
+    """A stale constant would turn a real write into a silent unknown_lesson refusal.
+
+    _run pins PINNED_LESSON before every dispatch so a write tool is attacked in its
+    body rather than at its "nothing is running" guard. If that id stopped naming a
+    real lesson, every such dispatch would be refused by the store and the
+    write-direction control would pass while writing nothing -- green, and vacuous.
+    """
+    lessons = {lesson_id: language_code for lesson_id, language_code, *_ in store.SEED_LESSONS}
+
+    assert PINNED_LESSON in lessons, sorted(lessons)
+    assert lessons[PINNED_LESSON] == PINNED_LANGUAGE

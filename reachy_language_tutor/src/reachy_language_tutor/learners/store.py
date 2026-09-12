@@ -76,11 +76,19 @@ SEED_LANGUAGES: tuple[tuple[str, str], ...] = (
 
 # (id, language_code, position, title, objective)
 #
-# Spanish stays FIRST. tests/test_tool_identity_boundary.py's _benign_args takes
-# enum[0] from record_result's lesson_id enum, which is pinned to this sequence, and
-# the suite tells its two probe learners apart by their Spanish and French history.
-# A first entry in a language nobody has practised makes both answers identical and
-# the injection test silently covers nothing.
+# This tuple's ORDER is not load-bearing, and that is a change worth recording rather
+# than leaving for someone to rediscover. It used to be: _benign_args over in
+# tests/test_tool_identity_boundary.py took enum[0] from the lesson_id enum that
+# record_result declared, and that enum was pinned to this sequence. W16 deleted that
+# tool -- the conversation no longer names a lesson at all -- so nothing reads the first
+# entry here any more. The boundary suite's PINNED_LESSON names 'es-01-greetings' by id
+# and its guard asserts catalog membership, not position. Verified by reordering this
+# tuple and running the suite: only test_changing_the_seeded_catalog_requires_bumping_
+# seed_version failed, and that fires on any catalog edit.
+#
+# What IS ordered is each lesson's `position` column, which is what decides the next
+# lesson, and SEED_LANGUAGES above, whose first entry still has to name a language a
+# seeded learner has practised.
 SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
     (
         "es-01-greetings",

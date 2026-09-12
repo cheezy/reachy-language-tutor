@@ -1,4 +1,4 @@
-"""The flow W10 exists to prove: three tools, one conversation, one database.
+"""The flow W10 exists to prove: the learner tools, one conversation, one database.
 
 Every other test in this suite pins one tool in isolation. This one runs the
 sequence a real lesson produces -- greet, choose a language, practise, save the
@@ -8,9 +8,12 @@ actually emits.
 
 Two things here are not reachable from a single-tool test:
 
-* **The handoff.** ``record_result`` is told which lesson to save using the id
-  ``get_progress`` reported. Nothing checks that those two agree on the shape of a
-  lesson id except a test that carries one from the first call into the second.
+* **The handoff.** It used to be an id: ``record_result`` was told which lesson to
+  save using the id ``get_progress`` had reported. W16 removed that tool and that
+  argument, so the handoff is now the pinned session -- ``start_lesson`` writes it,
+  ``finish_lesson`` reads it, and no lesson id appears in the conversation at all.
+  Nothing checks that those two agree about which lesson is running except a test
+  that starts one and then finishes it.
 * **A restart.** The acceptance criterion is that a saved result is still there
   after the app stops. A second call in the same process does reopen the file --
   ``store.py`` caches no connection -- but it shares an interpreter, an import
@@ -90,9 +93,16 @@ async def test_the_whole_lesson_flow_runs_through_the_real_dispatch_path(instanc
     lesson = before["next_lesson"]
     assert lesson is not None, "the seeded learner has nothing left to practise"
 
-    # The handoff: the id the tutor was just given is the id it saves against.
-    saved = await _call("record_result", {"lesson_id": lesson["id"], "outcome": "completed"}, deps)
+    # The handoff, and the point of W16: no lesson id appears anywhere in this test
+    # body after this line. start_lesson pins what the database chose, finish_lesson
+    # records against the pin, and the conversation never names a lesson at all.
+    started = await _call("start_lesson", {"language": "Spanish"}, deps)
+    assert started["started"] is True
+    assert started["lesson"]["title"] == lesson["title"]
+
+    saved = await _call("finish_lesson", {"outcome": "completed"}, deps)
     assert saved["recorded"] is True
+    assert saved["lesson_title"] == lesson["title"]
 
     after = await _call("get_progress", {"language": "Spanish"}, deps)
     assert after["completed_count"] == before["completed_count"] + 1
@@ -100,6 +110,8 @@ async def test_the_whole_lesson_flow_runs_through_the_real_dispatch_path(instanc
     assert after["last_completed"] == lesson["title"]
     # It moved on rather than offering the same lesson again.
     assert (after["next_lesson"] or {}).get("id") != lesson["id"]
+    # And the session is clear, so the tutor cannot save the same lesson twice.
+    assert deps.lesson_session.read_for(SEEDED_LEARNER) is None
 
 
 @pytest.mark.asyncio
@@ -114,7 +126,9 @@ async def test_a_recorded_result_survives_a_restart(instance: Path) -> None:
     lesson = (await _call("get_progress", {"language": "French"}, deps))["next_lesson"]
     assert lesson is not None
 
-    saved = await _call("record_result", {"lesson_id": lesson["id"], "outcome": "completed"}, deps)
+    started = await _call("start_lesson", {"language": "French"}, deps)
+    assert started["started"] is True
+    saved = await _call("finish_lesson", {"outcome": "completed"}, deps)
     assert saved["recorded"] is True
     completed_before_restart = saved["completed_count"]
 
@@ -178,14 +192,25 @@ async def test_a_tool_that_fails_mid_conversation_says_so_rather_than_inventing(
     calls = {
         "get_profile": {},
         "get_progress": {"language": "Spanish"},
-        "record_result": {"lesson_id": "es-01-greetings", "outcome": "completed"},
+        "start_lesson": {"language": "Spanish"},
+        "finish_lesson": {"outcome": "completed"},
     }
+    # finish_lesson needs a lesson already running, or it would answer
+    # "nothing is running" and this test would pass for a reason other than the one it
+    # names. start_lesson cannot pin one against an unreadable store, so the pin is
+    # made directly -- which is also what a real conversation has: the store went
+    # unreadable BETWEEN starting the lesson and finishing it.
+    deps.lesson_session.open(lesson_id="es-01-greetings", language_code="es")
+
     for name, args in calls.items():
         answer = await _call(name, args, deps)
         assert "error" in answer, f"{name} reported no failure against an unreadable store"
         assert answer["error"].strip(), f"{name} returned an empty error"
-        if name == "record_result":
+        if name == "finish_lesson":
             assert answer["recorded"] is False, "a failed write must never look like a success"
+            assert answer["reason"] == "storage_unavailable", (
+                "the write failed for the reason this test names, not because nothing was running"
+            )
 
 
 @pytest.mark.asyncio

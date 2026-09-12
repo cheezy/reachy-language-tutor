@@ -18,7 +18,8 @@ movement coordination. Our work is confined to three seams:
 1. **The profile** (`profiles/_reachy_language_tutor_locked/profile.md`) — the tutor's
    identity, teaching style and movement rules. The app is locked to this profile
    (`config.LOCKED_PROFILE`), so end users can't switch personalities.
-2. **Custom tools** — `get_profile`, `get_progress(language)`, `record_result`, following the
+2. **Custom tools** — `get_profile`, `get_progress(language)`, `start_lesson(language)` and
+   `finish_lesson(outcome, score)`, following the
    `Tool` / `ToolDependencies` pattern in `src/reachy_language_tutor/tools/`.
 3. **Identity injection** — the app sets the current learner ID from face recognition. Tools
    read it from app state, never from tool arguments, so nobody can talk their way into
@@ -32,7 +33,7 @@ milestone 1 moving; swappable later without touching lesson logic.
 | # | Goal | Status |
 |---|------|--------|
 | 1 | Scaffold from the conversation template, Reachy talking in the simulator | **done** |
-| 2 | SQLite learner DB + `get_profile` / `get_progress` / `record_result`, learner hard-coded | not started |
+| 2 | SQLite learner DB + `get_profile` / `get_progress` / the lesson tools, learner hard-coded | not started |
 | 3 | Lesson flow: choose language, find next lesson, run it, record results, expressive feedback | not started |
 | 4 | Household face recognition + enrolment, prototyped on the Mac webcam | not started |
 | 5 | Hosted backend for learner data, LLM calls via a proxy | not started |
