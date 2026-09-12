@@ -475,9 +475,9 @@ It proves the **shape** of a filter and never its value. `r.learner_id = ?` says
 parameter constrains that relation; nothing here says the application binds the learner
 standing in front of the robot. That is the app's job, and this rule does not check it.
 
-A sharper form of the same gap, worth naming because it is not obvious: a statement may
-carry **more than one** learner parameter, and the rule does not require them to name the
-same learner. `SELECT l.id, r.learner_id FROM learners AS l JOIN lesson_results AS r ON 1
+A sharper form of the same gap, worth naming because it is not obvious — and **kept
+deliberately**, under D16, rather than left unnoticed: a statement may carry **more than
+one** learner parameter, and the rule does not require them to name the same learner. `SELECT l.id, r.learner_id FROM learners AS l JOIN lesson_results AS r ON 1
 WHERE l.id = ? AND r.learner_id = ?` is accepted, and binding two different ids returns
 two different people. Every relation is constrained — the rule's contract is kept — but
 "constrained to one learner each" is weaker than "constrained to the same learner". No
@@ -485,6 +485,19 @@ statement here has two learner parameters and the store's functions take a singl
 `learner_id`, so nothing reaches this today; a "compare with a household member" or
 "merge two profiles" feature is the shape that would, and it should be read as writing a
 cross-learner statement deliberately rather than as passing this guard.
+
+**Why it is kept rather than closed.** Refusing every statement with two learner filters
+would also reject the legitimate two-table read this rule is documented as accepting —
+`... JOIN learners AS b ON b.id = a.learner_id WHERE a.learner_id = ? AND b.id = ?` — and
+that refusal only buys something once a cross-learner feature exists to guard against.
+Whether such a feature is wanted is a product question, not a rule question, so the rule
+was left alone and the limit written down.
+`test_the_rule_constrains_each_relation_and_not_all_to_one_learner` pins three shapes that
+reach this limit by different routes: the join above, a scalar subquery filtered on one
+learner beside an outer query filtered on another, and an `UPDATE ... FROM` whose target
+and source rows are attributed to different people. So this text cannot drift away from the
+code the way the scoping section did before D11. If that test starts failing, someone has
+strengthened the rule and this paragraph is what needs updating.
 
 **What the rule accepts as a filter** is narrow, and worth stating before the refusals,
 because most of them follow from it: a `WHERE` conjunct that **is** `alias.column = ?`,

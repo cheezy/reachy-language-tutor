@@ -820,6 +820,68 @@ def test_one_filter_does_not_cover_a_second_personal_relation() -> None:
     assert store._learner_scoped(spelled_out) == spelled_out
 
 
+# Statements that bind TWO learner parameters. Each personal relation they name is
+# constrained by its own filter, so they satisfy the rule -- and binding two different
+# ids returns two different people. Verified by execution against a two-learner database
+# during D11's round-7 review: the first returned ('alice','bob').
+#
+# This list pins a KNOWN LIMIT, not a guarantee. If one of these starts being refused,
+# that is not a regression -- it is someone strengthening the rule, and the thing to do
+# is update the paragraph in docs/learner-database.md that this test exists to keep
+# honest, then delete the entry from here. The failure message says so too.
+_TWO_LEARNER_PARAMETERS: dict[str, str] = {
+    "a join of both personal tables": (
+        "SELECT l.id, r.learner_id FROM learners AS l JOIN lesson_results AS r ON 1 "
+        "WHERE l.id = ? AND r.learner_id = ?"
+    ),
+    "a subquery beside the outer query": (
+        "SELECT r.outcome, (SELECT group_concat(z.outcome) FROM lesson_results AS z WHERE z.learner_id = ?) "
+        "FROM lesson_results AS r WHERE r.learner_id = ?"
+    ),
+    "an UPDATE ... FROM": (
+        "UPDATE lesson_results SET score = z.score FROM lesson_results AS z "
+        "WHERE lesson_results.learner_id = ? AND z.learner_id = ?"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_TWO_LEARNER_PARAMETERS))
+def test_the_rule_constrains_each_relation_and_not_all_to_one_learner(shape: str) -> None:
+    """What the guard certifies is narrower than it sounds, and this is the difference.
+
+    "Every personal relation is constrained to one learner" is true of these statements.
+    "Every personal relation is constrained to the SAME learner" is not, and the rule does
+    not check it: each relation is judged against the filters independently, so two
+    parameters bound to two people satisfy it.
+
+    Nothing reaches this today -- the store's exported functions each take a single
+    learner_id and no registered statement has two learner placeholders -- and closing it
+    by refusing every statement with two learner filters would reject the legitimate
+    two-table reads that test_one_filter_does_not_cover_a_second_personal_relation
+    deliberately accepts. So the limit is documented rather than closed, and this test is
+    what stops the documentation drifting away from the code, which is the failure D11
+    spent seven review rounds removing.
+
+    IF THIS TEST FAILS because a statement here is now refused, that is probably someone
+    strengthening the rule on purpose. Update the "It proves the shape of a filter and
+    never its value" section of docs/learner-database.md to match, then remove the entry.
+    """
+    sql = _TWO_LEARNER_PARAMETERS[shape]
+
+    # The refusal has to be caught rather than allowed to propagate. A bare call would
+    # fail this test with a ValueError traceback, and the whole point of the test is the
+    # instruction below -- which a traceback would never show.
+    try:
+        assert store._learner_scoped(sql) == sql
+    except ValueError as refusal:
+        raise AssertionError(
+            f"{shape} is now refused: {refusal}. If that was deliberate, "
+            "docs/learner-database.md still tells readers it is accepted -- update the "
+            '"It proves the shape of a filter and never its value" section to match, then '
+            "delete this case."
+        ) from None
+
+
 def test_an_unqualified_filter_is_trusted_only_where_it_cannot_be_ambiguous() -> None:
     """`learner_id = ?` names no relation, so it proves scoping only when there is one."""
     alone = "SELECT outcome FROM lesson_results WHERE learner_id = ?"
