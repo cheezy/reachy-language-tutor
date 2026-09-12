@@ -544,6 +544,25 @@ rule refuses by default and nobody has enumerated every shape it cannot read:
   `UPDATE lesson_results SET learner_id = 'bob' WHERE learner_id = ?` has a filter that
   is entirely real. A merge-profiles feature that genuinely needs this should have to
   declare itself rather than inherit the read rule's silence.
+- an `UPDATE` whose `SET` names a learner column at the statement's **own** query level
+  in any other spelling — a column-list `SET (learner_id, x) = (...)`, or a bare copy
+  `SET x = learner_id`. An assignment target always sits at the statement's own level, so
+  a learner column shaped like one there could re-attribute the row and this rule does not
+  parse `SET` grammar finely enough to prove it will not. Refused, but not as a write:
+  the message says it is the own-level ambiguity, because for a read that wording would be
+  false. **What this no longer refuses (D17):** a `SET` that only *reads* a learner column
+  inside a nested subquery — a catalog lookup `SET lesson_id = (SELECT id FROM lessons
+  WHERE lessons.id = ?)` (that `id` is `lessons.id`, not a learner column), or a best-score
+  cache `SET score = (SELECT max(z.score) FROM lesson_results AS z WHERE z.learner_id = ?)`.
+  The older sweep refused any learner-column token anywhere in the `SET` region,
+  table-blind. The accept set was measured, not reasoned about:
+  `test_the_set_narrowing_moves_only_reads` reconstructs the old region-wide check and
+  diffs it against the narrowed one, and every statement that moves from refuse to accept
+  is a nested-subquery read that leaves a two-learner database unchanged under execution —
+  no assignment moves. (D11's baseline, for scale: 48 statements refused solely by this
+  branch, only 12 of them re-attributing a row.) Restricting it to the statement's own
+  subquery is safe because a personal relation inside the subquery is still constrained by
+  the relations rule — an unconstrained or literal-targeted one is refused there, by name.
 
 An `OR` inside brackets is fine: `WHERE learner_id = ? AND (outcome = 'completed' OR
 outcome = 'partial')` is accepted. Only a top-level `OR` is refused, because `AND` binds

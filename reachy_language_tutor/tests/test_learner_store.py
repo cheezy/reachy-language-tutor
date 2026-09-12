@@ -1203,6 +1203,227 @@ def test_an_update_may_not_hand_a_row_to_a_different_learner() -> None:
             store._learner_scoped(reassigns)
 
 
+# A SET expression that only READS a learner column -- a catalog lookup keyed on
+# lessons.id, or a subquery reading the learner's own aggregate -- was refused table-blind
+# by the pre-D17 sweep, which flagged any learner-column token anywhere in the SET region.
+# D17 narrowed it to the SET's own subquery identity, so these now scope cleanly. Each is
+# safe because the personal relation inside the subquery is still constrained by the
+# relations check; if it were not, that check would refuse the statement independently
+# (see test_a_set_subquery_reading_an_unconstrained_relation_is_still_refused).
+_SET_READS_NOW_ACCEPTED: tuple[str, ...] = (
+    # the task's catalog lookup: `id` here is lessons.id, not learners.id
+    "UPDATE lesson_results SET lesson_id = (SELECT id FROM lessons WHERE lessons.id = ?) WHERE learner_id = ?",
+    # a catalog lookup whose subquery selects the bare column `id` from a shared table
+    "UPDATE lesson_results SET lesson_id = (SELECT id FROM lessons WHERE code = 'a') WHERE learner_id = ?",
+    # the task's best-score cache: a correctly scoped correlated subquery
+    "UPDATE lesson_results SET score = (SELECT max(z.score) FROM lesson_results AS z WHERE z.learner_id = ?) "
+    "WHERE learner_id = ?",
+    # the same shape reading a count rather than a max
+    "UPDATE lesson_results SET score = (SELECT count(*) FROM lesson_results AS z WHERE z.learner_id = ?) "
+    "WHERE learner_id = ?",
+)
+
+
+@pytest.mark.parametrize("sql", _SET_READS_NOW_ACCEPTED)
+def test_a_set_that_only_reads_a_learner_column_in_a_subquery_is_accepted(sql: str) -> None:
+    """The narrowing D17 exists for: a read inside a SET subquery is not a write.
+
+    The pre-D17 sweep tested every token in the SET region against the learner columns
+    and was table-blind, so `SET lesson_id = (SELECT id FROM lessons ...)` was refused for
+    naming `id` -- which is lessons.id, not learners.id -- and the best-score cache was
+    refused for naming learner_id inside its own correctly-scoped subquery. Measured during
+    this task: of the statements the sweep refused, three in four only read a learner
+    column. This pins that those reads scope.
+
+    IF THIS TEST FAILS because one of these is refused again, the SET sweep has been
+    widened back past the statement's own subquery. Re-read the SET loop in
+    _unconstrained_personal_relation and the "Known refusals" list in
+    docs/learner-database.md before changing the assertion.
+    """
+    assert store._learner_scoped(sql) == sql
+
+
+# The narrowing must NOT reach a learner column at the SET's own query level, where an
+# assignment lives and this rule cannot tell one from a read. These stay refused, and not
+# as writes (saying they WRITE the column would be false for the reads among them).
+_SET_OWN_LEVEL_STILL_REFUSED: tuple[str, ...] = (
+    # a column-list assignment of a learner column -- the sweep's original reason to exist
+    "UPDATE lesson_results SET (learner_id, score) = (SELECT 'bob', 5) WHERE learner_id = ?",
+    "UPDATE lesson_results SET (score, learner_id) = (SELECT 5, 'bob') WHERE learner_id = ?",
+    # a bare copy of the learner column into another column, at the SET's own level
+    "UPDATE lesson_results SET lesson_id = learner_id WHERE learner_id = ?",
+)
+
+
+@pytest.mark.parametrize("sql", _SET_OWN_LEVEL_STILL_REFUSED)
+def test_a_learner_column_at_the_sets_own_level_is_still_refused(sql: str) -> None:
+    """The narrowing stops at the SET's own subquery, not before it.
+
+    A column-list `SET (learner_id, x) = (...)` assigns the column while evading the plain
+    `col =` test, and D11's review confirmed the region sweep is what caught it. A bare copy
+    or a CASE that names the column at the SET's own level cannot be told apart from an
+    assignment by a rule that reads text, so both are refused -- with a message that says it
+    is the own-level ambiguity, not that the column is written.
+    """
+    with pytest.raises(ValueError, match="a SET names a learner column at the statement's own level"):
+        store._learner_scoped(sql)
+
+
+def test_a_set_subquery_reading_an_unconstrained_relation_is_still_refused() -> None:
+    """The narrowing is safe because the relations check, not the sweep, guards the subquery.
+
+    Once the SET sweep stops covering a nested subquery, an unconstrained personal relation
+    inside it must still be refused -- by _personal_relations, a few lines down. If this
+    were accepted, narrowing the sweep would have opened a cross-learner read.
+    """
+    unconstrained = "UPDATE lesson_results SET score = (SELECT max(z.score) FROM lesson_results AS z) WHERE learner_id = ?"
+    with pytest.raises(ValueError, match="nothing constrains lesson_results"):
+        store._learner_scoped(unconstrained)
+    # A literal-targeted read of another learner is refused too: 'bob' is not the `?` filter
+    # the rule counts, so the subquery's z carries no filter that scopes it.
+    literal = (
+        "UPDATE lesson_results SET score = (SELECT z.score FROM lesson_results AS z WHERE z.learner_id = 'bob') "
+        "WHERE learner_id = ?"
+    )
+    with pytest.raises(ValueError, match="cannot tell what it constrains"):
+        store._learner_scoped(literal)
+
+
+def test_a_narrowed_set_read_does_not_move_a_row_across_learners() -> None:
+    """Verify by execution, not by reading: the accepted best-score cache is data-safe.
+
+    D11's lesson was that a rule verdict is trusted on nothing until the accepted statement
+    is executed against a two-learner database. This runs the narrowed-accept best-score
+    cache with one learner bound to every parameter and asserts the other learner's rows are
+    untouched -- no re-attribution, no cross-learner value copied in. Built on the real
+    schema rather than the seeded fixture so the two learners are the only rows in play.
+    """
+    schema = (Path(store.__file__).parent / "schema.sql").read_text()
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.executescript(schema)
+        connection.executescript(
+            "INSERT INTO learners (id, display_name, created_at) VALUES ('alice', 'Alice', 0), ('bob', 'Bob', 0);"
+            "INSERT INTO languages (code, name) VALUES ('fr', 'French');"
+            "INSERT INTO lessons (id, language_code, position, title, objective) "
+            "VALUES ('l1', 'fr', 1, 'Greetings', 'Say hello');"
+            "INSERT INTO lesson_results (id, learner_id, lesson_id, outcome, score, recorded_at) "
+            "VALUES (1, 'alice', 'l1', 'completed', 10, 0), (2, 'bob', 'l1', 'completed', 99, 0);"
+        )
+        connection.commit()
+        bob_before = connection.execute("SELECT id, learner_id, score FROM lesson_results WHERE learner_id = 'bob'").fetchall()
+
+        cache = (
+            "UPDATE lesson_results SET score = (SELECT max(z.score) FROM lesson_results AS z WHERE z.learner_id = ?) "
+            "WHERE learner_id = ?"
+        )
+        assert store._learner_scoped(cache) == cache  # accepted by the rule
+        connection.execute(cache, ("alice", "alice"))
+        connection.commit()
+
+        bob_after = connection.execute("SELECT id, learner_id, score FROM lesson_results WHERE learner_id = 'bob'").fetchall()
+        assert bob_after == bob_before, "bob's rows must be untouched"
+        owners = {row[0] for row in connection.execute("SELECT learner_id FROM lesson_results").fetchall()}
+        assert owners == {"alice", "bob"}
+    finally:
+        connection.close()
+
+
+def _old_set_region_hit(sql: str) -> bool:
+    """Reconstruct the pre-D17 SET check: a learner column ANYWHERE in a SET region.
+
+    This is the one line D17 changed, restated so the test can diff the two rules without
+    a second copy of the whole module. The narrowed rule is `rows[at][1] == sub_depth`;
+    the old rule dropped that guard and refused on any learner-column token in the region.
+    """
+    tokens = store._sql_tokens(sql)
+    words = [token.upper() for token in tokens]
+    rows, _ = store._bracket_map(tokens, words)
+    for index in range(len(tokens)):
+        if words[index] != "SET":
+            continue
+        members, _level, _sub = store._clause_region(tokens, words, rows, index)
+        if any(tokens[at].lower() in store._LEARNER_COLUMNS for at in members):
+            return True
+    return False
+
+
+# Labelled corpus for the accept-set measurement. Assignments must never move refuse->accept;
+# nested-subquery reads are exactly what the narrowing lets through.
+_MEASURE_ASSIGNMENTS: tuple[str, ...] = (
+    "UPDATE lesson_results SET learner_id = ? WHERE learner_id = ?",
+    "UPDATE lesson_results SET learner_id = 'bob' WHERE learner_id = ?",
+    "UPDATE learners SET id = ? WHERE id = ?",
+    "UPDATE lesson_results SET (learner_id, score) = (SELECT 'bob', 5) WHERE learner_id = ?",
+    "UPDATE lesson_results SET (score, learner_id) = (SELECT 5, 'bob') WHERE learner_id = ?",
+    "UPDATE lesson_results SET learner_id = CASE WHEN score > 0 THEN 'bob' ELSE 'bob' END WHERE learner_id = ?",
+    "UPDATE lesson_results SET lesson_id = learner_id WHERE learner_id = ?",
+    "UPDATE lesson_results SET learner_id = z.learner_id FROM lesson_results AS z WHERE lesson_results.learner_id = ?",
+)
+_MEASURE_READS: tuple[str, ...] = (
+    "UPDATE lesson_results SET score = (SELECT max(z.score) FROM lesson_results AS z WHERE z.learner_id = ?) "
+    "WHERE learner_id = ?",
+    "UPDATE lesson_results SET score = (SELECT count(*) FROM lesson_results AS z WHERE z.learner_id = ?) "
+    "WHERE learner_id = ?",
+    "UPDATE lesson_results SET outcome = (SELECT z.outcome FROM lesson_results AS z WHERE z.learner_id = ? "
+    "AND z.lesson_id = 'l1') WHERE learner_id = ?",
+)
+
+
+def test_the_set_narrowing_moves_only_reads() -> None:
+    """Criterion 5, measured and committed: diff the old and new rules, verify what moved.
+
+    Pitfall 4 forbids judging this by reading the diff, so the measurement is executed. The
+    pre-D17 rule is reconstructed by _old_set_region_hit and the accept sets are diffed:
+
+    - No assignment form moves. Every _MEASURE_ASSIGNMENTS statement is refused by the new
+      rule, so none can have moved refuse->accept -- the isolation guarantee is untouched.
+    - Every _MEASURE_READS statement WAS refused by the old region-wide rule and IS accepted
+      by the new one: these are the moves. This is what beats the baseline over-refusal.
+    - Each moved statement is then run against a two-learner database with one learner bound
+      to every parameter, and leaves the other learner's rows untouched -- so the moves are
+      reads, proven by execution rather than asserted.
+
+    D11's baseline was 48 statements refused solely by this branch, only 12 re-attributing.
+    The exact moved count depends on the corpus; what this pins is the DIRECTION -- reads
+    move, assignments do not, and no move re-attributes a row. Reverting the narrowing makes
+    every read below refuse again and the `moved` assertion fail.
+    """
+    for assignment in _MEASURE_ASSIGNMENTS:
+        assert store._unconstrained_personal_relation(assignment) is not None, f"assignment must stay refused: {assignment}"
+
+    moved = []
+    for read in _MEASURE_READS:
+        assert _old_set_region_hit(read), f"corpus error: old rule should have refused {read}"
+        assert store._learner_scoped(read) == read, f"narrowed rule should accept {read}"
+        moved.append(read)
+    assert len(moved) == len(_MEASURE_READS), "every read in the corpus should move refuse->accept"
+
+    schema = (Path(store.__file__).parent / "schema.sql").read_text()
+    for read in moved:
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript(schema)
+            connection.executescript(
+                "INSERT INTO learners (id, display_name, created_at) VALUES ('alice', 'Alice', 0), ('bob', 'Bob', 0);"
+                "INSERT INTO languages (code, name) VALUES ('fr', 'French');"
+                "INSERT INTO lessons (id, language_code, position, title, objective) "
+                "VALUES ('l1', 'fr', 1, 'Greetings', 'Say hello');"
+                "INSERT INTO lesson_results (id, learner_id, lesson_id, outcome, score, recorded_at) "
+                "VALUES (1, 'alice', 'l1', 'completed', 10, 0), (2, 'bob', 'l1', 'partial', 88, 0);"
+            )
+            connection.commit()
+            bob_before = connection.execute("SELECT id, learner_id, lesson_id, outcome, score FROM lesson_results WHERE learner_id = 'bob'").fetchall()
+            connection.execute(read, tuple("alice" for _ in range(read.count("?"))))
+            connection.commit()
+            bob_after = connection.execute("SELECT id, learner_id, lesson_id, outcome, score FROM lesson_results WHERE learner_id = 'bob'").fetchall()
+            assert bob_after == bob_before, f"moved read re-attributed or altered bob's rows: {read}"
+            owners = {row[0] for row in connection.execute("SELECT learner_id FROM lesson_results").fetchall()}
+            assert owners == {"alice", "bob"}, f"moved read changed row ownership: {read}"
+        finally:
+            connection.close()
+
+
 def test_a_filter_in_one_subquery_does_not_scope_a_relation_in_its_sibling() -> None:
     """A subquery is an identity, not a depth: two siblings are not the same query.
 

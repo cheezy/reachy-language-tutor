@@ -1021,7 +1021,7 @@ def _unconstrained_personal_relation(sql: str, write_target_exempt: bool = False
     for index in range(len(tokens)):
         if words[index] != "SET":
             continue
-        members, level, _ = _clause_region(tokens, words, rows, index)
+        members, level, sub_depth = _clause_region(tokens, words, rows, index)
         assigned = [
             at
             for at in members
@@ -1032,13 +1032,31 @@ def _unconstrained_personal_relation(sql: str, write_target_exempt: bool = False
         ]
         if assigned:
             return "it writes the column that says which learner the row belongs to"
-        if any(tokens[at].lower() in _LEARNER_COLUMNS for at in members):
-            # Mentioned inside a SET expression rather than assigned -- a catalog lookup
-            # keyed on lessons.id, say, or a subquery reading the learner's own best
-            # score. Refused as well, because a SET expression can read any table and
-            # this rule does not follow it; but saying it WRITES the column would be
-            # false, and an author sent after the wrong fix widens something.
-            return "a SET expression mentions a learner column, and this rule does not read inside one"
+        if any(tokens[at].lower() in _LEARNER_COLUMNS and rows[at][1] == sub_depth for at in members):
+            # A learner column at the SET's OWN subquery that is not that clean `col = `
+            # assignment -- a column-list `SET (learner_id, x) = (...)`, a CASE that names
+            # it, or a bare copy `SET x = learner_id`. An assignment target always sits at
+            # the statement's own query level, so anything shaped like one here could
+            # re-attribute the row, and this rule does not parse SET grammar finely enough
+            # to prove it will not. Refused, but not as a write: saying it WRITES the column
+            # would be false for a read, and D11 already split those messages so an author
+            # is not sent after the wrong fix.
+            #
+            # A learner column that appears ONLY inside a nested subquery is excluded here,
+            # and that is the D17 narrowing. Refusing it was collateral -- a catalog lookup
+            # `SET lesson_id = (SELECT id FROM lessons ...)` names `id`, and the best-score
+            # cache `SET score = (SELECT max(z.score) ... WHERE z.learner_id = ?)` names
+            # `learner_id`, both READS the old check refused table-blind. The accept set was
+            # measured rather than reasoned about: test_the_set_narrowing_moves_only_reads
+            # reconstructs the pre-D17 region-wide check and diffs it against this one, and
+            # every statement that moves refuse->accept is a nested-subquery read that leaves
+            # a two-learner database's rows unchanged under execution -- no assignment moves.
+            # (D11's own baseline: 48 statements were refused solely by this branch, only 12
+            # of them re-attributing a row.) It is safe to stop refusing the reads because a
+            # personal relation inside that subquery is still constrained by _personal_relations
+            # a few lines down -- an unconstrained or literal-targeted one is refused there, by
+            # name; this sweep was never what made those safe.
+            return "a SET names a learner column at the statement's own level, where this rule cannot tell an assignment from a read"
     qualified, bare, mentioned, refused = _learner_filters(tokens, words, rows)
     if refused is not None:
         return refused
