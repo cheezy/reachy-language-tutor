@@ -298,6 +298,7 @@ Everything above describes the data. This is how the application reaches it.
 
 ```python
 from reachy_language_tutor.learners import (
+    get_language_catalog,
     get_profile,
     get_practised_languages,
     get_progress,
@@ -314,6 +315,7 @@ are SQLite's business, and a hosted backend would have no equivalent.
 |---|---|---|
 | `get_profile(learner_id, *, instance_path=None)` | `LearnerProfile \| None` | `None` = no such learner, **or** the store is unreadable, **or** the learner id was refused |
 | `get_practised_languages(learner_id, *, instance_path=None)` | `tuple[PractisedLanguage, ...]` | `()` = nothing practised, **or** every attempt was `skipped`, **or** the store is unreadable, **or** the learner id was refused |
+| `get_language_catalog(*, instance_path=None)` | `tuple[CatalogLanguage, ...]` | `()` = the store is unreadable, **or** the catalog holds no rows — both mean a caller must not say which languages are taught |
 | `get_progress(learner_id, language_code, *, instance_path=None)` | `LanguageProgress \| None` | `None` = that language is not taught, **or** the store is unreadable, **or** either argument was refused |
 | `record_result(learner_id, lesson_id, outcome, *, score=None, recorded_at=None, instance_path=None)` | `RecordResultOutcome` | never raises; see the reason codes below |
 | `store_is_available(instance_path=None)` | `bool` | `False` = the store could not be read, **or** `instance_path` itself was refused. It binds no caller value into SQL, so it is **not** a test of whether a *learner id or language code* was refused |
@@ -370,6 +372,16 @@ The "nothing logged" in the second row is load-bearing, not decoration: `None` a
 comes back when the store is unreadable or an argument was refused, and saying "I don't
 teach German yet" on either of those is the confident falsehood the section above is
 about. Only silence distinguishes them.
+
+Silence is a weak signal to build a tutor on, so callers do not have to. `get_language_catalog`
+answers the question positively instead: a language missing from a **non-empty** catalog is not
+taught, established by seeing the list. An empty catalog means the store could not be read or
+holds no rows, and neither supports a claim about what is taught — so a caller says it cannot
+reach its records rather than naming a language. `store_is_available` is not that test: it binds
+no language and answers `True` for an empty catalog. The `get_progress` tool
+(`tools/get_progress.py`) resolves this way, which is also what lets it accept a spoken language
+name — `"Spanish"` is not a catalog code, and passing it straight down returns a silent `None`
+that reads as "not taught".
 
 An **unknown learner** gets a populated fresh start rather than an error — the lesson
 catalog is not personal data, so there is nothing to withhold. Recording a result is

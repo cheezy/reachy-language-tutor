@@ -10,6 +10,7 @@ from reachy_language_tutor.learners.store import (
     get_progress,
     record_result,
     store_is_available,
+    get_language_catalog,
     get_practised_languages,
 )
 from reachy_language_tutor.learners.models import (
@@ -18,6 +19,7 @@ from reachy_language_tutor.learners.models import (
     Lesson,
     LessonAttempt,
     LearnerProfile,
+    CatalogLanguage,
     LanguageProgress,
     PractisedLanguage,
     RecordResultOutcome,
@@ -25,6 +27,7 @@ from reachy_language_tutor.learners.models import (
 
 
 __all__ = [
+    "CatalogLanguage",
     "LanguageProgress",
     "LearnerProfile",
     "LessonAttempt",
@@ -33,6 +36,7 @@ __all__ = [
     "PractisedLanguage",
     "RECORD_REASONS",
     "RecordResultOutcome",
+    "get_language_catalog",
     "get_practised_languages",
     "get_profile",
     "get_progress",

@@ -2850,6 +2850,7 @@ def test_learner_id_is_the_first_argument() -> None:
 def test_package_exports_only_the_interface() -> None:
     """The package boundary must not leak the storage engine."""
     assert set(learners.__all__) == {
+        "CatalogLanguage",
         "LanguageProgress",
         "LearnerProfile",
         "LessonAttempt",
@@ -2858,6 +2859,7 @@ def test_package_exports_only_the_interface() -> None:
         "PractisedLanguage",
         "RECORD_REASONS",
         "RecordResultOutcome",
+        "get_language_catalog",
         "get_practised_languages",
         "get_profile",
         "get_progress",
@@ -2866,6 +2868,60 @@ def test_package_exports_only_the_interface() -> None:
     }
     for leaked in ("connect", "NEXT_LESSON_SQL", "ensure_learner_database", "SEED_LESSONS"):
         assert leaked not in learners.__all__
+
+
+def test_the_documented_import_block_lists_every_exported_function() -> None:
+    """The doc calls that block "the whole vocabulary a caller needs", so it must be.
+
+    It drifted the moment get_language_catalog was added: the table below it was
+    updated and the block above it was not. A reader copying the block would not get
+    the function the table documents.
+    """
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "learner-database.md").read_text(encoding="utf-8")
+    block = doc.split("from reachy_language_tutor.learners import (", 1)[1].split(")", 1)[0]
+    documented = {line.strip().rstrip(",") for line in block.splitlines() if line.strip()}
+
+    exported_functions = {name for name in learners.__all__ if not name[0].isupper()}
+    assert documented == exported_functions
+
+
+def test_the_language_catalog_lists_every_taught_language(instance: Path) -> None:
+    """The catalog is what a caller checks instead of reading get_progress's None."""
+    catalog = store.get_language_catalog(instance_path=instance)
+
+    assert [(entry.code, entry.name) for entry in catalog] == [("fr", "French"), ("es", "Spanish")]
+
+
+def test_the_language_catalog_is_empty_and_noisy_when_the_store_is_unreadable(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Silence is what separates a genuine absence from breakage, so breakage must log."""
+    with caplog.at_level(logging.WARNING):
+        catalog = store.get_language_catalog(instance_path=tmp_path / "nonexistent")
+
+    assert catalog == ()
+    assert "Could not read the language catalog" in caplog.text
+
+
+def test_the_language_catalog_is_silently_empty_when_the_table_holds_no_rows(instance: Path) -> None:
+    """An empty catalog is not breakage, but a caller must still not claim what is taught.
+
+    store_is_available answers True here, which is exactly why it cannot be the test a
+    caller uses to tell "not taught" from "unreadable".
+    """
+    connection = store.connect(instance)
+    connection.execute("DELETE FROM languages")
+    connection.commit()
+    connection.close()
+
+    assert store.get_language_catalog(instance_path=instance) == ()
+    assert store.store_is_available(instance_path=instance) is True
+
+
+def test_the_catalog_query_names_no_personal_table() -> None:
+    """Shared reference data, so it is correctly absent from the learner-scoped set."""
+    assert _personal(store._LANGUAGE_CATALOG_SQL) is False
+    assert store._LANGUAGE_CATALOG_SQL not in store._LEARNER_SCOPED_SQL
 
 
 def test_practised_languages_lists_only_what_the_learner_has_worked_on(instance: Path) -> None:

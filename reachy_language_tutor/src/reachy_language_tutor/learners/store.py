@@ -37,6 +37,7 @@ from reachy_language_tutor.learners.models import (
     Lesson,
     LessonAttempt,
     LearnerProfile,
+    CatalogLanguage,
     LanguageProgress,
     PractisedLanguage,
     RecordResultOutcome,
@@ -1218,6 +1219,7 @@ _PRACTISED_LANGUAGES_SQL = _learner_scoped(
 # shared reference data, not personal data. The guard above covers the two tables
 # that hold anything about a person.
 _LANGUAGE_SQL = "SELECT code, name FROM languages WHERE code = ?"
+_LANGUAGE_CATALOG_SQL = "SELECT code, name FROM languages ORDER BY name"
 _LESSONS_SQL = (
     "SELECT id, language_code, position, title, objective FROM lessons WHERE language_code = ? ORDER BY position"
 )
@@ -1362,6 +1364,36 @@ def get_practised_languages(
     except _READER_ABSORBS as exc:
         # Never the learner id: these are personal data and this is a log line.
         logger.warning("Could not read a learner's practised languages: %s", _log_safe(exc))
+        return ()
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def get_language_catalog(*, instance_path: str | Path | None = None) -> tuple[CatalogLanguage, ...]:
+    """Return every language this robot teaches, ordered by name.
+
+    Takes no learner: the catalog is shared reference data, the same for everyone.
+
+    Empty means the store could not be read, OR the catalog holds no rows -- and a
+    caller must treat both the same way, because neither supports telling a person
+    which languages are taught. An unreadable store logs first, keeping the
+    one-prefix-per-meaning rule the other readers follow; an empty table is silent.
+
+    This exists so a caller can decide "not taught here" from evidence. get_progress
+    answers None for a language it does not teach, for a store it cannot read, and
+    for an argument it will not accept -- so a caller reading that None as absence is
+    guessing. A language missing from a NON-EMPTY catalog is a fact instead.
+    """
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        rows = connection.execute(_LANGUAGE_CATALOG_SQL).fetchall()
+        return tuple(CatalogLanguage(code=str(row["code"]), name=str(row["name"])) for row in rows)
+    except _READER_ABSORBS as exc:
+        # No learner is bound here, but _log_safe stays: an exception's text can carry
+        # a path, and this follows the same rule as every other reader regardless.
+        logger.warning("Could not read the language catalog: %s", _log_safe(exc))
         return ()
     finally:
         if connection is not None:

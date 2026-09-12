@@ -76,6 +76,20 @@ class PractisedLanguage:
 
 
 @dataclass(frozen=True)
+class CatalogLanguage:
+    """One language this robot teaches, independent of any learner.
+
+    Shared reference data, not personal data: the same tuple comes back for everyone.
+    A caller holding the whole catalog can say "I do not teach that" from evidence --
+    seeing the list and not finding the language in it -- rather than inferring it
+    from a lookup that answers None for three different reasons.
+    """
+
+    code: str
+    name: str
+
+
+@dataclass(frozen=True)
 class LanguageProgress:
     """A learner's standing in one language: what is done, what is left, what is next.
 
