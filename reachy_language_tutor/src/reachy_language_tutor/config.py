@@ -226,7 +226,20 @@ def parse_hf_direct_target(ws_url: str | None) -> tuple[str | None, int | None]:
 
 
 def build_hf_direct_ws_url(host: str, port: int) -> str:
-    """Build the direct Hugging Face realtime websocket URL used by the app."""
+    """Build the direct Hugging Face realtime websocket URL used by the app.
+
+    An IPv6 host is bracketed here rather than by the caller, because a URL is the one
+    place the two spellings are NOT interchangeable: `ws://::1:8765/v1/realtime` is
+    unparseable, and `parse_hf_direct_target` -- which reads this very value back --
+    returns (None, None) for it, so an instance would persist a URL neither the settings
+    form nor the connect path could read. The host legitimately arrives in either
+    spelling (the settings form sends the bracketed literal; `urlsplit().hostname`, and
+    so `parse_hf_direct_target`, hands back the bare one), so normalising at the point
+    the URL is built is what actually closes the round trip. A DNS name never contains a
+    colon, so the test cannot fire on one.
+    """
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
     return f"ws://{host}:{port}/v1/realtime"
 
 

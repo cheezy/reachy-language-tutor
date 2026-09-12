@@ -5,9 +5,11 @@ served via the Reachy Mini Apps settings server so users can configure it.
 """
 
 import os
+import re
 import time
 import asyncio
 import logging
+import ipaddress
 from typing import Any, List, Optional
 from pathlib import Path
 from collections.abc import Callable
@@ -71,6 +73,56 @@ logger = logging.getLogger(__name__)
 # call and a tool result are different things that need the same handling, so the set
 # says so rather than one standing in for the other.
 REDACTED_MESSAGE_KINDS = frozenset({"tool_call", "tool_result"})
+
+# What a Hugging Face host IS: a DNS name or an IP literal, and nothing else.
+#
+# This is an allow-list on purpose. The deny-list it replaces named four URL characters
+# -- "://", "/", "?" and "#" -- and so admitted a line break, which is the whole of D19:
+# `_persist_env_values` writes `NAME=value` and joins on "\n", so a newline inside the
+# value became extra .env lines that were never validated as a NAME=value pair, and
+# `load_dotenv` read them back on every later start. `.strip()` only trims the ends, so
+# it never saw one in the middle. Naming what is permitted refuses a line break, a space
+# and every shell metacharacter at once, including the ones nobody has thought of -- the
+# same reason the learner-scoping rule in learners/store.py is an allow-list.
+#
+# Underscore is admitted alongside the RFC hostname characters because container and
+# internal DNS names use it and the old check allowed it; it carries none of the
+# injection risk this rule is about, so refusing it would only break working setups.
+#
+# The leading lookahead requires at least one letter or digit, so `..`, `-` and a run of
+# dots are refused rather than accepted as names. That is strictness, not security: every
+# character in the class is inert in both sinks -- none can break a NAME=value line or the
+# ws:// URL's structure -- so a degenerate value only ever failed to connect. It is here so
+# the rule means what the line above says it means.
+_HF_NAME = re.compile(r"(?=.*[A-Za-z0-9])[A-Za-z0-9._-]{1,255}")
+
+
+def _is_an_hf_host(host: str) -> bool:
+    """Say whether this is a DNS name or an IP literal, and nothing else.
+
+    IPv6 has to be accepted in BOTH spellings, and getting that wrong is a round trip that
+    does not close: `build_hf_direct_ws_url` stores the bracketed form `ws://[::1]:8765/`,
+    but `parse_hf_direct_target` reads the host back with `urlsplit().hostname`, which
+    strips the brackets and yields `::1`. A rule that accepted only the bracketed form
+    therefore admitted an address on the way in and refused the very same address on the
+    way back, locking an IPv6-configured instance out of its own settings form. That helper
+    is what `patterns_to_follow` names as the definition of a valid host, so the rule is
+    written to agree with it rather than beside it.
+
+    `ipaddress` decides the IPv6 half instead of a hand-rolled character class: it accepts
+    exactly the real addresses and rejects `:::::`, and it cannot admit a line break or a
+    separator because anything malformed raises. A zone id (`fe80::1%eth0`) is refused --
+    `ipaddress` allows it, but `%` is percent-encoding to every URL parser downstream.
+    """
+    if _HF_NAME.fullmatch(host):
+        return True
+    candidate = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    if "%" in candidate:
+        return False
+    try:
+        return isinstance(ipaddress.ip_address(candidate), ipaddress.IPv6Address)
+    except ValueError:
+        return False
 
 
 def log_handler_message(msg: dict) -> None:
@@ -418,6 +470,32 @@ class LocalStream:
         if not normalized_updates:
             return
 
+        # A value carrying CR or LF cannot survive this function as one entry: the writer
+        # below appends `NAME=value` and joins the lines on "\n", so an embedded break
+        # becomes extra .env lines that were never validated as a NAME=value pair, and
+        # load_dotenv reads them back on every later start. The .strip() above trims only
+        # the ends, so it never sees one in the middle.
+        #
+        # Callers are expected to validate their own input -- _rpc_backend_config does,
+        # with the _is_an_hf_host allow-list -- and today exactly one attacker-reachable path
+        # arrives here. This guard is what holds for the caller that forgets, which is the
+        # reason it lives at the sink rather than only at that one validator. It raises
+        # instead of dropping the value silently, so the mistake is visible where it is
+        # made, and it sits deliberately ABOVE the try/except below, which downgrades
+        # failures to a logged warning and would otherwise swallow it.
+        # The test is `splitlines() != [value]` rather than a CR/LF check because it has to
+        # mean the same thing the READER means by a line. _read_env_lines parses this file
+        # with str.splitlines(), which splits on eight separators besides CR and LF:
+        # \x0b \x0c \x1c \x1d \x1e \x85 \u2028 \u2029 -- so a CR/LF-only guard let all eight
+        # through, wrote them inside one physical line, and the next call that re-read the
+        # file split them apart and wrote them back joined on "\n", materialising the second
+        # half as a real .env entry that load_dotenv then read on every later start. Testing
+        # what splitlines() does is the only version of this guard that cannot drift from
+        # the parser it is protecting.
+        for env_name, value in normalized_updates.items():
+            if value.splitlines() != [value]:
+                raise ValueError(f"refusing to persist {env_name}: the value contains a line break")
+
         for env_name, value in normalized_updates.items():
             try:
                 os.environ[env_name] = value
@@ -685,10 +763,17 @@ class LocalStream:
                 host = str(params.get("hf_host") or "").strip() or existing_host or ""
                 if not host:
                     raise JsonRpcError("Hugging Face host required", reason="empty_hf_host", code=-32602)
-                if "://" in host or "/" in host or "?" in host or "#" in host:
+                if not _is_an_hf_host(host):
                     raise JsonRpcError("invalid Hugging Face host", reason="invalid_hf_host", code=-32602)
                 raw_port = params.get("hf_port")
-                port = int(raw_port) if isinstance(raw_port, (int, float, str)) else (existing_port or 8765)
+                try:
+                    port = int(raw_port) if isinstance(raw_port, (int, float, str)) else (existing_port or 8765)
+                except (ValueError, OverflowError):
+                    # A bare int() raises with the caller's own value inside the message, and
+                    # letting that escape reported plain bad input as an internal error while
+                    # reflecting the value back to whoever sent it. `from None` severs the
+                    # chain so the original message cannot resurface in a traceback or log.
+                    raise JsonRpcError("invalid Hugging Face port", reason="invalid_hf_port", code=-32602) from None
                 if port < 1 or port > 65535:
                     raise JsonRpcError("invalid Hugging Face port", reason="invalid_hf_port", code=-32602)
                 self._persist_hf_direct_connection(host, port)
