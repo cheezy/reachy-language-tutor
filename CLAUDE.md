@@ -54,6 +54,32 @@ guard, or a validator.
   a case to a list of refusals, that is the signal to invert the rule instead.
   See `.claude/skills/writing-a-guard/SKILL.md`.
 
+- **Fix the class, not the member you were shown.** The most common defect on this board is
+  a fix applied to one member of a set while its siblings kept the bug — six of twenty-two,
+  including a three-long chain: W5 type-checked `score` and left `recorded_at` (D5); D5 fixed
+  `record_result` and left three readers raising `OverflowError` (D10); D10 widened those
+  readers for learner ids and left the same three raising on the instance path (D14). One bug,
+  found three times, each time costing a whole task. Also D3 (the log rule obeyed in
+  `store.py`, not in the loop above it), D6 (every statement a named constant except one, so
+  the guard never saw it) and D12 (a hole closed in the AST guard but not in the function it
+  reuses). **Before closing any fix, find the siblings with a command** — the other parameters
+  of that function, the other readers in that module, the other callers of that sink, the same
+  rule one layer up — and either fix them or say in the completion notes why not.
+
+- **A cheap finding is cheaper to fix than to file.** Six of twenty-two defects exist only
+  because a finding was recorded at the two-round review cap instead of fixed (D2, D4, D5, D6,
+  D7, D8). Several were one-liners: type-check a sibling parameter, move an inline query to a
+  named constant, correct two sentences. The cap exists to stop review loops, not to convert
+  small fixes into tasks with their own claim, review and completion overhead. Before recording
+  a finding as a follow-up, ask whether fixing it now costs less than the task would; if it
+  does, fix it and say so.
+
+- **A learner's name, id or transcript must never reach a log.** `learners/store.py` carries
+  the rule and every learner tool follows it; the conversation loop one layer up did not, and
+  wrote a learner's name to disk (D3, CWE-532), with the transcript route still open after it
+  (D9). These are children's households. When adding any log line near learner data, log the
+  shape and never the value — and check the layer above and below for the same mistake.
+
 - **Execute it; do not reason about it.** Every bypass and regression in D11, D15, D17, D19
   and D20 was found by running something — against a real database, a real server, a real
   parser — and none by reading code. Where a differential harness was built first, the fix

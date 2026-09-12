@@ -1,6 +1,6 @@
 ---
 name: writing-a-guard
-description: Use when writing or changing any rule that decides whether input is allowed — a validator, a scoping rule, an allow/deny check, a permission gate, or a sanitiser. Encodes the procedure that ended a 20-round run of defects in this repo (D11, D15, D17, D19, D20).
+description: Use when writing or changing any rule that decides whether input is allowed — a validator, a scoping rule, an allow/deny check, a permission gate, or a sanitiser. Encodes what twenty-two defects on this board were made of (D4, D6, D11, D12, D15, D16, D17, D19, D20).
 ---
 
 # Writing a guard
@@ -56,6 +56,19 @@ read split it into a real `.env` entry. The fix was to test what the reader test
 `value.splitlines() != [value]`.
 
 Find the consumer. Read what it actually does. Match it, rather than assuming.
+
+## 3b. A guard and the things that reuse it must be equally strict
+
+If a test, an AST check or a caller reuses this rule, they must not diverge from it.
+
+D12: the AST guard stripped SQL comments before consulting `_learner_scoped`, so the test was
+strictly stricter than the rule — and the rule is the one that actually stops the module
+importing. D6: every statement in the store was a named module constant except one written
+inline, and the structural guard only sees named constants, so that one was invisible to it.
+D4: the AST guard could not see non-literal queries, which is precisely where interpolation
+risk lives — "weakest exactly where the risk is".
+
+Ask: what else consults this rule, and does it see the same inputs I do?
 
 ## 4. Build the differential harness BEFORE changing code
 
