@@ -73,9 +73,29 @@ def _restore_root_logging():
     root = logging.getLogger()
     level = root.level
     handlers = list(root.handlers)
+    # EVERY logger's level, not a list of the ones setup_logger happens to touch today.
+    # It currently also pins aiortc and aioice (and, under --debug, openai and
+    # websockets), and a fixture naming those four would go stale the moment a fifth
+    # was added -- the deny-list shape CLAUDE.md records four defects against. Asking
+    # the manager for what exists covers every present and future name at once.
+    levels = {
+        name: existing.level
+        for name, existing in logging.root.manager.loggerDict.items()
+        if isinstance(existing, logging.Logger)
+    }
     try:
         yield
     finally:
         root.setLevel(level)
         if root.handlers != handlers:
             root.handlers[:] = handlers
+        for name, existing in list(logging.root.manager.loggerDict.items()):
+            if not isinstance(existing, logging.Logger):
+                continue
+            # A logger that did not exist before the test is reset to NOTSET rather
+            # than left alone: aiortc and aioice are created BY the import that
+            # configures them, so "restore only what existed" would miss exactly the
+            # ones this is for.
+            wanted = levels.get(name, logging.NOTSET)
+            if existing.level != wanted:
+                existing.setLevel(wanted)

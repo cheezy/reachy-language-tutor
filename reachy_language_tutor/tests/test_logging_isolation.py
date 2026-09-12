@@ -63,3 +63,31 @@ def test_the_previous_tests_logging_changes_did_not_leak_into_this_one() -> None
     assert root.handlers == _BASELINE["handlers"], (
         "basicConfig(force=True) replaced pytest's root handlers and they were never put back"
     )
+
+
+def test_third_party_logger_levels_are_restored_too() -> None:
+    """The sibling sweep. setup_logger pins more than the root logger.
+
+    It also sets levels on aiortc and aioice (and, under --debug, openai and
+    websockets). A guard that restored only the root would leave those behind --
+    the "fix the class, not the member" defect this board repeats most, committed
+    inside the very fixture written to close an isolation leak.
+
+    Measured: without the level sweep these came back 0 -> 40 and 0 -> 30 and stayed
+    there for the rest of the session.
+    """
+    before = {name: logging.getLogger(name).level for name in ("aiortc", "aioice")}
+
+    setup_logger(debug=False)
+    assert logging.getLogger("aiortc").level == logging.ERROR, "setup_logger no longer pins aiortc; premise is stale"
+    assert logging.getLogger("aioice").level == logging.WARNING
+
+    # The restore happens at teardown, so what this test can assert directly is that
+    # the premise holds. The test below is what proves the restore actually ran.
+    assert before is not None
+
+
+def test_the_third_party_levels_did_not_leak_out_of_the_previous_test() -> None:
+    """The guard for the sweep, in the same ordered-pair shape as the root check."""
+    assert logging.getLogger("aiortc").level == logging.NOTSET, "aiortc's level leaked out of the previous test"
+    assert logging.getLogger("aioice").level == logging.NOTSET, "aioice's level leaked out of the previous test"

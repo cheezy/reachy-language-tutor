@@ -291,3 +291,20 @@ async def test_remote_tool_does_not_retry_timeout(
 
     assert "error" in result
     assert client.call_tool.await_count == 1
+
+
+def test_the_registry_is_clean_at_the_start_of_each_test_in_this_file() -> None:
+    """Pin the autouse teardown, which is load-bearing but was otherwise unasserted.
+
+    Every test above populates the registry with a MagicMock-backed remote tool. Now
+    that D28 made the core_tools module shared rather than rebuilt, leaving one behind
+    would hand that mock to every later file through their new module-scope bindings.
+
+    This is the ordered-pair shape used in test_logging_isolation.py: the tests above
+    do the mutating, and this one -- running after them in source order -- asserts the
+    damage did not survive. Neuter the fixture's teardown and it fails with the tool
+    name it found, which is the reason it names.
+    """
+    core_tools_mod = reload_tools_package()
+    leaked = [name for name in core_tools_mod.ALL_TOOLS if name.startswith(SEARCH_ALIAS)]
+    assert leaked == [], f"a Tool Space tool survived into a later test: {leaked}"
