@@ -319,17 +319,47 @@ like the sample learner practised at install time.
   proves a catalog expansion reaches a robot whose database was seeded before they
   existed — see `SEED_VERSION` below.
 
-### Provenance (30 rows, one per lesson)
+### Provenance, one row per lesson
 
-Every seeded lesson gets a `lesson_sources` row with `origin = 'written_for_this_app'`
-and `course = SEED_LESSON_COURSE`, and no module, unit or page — this material was
-written for this app and has no page to cite. The rows are *derived* from `SEED_LESSONS`
-rather than typed out beside it, so adding a lesson gives it provenance automatically and
-the two lists cannot disagree about which lessons exist.
+Every lesson has a `lesson_sources` row, and which shape it takes says where the lesson
+came from:
 
-Converted course material will carry `origin = 'converted_from_course'` and all four
-parts. Ingesting it is separate work; nothing in the shipped seed is converted yet, and a
-test asserts that so it stays a visible decision.
+- **Lessons written for this app** carry `origin = 'written_for_this_app'` and
+  `course = SEED_LESSON_COURSE`, with no module, unit or page — this material has no page
+  to cite. These rows are *derived* from `SEED_LESSONS`, so adding a lesson gives it
+  provenance automatically and the two lists cannot disagree about which lessons exist.
+- **Lessons converted from a published course** carry `origin = 'converted_from_course'`
+  and all four parts, so a suspect line can be found on the page it was read off.
+
+### Converted lessons (6 rows, Italian)
+
+Italian's first six lessons are units of *FSI Italian FAST*, Volume 1, converted in W24.
+They are the only lessons in the catalog that carry content — a dialogue, numbered usage
+notes and typed drills — and they live in
+`src/reachy_language_tutor/learners/converted_lessons.json`, shipped as package data and
+written by `_seed_converted_lessons()` inside the same transaction as the rest of the
+seed.
+
+| Position | Lesson | Source unit |
+|---|---|---|
+| 1 | What time is it? | IV, printed page 83 |
+| 2 | Room service | VI, printed page 124 |
+| 3 | A taxi, and waiting your turn | IX, printed page 197 |
+| 4 | Shopping for clothes | XIII, printed page 301 |
+| 5 | Eating out | XV, printed page 352 |
+| 6 | A phone call about a flat | XVII, printed page 408 |
+
+The six Italian lessons that were there before are still there, at positions 7 to 12.
+They keep their ids — so a learner who finished one still has — but the reviewed material
+is what a learner now meets first. How the conversion was done is in
+[converting-a-course.md](converting-a-course.md); what was changed on the way, and what
+was deliberately left out, is in [curation-log-italian-fast.md](curation-log-italian-fast.md).
+
+**Content is replaced, not upserted, when the seed re-runs.** A corrected unit may have
+fewer drills than the one it replaces, and upserting by position would leave the extra
+ones behind for ever. Deleting a lesson's content first is safe in a way it would never be
+for learner data: every row involved is app-owned catalog material, the same in every
+household.
 
 ## Versioning and re-seeding
 

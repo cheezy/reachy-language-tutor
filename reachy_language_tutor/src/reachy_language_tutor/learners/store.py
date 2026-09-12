@@ -29,6 +29,7 @@ import time
 import logging
 import sqlite3
 import threading
+from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -56,10 +57,17 @@ logger = logging.getLogger(__name__)
 # bump is what carries a new TABLE out to a robot that already has a database. It
 # cannot carry a new COLUMN on an existing table -- see the note in schema.sql.
 SCHEMA_VERSION = 2
-# Bumped when the seed data changes. Version 3 gives every seeded lesson a provenance
-# row; a test pins the shipped catalog to this number so the bump cannot be forgotten.
-SEED_VERSION = 3
+# Bumped when the seed data changes -- including the converted lessons in
+# converted_lessons.json, whose bytes are part of the fingerprint a test pins to this
+# number. Version 3 gave every seeded lesson a provenance row; version 4 replaced the
+# first six Italian lessons with units converted from a published course.
+SEED_VERSION = 4
 LEARNER_DB_FILENAME = "learners.v1.sqlite3"
+# The converted course material, beside this module and shipped as package data. Its
+# bytes are part of the seeded catalog, so the shipped-catalog fingerprint covers the
+# file itself -- editing a lesson without bumping SEED_VERSION fails the same test that
+# catches editing SEED_LESSONS without bumping it.
+CONVERTED_LESSONS_FILENAME = "converted_lessons.json"
 SEED_VERSION_KEY = "seed_version"
 # Which sample learners have ever been seeded. Kept separately from the learners
 # table so the record survives the row being deleted -- see _seed().
@@ -100,6 +108,13 @@ SEED_LANGUAGES: tuple[tuple[str, str], ...] = (
 # What IS ordered is each lesson's `position` column, which is what decides the next
 # lesson, and SEED_LANGUAGES above, whose first entry still has to name a language a
 # seeded learner has practised.
+#
+# Italian starts at position 7 here, and that is not a gap: positions 1 to 6 belong to
+# the lessons converted from a published course, which live in converted_lessons.json
+# and are written by _seed_converted_lessons. Italian is the language that has real
+# course material now, so the real material is what a learner meets first; these six
+# are the objectives an AI wrote as a placeholder, which no teacher has reviewed. They
+# keep their ids, so a learner who has already finished one still has.
 SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
     (
         "es-01-greetings",
@@ -182,36 +197,36 @@ SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
     (
         "it-01-greetings",
         "it",
-        1,
+        7,
         "Greetings and goodbyes",
         "Greet someone, ask how they are, and say goodbye: ciao, buongiorno, come stai?, arrivederci.",
     ),
     (
         "it-02-introductions",
         "it",
-        2,
+        8,
         "Introducing yourself",
         "Give your name and where you are from, and ask the same back: mi chiamo…, sono di…, e tu?",
     ),
-    ("it-03-numbers", "it", 3, "Numbers one to twenty", "Count to twenty out loud and say your age and a price."),
+    ("it-03-numbers", "it", 9, "Numbers one to twenty", "Count to twenty out loud and say your age and a price."),
     (
         "it-04-ordering-food",
         "it",
-        4,
+        10,
         "At the bar",
         "Order a coffee and something to eat, then ask the price: vorrei…, quanto costa?",
     ),
     (
         "it-05-directions",
         "it",
-        5,
+        11,
         "Asking for directions",
         "Ask where a place is and follow a simple answer: dov'è…?, a destra, a sinistra.",
     ),
     (
         "it-06-daily-routine",
         "it",
-        6,
+        12,
         "Talking about your day",
         "Describe your morning with reflexive verbs: mi alzo, mi preparo.",
     ),
@@ -373,6 +388,48 @@ def learner_db_path_for_instance(instance_path: str | Path | None = None) -> Pat
     data_home = os.getenv("XDG_DATA_HOME")
     data_root = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
     return data_root / "reachy_language_tutor" / LEARNER_DB_FILENAME
+
+
+def _converted_lessons_json() -> str:
+    """Return the bundled converted-lesson content as text.
+
+    Read from the file at runtime for the same reason schema.sql is: it ships as
+    package data, so it is a file on disk rather than a Python literal, and a wheel
+    that failed to include it must fail loudly here rather than seed an empty catalog.
+    """
+    return (Path(__file__).resolve().parent / CONVERTED_LESSONS_FILENAME).read_text(encoding="utf-8")
+
+
+def _converted_lesson_course() -> Any:
+    """Return the course block: what the converted lessons were made from."""
+    course = json.loads(_converted_lessons_json())["course"]
+    if not isinstance(course, dict):
+        raise ValueError("the converted-lesson file's 'course' is not an object")
+    return course
+
+
+def _converted_lessons() -> tuple[Any, ...]:
+    """Return the converted lessons as plain dictionaries, in file order.
+
+    Deliberately does no validation beyond the shape it has to index. What the content
+    may CONTAIN is the database's business -- every string here lands in a STRICT table
+    behind CHECK constraints that refuse a blank line, an unknown drill kind or a
+    half-filled drill -- and duplicating those rules in Python would give the two
+    somewhere to disagree. A malformed file therefore fails the seed transaction, which
+    ensure_learner_database already reports rather than raises.
+
+    Typed `Any` rather than `dict[str, object]` for that same reason, and it is a
+    deliberate choice rather than a shrug: `object` would make every `lesson["turns"]`
+    and `source["page"]` a type error under the strict checking this package declares,
+    and the honest fix is not thirty isinstance calls restating constraints the database
+    already enforces -- it is to say that the shape of this file is checked by the schema
+    it is loaded into.
+    """
+    parsed = json.loads(_converted_lessons_json())
+    lessons = parsed["lessons"]
+    if not isinstance(lessons, list):
+        raise ValueError("the converted-lesson file's 'lessons' is not a list")
+    return tuple(lessons)
 
 
 def _schema_sql() -> str:
@@ -545,6 +602,8 @@ def _seed(connection: sqlite3.Connection) -> bool:
             SEED_LESSON_SOURCES,
         )
 
+        _seed_converted_lessons(connection)
+
         # Learner-owned rows. Two separate guards, because "the row is absent" has two
         # very different meanings.
         #
@@ -600,6 +659,85 @@ def _seed(connection: sqlite3.Connection) -> bool:
             (SEED_VERSION_KEY, str(SEED_VERSION)),
         )
     return True
+
+
+def _seed_converted_lessons(connection: sqlite3.Connection) -> None:
+    """Write the lessons converted from a published course, and everything they hold.
+
+    Runs inside _seed's transaction, after the app-written lessons, so a failure here
+    rolls the whole seed back and leaves the version marker unmoved -- the work re-runs
+    on the next start rather than leaving half a lesson in the catalog.
+
+    Content is REPLACED rather than upserted row by row. A corrected unit may have
+    fewer drills than the one it replaces, and an upsert keyed on position would leave
+    the extra ones behind for ever -- a drill nobody wrote, in a lesson somebody
+    corrected. Deleting first is safe here in a way it would never be for learner data:
+    every row involved is app-owned catalog material, identical in every household.
+    """
+    course = _converted_lesson_course()
+
+    for lesson in _converted_lessons():
+        lesson_id = str(lesson["id"])
+        source = lesson["source"]
+
+        connection.execute(
+            "INSERT INTO lessons (id, language_code, position, title, objective) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "language_code = excluded.language_code, position = excluded.position, "
+            "title = excluded.title, objective = excluded.objective",
+            (lesson_id, course["language_code"], lesson["position"], lesson["title"], lesson["objective"]),
+        )
+        connection.execute(
+            "INSERT INTO lesson_sources (lesson_id, origin, course, module, unit, page) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(lesson_id) DO UPDATE SET "
+            "origin = excluded.origin, course = excluded.course, "
+            "module = excluded.module, unit = excluded.unit, page = excluded.page",
+            (
+                lesson_id,
+                "converted_from_course",
+                course["name"],
+                source["module"],
+                source["unit"],
+                source["page"],
+            ),
+        )
+
+        connection.execute("DELETE FROM lesson_dialogues WHERE lesson_id = ?", (lesson_id,))
+        connection.execute("DELETE FROM lesson_dialogue_turns WHERE lesson_id = ?", (lesson_id,))
+        connection.execute("DELETE FROM lesson_notes WHERE lesson_id = ?", (lesson_id,))
+        connection.execute("DELETE FROM lesson_drills WHERE lesson_id = ?", (lesson_id,))
+
+        title = lesson["dialogue_title"]
+        if title is not None:
+            connection.execute("INSERT INTO lesson_dialogues (lesson_id, title) VALUES (?, ?)", (lesson_id, title))
+        connection.executemany(
+            "INSERT INTO lesson_dialogue_turns (lesson_id, position, speaker, text) VALUES (?, ?, ?, ?)",
+            [
+                (lesson_id, position, turn["speaker"], turn["text"])
+                for position, turn in enumerate(lesson["turns"], start=1)
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO lesson_notes (lesson_id, number, text) VALUES (?, ?, ?)",
+            [(lesson_id, number, note) for number, note in enumerate(lesson["notes"], start=1)],
+        )
+        connection.executemany(
+            "INSERT INTO lesson_drills "
+            "(lesson_id, position, kind, target_text, english_gloss, cue, expected_response) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    lesson_id,
+                    position,
+                    drill["kind"],
+                    drill.get("target_text"),
+                    drill.get("english_gloss"),
+                    drill.get("cue"),
+                    drill.get("expected_response"),
+                )
+                for position, drill in enumerate(lesson["drills"], start=1)
+            ],
+        )
 
 
 def ensure_learner_database(instance_path: str | Path | None = None) -> EnsureResult:

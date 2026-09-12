@@ -316,6 +316,42 @@ the situations need replacing and the text needs correcting. A realistic shape:
 - The audio (13+ hours for Italian FAST alone) is native-speaker reference. The tutor
   speaks through realtime TTS and does not need it now. Do not ingest it yet.
 
+### What the first conversion actually found
+
+Italian was converted from *Italian FAST* Volume 1. The method is written up in
+[converting-a-course.md](converting-a-course.md) and every judgement in
+[curation-log-italian-fast.md](curation-log-italian-fast.md); what is worth carrying back
+into this section is what the estimates above got right and wrong.
+
+**Right: the OCR figures.** Measured again over the same page range, independently of the
+sample that produced the numbers above: 333 accented characters correct, 79 replaced by a
+stray `~`. The 19% loss is real and it is why every shipped line was read on the page
+image rather than out of the text layer.
+
+**Missed: two more OCR faults, and one of them is dangerous.** Beyond the `l`→`/` fault
+already recorded, `I` is read as `!` (`FS!` for FSI), and — the one to watch — `/` is
+sometimes read as `l`, so `arrivato/a` arrives as `arrivatola`. That is a plausible
+Italian word shape, so unlike `usual/y` it does not announce itself as broken. The OCR
+also **invents** accents: `SETTING THE SCENE` came through as `SCENÈ`. A conversion that
+only added missing accents would have shipped that one.
+
+**Underestimated: how much the no-uniformed-authority rule removes.** Twelve of the
+eighteen units in Volume 1 did not survive it. The airport, the currency exchange and
+three of the four hotel units are all built on arrival formalities or an embassy booking;
+what remains is the ordinary-life core — asking the time, room service, a taxi, a clothes
+shop, a restaurant, and a phone call about a flat. Six units shipped, and that is a
+reasonable yield to expect per volume rather than a disappointing one.
+
+**Not anticipated: the currency.** The course is priced in lire throughout, a currency
+withdrawn in 2002. The conversion keeps the source's digits and drops the thousands, so
+`120.000 lire` becomes `120 euro` — which is a plausible price today but neither the same
+number nor the same spoken line, and that trade is recorded per unit rather than waved
+through as a formatting change.
+
+**Still missing: a native speaker.** The Italian that ships is the source's own, checked
+character by character against the page images. That is a different and weaker claim than
+"a teacher reviewed it", and it is the gap a household would notice first.
+
 ## 10. Appendix: shared public locations
 
 If the robots were ever placed in shared settings such as classrooms or libraries, the design would change:

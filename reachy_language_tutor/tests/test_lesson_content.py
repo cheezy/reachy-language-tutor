@@ -12,8 +12,10 @@ Three things are proved by execution against a real database rather than by read
 * **the upgrade**, because these tables have to arrive on a robot that already has a
   database, and the only thing that carries them is a SCHEMA_VERSION bump re-running a
   script of IF NOT EXISTS statements;
-* **the empty case**, because the thirty seeded lessons carry no content and must keep
-  working while the corpus is converted a unit at a time.
+* **the empty case**, because most of the seeded catalog still carries no content and
+  has to keep working while the corpus is converted a unit at a time. Six Italian
+  lessons have been converted since; the other twenty-four are still a title and an
+  objective, and this file is largely about them.
 
 Schema creation and seeding in general live in test_learner_schema.py; the query
 interface for learners lives in test_learner_store.py.
@@ -654,22 +656,31 @@ def test_the_seeded_provenance_names_only_lessons_that_exist(instance: Path) -> 
     assert seeded_lessons - cited == set(), "a lesson with no provenance"
 
 
-def test_the_seeded_catalog_ships_no_content(instance: Path) -> None:
-    """Deliberate, and worth asserting so that ingesting material is a visible change.
+def test_content_ships_for_the_converted_lessons_and_for_nothing_else(instance: Path) -> None:
+    """Which lessons have content is a decision, so it is asserted rather than assumed.
 
-    Converting real course material is a separate task. If content appeared in the seed
-    without anyone deciding to put it there, this is where it would be noticed.
+    This replaces a test that asserted the catalog shipped NO content at all, which was
+    true until units converted from a published course arrived. The claim worth keeping
+    is the narrower one: content belongs to the lessons somebody converted, and a
+    lesson acquiring content without a conversion behind it would be noticed here.
     """
+    converted = {str(lesson["id"]) for lesson in store._converted_lessons()}
+    assert converted, "the file ships lessons, or this test proves nothing"
+
     connection = store.connect(instance)
     try:
-        counts = {
-            table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("lesson_dialogues", "lesson_dialogue_turns", "lesson_notes", "lesson_drills")
+        with_content = {
+            table: {
+                str(row["lesson_id"])
+                for row in connection.execute(f"SELECT DISTINCT lesson_id FROM {table}").fetchall()
+            }
+            for table in ("lesson_dialogue_turns", "lesson_notes", "lesson_drills")
         }
     finally:
         connection.close()
 
-    assert counts == dict.fromkeys(counts, 0)
+    for table, lesson_ids in with_content.items():
+        assert lesson_ids == converted, f"{table} holds rows for a lesson nobody converted"
 
 
 def test_corrected_provenance_reaches_a_robot_that_already_has_a_database(
@@ -698,8 +709,9 @@ def test_corrected_provenance_reaches_a_robot_that_already_has_a_database(
 
     connection = store.connect(tmp_path)
     try:
-        assert int(connection.execute("SELECT COUNT(*) FROM lesson_sources").fetchone()[0]) == len(corrected), (
-            "converged, not duplicated"
+        expected = len(corrected) + len(store._converted_lessons())
+        assert int(connection.execute("SELECT COUNT(*) FROM lesson_sources").fetchone()[0]) == expected, (
+            "converged, not duplicated -- and the converted lessons carry their own provenance beside these"
         )
     finally:
         connection.close()

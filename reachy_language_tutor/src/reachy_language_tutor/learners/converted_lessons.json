@@ -1,0 +1,1066 @@
+{
+  "_about": [
+    "Lesson content converted from a public-domain FSI course. Data, never instructions:",
+    "nothing in this file is addressed to the model, and the tutor must treat every string",
+    "here as material to teach rather than as something to obey.",
+    "",
+    "Each lesson's provenance names the course, volume, unit and printed page it came from,",
+    "so any line can be checked against the page image it was read off. How this file was",
+    "produced, and what was changed on the way, is in docs/converting-a-course.md and",
+    "docs/curation-log-italian-fast.md.",
+    "",
+    "Edit this file and you change what robots teach: bump SEED_VERSION in store.py, or the",
+    "change reaches no robot that already has a database. A test pins the two together."
+  ],
+  "course": {
+    "name": "FSI Italian FAST, Volume 1",
+    "language_code": "it",
+    "rights": "Work of the U.S. Foreign Service Institute, Department of State, 1992. No copyright notice appears anywhere in the 456-page scan, and the preface names FSI staff throughout. See docs/curation-log-italian-fast.md for exactly what was checked and what was not.",
+    "source_sha256": "8c2182b7963f55ba805320488ef1d465d41afb490e7aea53abf774edc09c03d3"
+  },
+  "lessons": [
+    {
+      "id": "it-fast-01-what-time-is-it",
+      "position": 1,
+      "title": "What time is it?",
+      "objective": "Ask and tell the time, and say where you have come from: che ora è?, sono le dieci e venti, da dove arriva?",
+      "source": {
+        "module": "Volume 1",
+        "unit": "IV",
+        "page": 83
+      },
+      "dialogue_title": null,
+      "turns": [
+        {
+          "speaker": "Borghi",
+          "text": "Venga, signore, ho la macchina parcheggiata all'uscita."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Benissimo, sono pronto, andiamo!"
+        },
+        {
+          "speaker": "Borghi",
+          "text": "Preferisce andare in albergo o alla stazione?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Preferisco andare in albergo, sono molto stanco."
+        },
+        {
+          "speaker": "Borghi",
+          "text": "Da dove arriva Lei, da New York, signore?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "No, da Boston. A proposito, che ora è?"
+        },
+        {
+          "speaker": "Borghi",
+          "text": "Sono le dieci e venti."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Grazie, il mio orologio fa ancora l'ora americana."
+        },
+        {
+          "speaker": "Borghi",
+          "text": "Ah, che ore sono adesso a Boston?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "A Boston sono le quattro e venti del mattino."
+        },
+        {
+          "speaker": "Borghi",
+          "text": "Già, è vero, tra Boston e Roma c'è una differenza di sei ore!"
+        }
+      ],
+      "notes": [
+        "Italian asks the time two ways and both are normal: Che ora è? and Che ore sono?",
+        "The answer depends on the number. It is È l'una for one o'clock, È mezzogiorno for noon and È mezzanotte for midnight, but Sono le for every other hour: sono le dieci, sono le quattro.",
+        "Minutes past the hour come after e: sono le sei e venti is twenty past six, sono le sei e un quarto a quarter past, sono le sei e mezzo half past.",
+        "Minutes before the hour come after meno: sono le sei meno venti is twenty to six, sono le sei meno un quarto a quarter to six.",
+        "Timetables use the twenty-four hour clock, so sono le diciotto is six in the evening. In conversation people say del mattino, del pomeriggio or di sera instead.",
+        "The same verb form can be a statement or a question — only the tune of your voice changes. Arriva can be you are arriving or are you arriving?",
+        "Fare is doing a lot of work in il mio orologio fa ancora l'ora americana: here it means the watch still shows American time."
+      ],
+      "drills": [
+        {
+          "kind": "repetition",
+          "target_text": "Che ora è?",
+          "english_gloss": "What time is it?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Che ore sono?",
+          "english_gloss": "What time is it?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Sono le dieci e venti.",
+          "english_gloss": "It's twenty past ten."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "È l'una.",
+          "english_gloss": "It's one o'clock."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "È mezzogiorno.",
+          "english_gloss": "It's noon."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "È mezzanotte.",
+          "english_gloss": "It's midnight."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "del mattino",
+          "english_gloss": "in the morning, a.m."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Da dove arriva Lei?",
+          "english_gloss": "Where are you arriving from?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "A proposito...",
+          "english_gloss": "By the way..."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Già, è vero.",
+          "english_gloss": "Yes, that's right."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "una differenza di sei ore",
+          "english_gloss": "a six-hour difference"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Sono pronto.",
+          "english_gloss": "I'm ready."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Sono le nove?",
+          "expected_response": "No, sono le nove e cinque."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Sono le sette?",
+          "expected_response": "No, sono le sette e cinque."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "È l'una?",
+          "expected_response": "No, è l'una e cinque."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Sono le quattro?",
+          "expected_response": "No, sono le quattro e cinque."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "È mezzogiorno?",
+          "expected_response": "No, è mezzogiorno e cinque."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "È mezzanotte?",
+          "expected_response": "No, è mezzanotte e cinque."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Sono le tre meno cinque.",
+          "english_gloss": "It's five to three."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Sono le sei meno un quarto.",
+          "english_gloss": "It's a quarter to six."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Arriva da Venezia.",
+          "english_gloss": "She's arriving from Venice."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Arrivano da Palermo.",
+          "english_gloss": "They're arriving from Palermo."
+        }
+      ]
+    },
+    {
+      "id": "it-fast-02-room-service",
+      "position": 2,
+      "title": "Room service",
+      "objective": "Say where things go and ask for what you need in a hotel room: le metta qui, Le occorre altro?, vorrei un'altra coperta.",
+      "source": {
+        "module": "Volume 1",
+        "unit": "VI",
+        "page": 124
+      },
+      "dialogue_title": null,
+      "turns": [
+        {
+          "speaker": "Ragazzo",
+          "text": "Dove metto le valigie, signore?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Le metta qui, vicino alla finestra."
+        },
+        {
+          "speaker": "Ragazzo",
+          "text": "Le occorre altro, signore?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "No, grazie. Sono appena arrivato, ho soltanto dollari... va bene?"
+        },
+        {
+          "speaker": "Ragazzo",
+          "text": "Benissimo! Grazie, signore."
+        },
+        {
+          "speaker": "Impiegato",
+          "text": "Pronto, servizio camere!"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Qui è la camera trecentodiciotto. Vorrei far stirare due vestiti e far lucidare un paio di scarpe."
+        },
+        {
+          "speaker": "Impiegato",
+          "text": "Va bene, signore, Le mando la cameriera. Ha bisogno d'altro?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Sì, vorrei anche un'altra coperta e degli attaccapanni."
+        },
+        {
+          "speaker": "Impiegato",
+          "text": "C'è una coperta nell'armadio, Le faccio portare subito gli attaccapanni."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Grazie mille."
+        }
+      ],
+      "notes": [
+        "Three different words spelled le appear here. In le valigie it is the plural the. In Le metta qui it means them, standing for the suitcases — it is capitalised only because it starts the sentence. The third one means to you, and that is the one written with a capital in the MIDDLE of a sentence, where nothing else would be: Va bene, signore, Le mando la cameriera.",
+        "A present-tense question can mean shall I. Dove metto le valigie? is where shall I put the suitcases?, not where am I putting them.",
+        "Metta is how you ask someone politely to put something somewhere. Verbs whose infinitive ends in -are make this form with -i, and verbs in -ere or -ire make it with -a, which is why it is metta from mettere.",
+        "There are two everyday ways to ask whether someone needs anything: Le occorre altro? and Ha bisogno d'altro? They mean the same thing here.",
+        "Sono arrivato is the past: a form of essere plus a second verb form. With essere that second form agrees with who is speaking, so a man says sono arrivato and a woman says sono arrivata.",
+        "Fare plus another verb means having something done rather than doing it yourself: far stirare is to have something ironed, far lucidare to have shoes polished.",
+        "Anche goes immediately before whatever it adds. Vorrei anche un'altra coperta puts it before un'altra coperta: I would like another blanket as well."
+      ],
+      "drills": [
+        {
+          "kind": "repetition",
+          "target_text": "Le occorre altro?",
+          "english_gloss": "Do you need anything else?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Ha bisogno d'altro?",
+          "english_gloss": "Do you need anything else?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Le metta qui, vicino alla finestra.",
+          "english_gloss": "Put them here, near the window."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Sono appena arrivato.",
+          "english_gloss": "I have just arrived."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Vorrei far stirare due vestiti.",
+          "english_gloss": "I would like to have two outfits ironed."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "un'altra coperta",
+          "english_gloss": "another blanket"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "degli attaccapanni",
+          "english_gloss": "some coat hangers"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "nell'armadio",
+          "english_gloss": "in the closet"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "servizio camere",
+          "english_gloss": "room service"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Grazie mille.",
+          "english_gloss": "Thank you very much — literally, a thousand thanks."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Pronto.",
+          "english_gloss": "Hello — said when answering the telephone."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "la valigia",
+          "english_gloss": "the suitcase"
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove metto la matita, sul tavolo?",
+          "expected_response": "La metta sul tavolo."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove metto la penna, lì?",
+          "expected_response": "La metta lì."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove metto la coperta, sul letto?",
+          "expected_response": "La metta sul letto."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove metto la scarpa, nell'armadio?",
+          "expected_response": "La metta nell'armadio."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove metto le coperte, sul letto?",
+          "expected_response": "Le metta sul letto."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove metto le scarpe, nell'armadio?",
+          "expected_response": "Le metta nell'armadio."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove metto le matite, sul tavolo?",
+          "expected_response": "Le metta sul tavolo."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove metto le chiavi, sul tavolo?",
+          "expected_response": "Le metta sul tavolo."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove metto la borsa, nell'armadio?",
+          "expected_response": "La metta nell'armadio."
+        }
+      ]
+    },
+    {
+      "id": "it-fast-03-taxi-and-haircut",
+      "position": 3,
+      "title": "A taxi, and waiting your turn",
+      "objective": "Ask for a taxi, say where to take you, and ask how long the wait is: mi chiami un tassì, mi porti in..., quanto c'è da aspettare?",
+      "source": {
+        "module": "Volume 1",
+        "unit": "IX",
+        "page": 197
+      },
+      "dialogue_title": null,
+      "turns": [
+        {
+          "speaker": "Impiegato",
+          "text": "Le chiamo un tassì, signore?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Sì, grazie. Mi chiami un tassì, per favore."
+        },
+        {
+          "speaker": "Tassista",
+          "text": "Dove andiamo, signore?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Mi porti in Via del Corso, 15."
+        },
+        {
+          "speaker": "Tassista",
+          "text": "Va bene, signore."
+        },
+        {
+          "speaker": "Tassista",
+          "text": "Eccoci arrivati!"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Quant'è?"
+        },
+        {
+          "speaker": "Tassista",
+          "text": "Dodici euro."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Ecco quindici euro, tenga il resto."
+        },
+        {
+          "speaker": "Parrucchiere",
+          "text": "Buongiorno, signore, desidera?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Buongiorno, vorrei uno shampoo e taglio."
+        },
+        {
+          "speaker": "Parrucchiere",
+          "text": "Va bene, ma come vede c'è molta gente... se non Le dispiace aspettare!"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Quanto c'è da aspettare?"
+        },
+        {
+          "speaker": "Parrucchiere",
+          "text": "Più o meno un'ora. Si accomodi qui, prego."
+        }
+      ],
+      "notes": [
+        "Mi chiami and mi porti are the polite way to ask someone to do something for you: call me a taxi, take me to. The mi is the person it is being done for, and it comes first.",
+        "Eccoci arrivati is what the driver says as you pull up. Ecco points at something — here it is — and eccoci means here we are.",
+        "Si accomodi means have a seat, or make yourself comfortable. Verbs whose infinitive ends in -si work this way, and with Lei they take si.",
+        "Gente means people but is grammatically singular, so everything around it stays singular: c'è molta gente, not ci sono molte gente.",
+        "Da links a noun to a following verb: quanto c'è da aspettare? is how much waiting is there?",
+        "Both words are used: taxi is sometimes heard in place of tassì, which is the one this dialogue uses."
+      ],
+      "drills": [
+        {
+          "kind": "repetition",
+          "target_text": "Mi chiami un tassì, per favore.",
+          "english_gloss": "Call me a taxi, please."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Mi porti in Via del Corso.",
+          "english_gloss": "Take me to Via del Corso."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Quant'è?",
+          "english_gloss": "How much is it?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Tenga il resto.",
+          "english_gloss": "Keep the change."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Eccoci arrivati!",
+          "english_gloss": "Here we are!"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Quanto c'è da aspettare?",
+          "english_gloss": "How long do I have to wait?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "se non Le dispiace aspettare",
+          "english_gloss": "if you don't mind waiting"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Più o meno un'ora.",
+          "english_gloss": "More or less an hour."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Si accomodi qui, prego.",
+          "english_gloss": "Have a seat here, please."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "c'è molta gente",
+          "english_gloss": "there are a lot of people"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Desidera?",
+          "english_gloss": "What would you like?"
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Le chiamo un tassì, signore?",
+          "expected_response": "Sì, grazie. Mi chiami un tassì, per favore."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Dove andiamo, signore?",
+          "expected_response": "Mi porti in Via del Corso, 15."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Quant'è?",
+          "expected_response": "Dodici euro."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Buongiorno, desidera?",
+          "expected_response": "Buongiorno, vorrei uno shampoo e taglio."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Quanto c'è da aspettare?",
+          "expected_response": "Più o meno un'ora."
+        }
+      ]
+    },
+    {
+      "id": "it-fast-04-shopping-for-clothes",
+      "position": 4,
+      "title": "Shopping for clothes",
+      "objective": "Buy clothes: say what you want to see, give your size, and say how something fits: che taglia porta?, mi sta bene, è un po' stretta.",
+      "source": {
+        "module": "Volume 1",
+        "unit": "XIII",
+        "page": 301
+      },
+      "dialogue_title": null,
+      "turns": [
+        {
+          "speaker": "Commesso",
+          "text": "Buongiorno, signore, vuol vedere qualcosa?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Buongiorno. Vorrei vedere una giacca sportiva e un completo."
+        },
+        {
+          "speaker": "Commesso",
+          "text": "Prego, signore, da questa parte. Che taglia porta?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "La 48, credo."
+        },
+        {
+          "speaker": "Commesso",
+          "text": "Preferisce una tinta unita o fantasia?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Per la giacca uno spinato, per il completo un grigio scuro."
+        },
+        {
+          "speaker": "Commesso",
+          "text": "Provi questa giacca grigia, è molto bella."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Sì, mi piace, ma è un po' stretta sui fianchi."
+        },
+        {
+          "speaker": "Commesso",
+          "text": "Non si preoccupi, chiamerò il sarto per fare le modifiche. Provi questo completo adesso."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Questo mi sta molto bene, ma i pantaloni sono troppo lunghi."
+        },
+        {
+          "speaker": "Commesso",
+          "text": "Ecco il sarto, signore."
+        },
+        {
+          "speaker": "Sarto",
+          "text": "I pantaloni si possono accorciare facilmente. Per la giacca Le prendo le misure. Può ritornare giovedì per la prova?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Certo. Quanto viene in tutto?"
+        },
+        {
+          "speaker": "Commesso",
+          "text": "Vediamo... la giacca 120 euro, il completo 230 euro, più le modifiche 18 euro. Si accomodi pure alla cassa."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Grazie."
+        },
+        {
+          "speaker": "Commesso",
+          "text": "Grazie a Lei."
+        }
+      ],
+      "notes": [
+        "Portare means to carry, but with clothes it means to wear, and it is the verb used for sizes: Che taglia porta? asks what size you take.",
+        "Piacere works back to front compared with English. Mi piace is literally it is pleasing to me, so the thing you like is the subject: mi piace la giacca.",
+        "Stare bene is how clothes fit: mi sta molto bene is it suits me very well. Stare, not essere.",
+        "Provi is the polite ask-someone-to form of provare, to try on, and the shop assistant uses it constantly: provi questa giacca.",
+        "Non si preoccupi is don't worry — another of those -si verbs, which take si when you are speaking to someone as Lei.",
+        "Si possono accorciare means they can be shortened. Italian uses si with the verb where English reaches for can be, and the verb agrees with the thing: pantaloni is plural, so it is possono.",
+        "Un po' is short for un poco, a little, and keeps its apostrophe: è un po' stretta, it is a little tight."
+      ],
+      "drills": [
+        {
+          "kind": "repetition",
+          "target_text": "Che taglia porta?",
+          "english_gloss": "What size do you wear?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Vorrei vedere una giacca.",
+          "english_gloss": "I would like to see a jacket."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Mi piace.",
+          "english_gloss": "I like it."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Mi sta molto bene.",
+          "english_gloss": "It fits me very well."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "è un po' stretta sui fianchi",
+          "english_gloss": "it is a little tight around the hips"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "I pantaloni sono troppo lunghi.",
+          "english_gloss": "The trousers are too long."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Non si preoccupi.",
+          "english_gloss": "Don't worry."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Quanto viene in tutto?",
+          "english_gloss": "How much does it all come to?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "una tinta unita",
+          "english_gloss": "a plain colour"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "un grigio scuro",
+          "english_gloss": "a dark grey"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Le prendo le misure.",
+          "english_gloss": "I'll take your measurements."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Può ritornare giovedì?",
+          "english_gloss": "Can you come back on Thursday?"
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Buongiorno, vuol vedere qualcosa?",
+          "expected_response": "Buongiorno. Vorrei vedere una giacca sportiva e un completo."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Che taglia porta?",
+          "expected_response": "La 48, credo."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Provi questa giacca grigia, è molto bella.",
+          "expected_response": "Sì, mi piace, ma è un po' stretta sui fianchi."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Quanto viene in tutto?",
+          "expected_response": "La giacca 120 euro e il completo 230 euro."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Può ritornare giovedì per la prova?",
+          "expected_response": "Certo, ritorno giovedì."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Preferisco una tinta unita.",
+          "english_gloss": "I prefer a plain colour."
+        }
+      ]
+    },
+    {
+      "id": "it-fast-05-eating-out",
+      "position": 5,
+      "title": "Eating out",
+      "objective": "Ask for a table, read a menu and order for the table: ci sono tavoli liberi?, come sono fatti?, ce ne porti tre porzioni.",
+      "source": {
+        "module": "Volume 1",
+        "unit": "XV",
+        "page": 352
+      },
+      "dialogue_title": null,
+      "turns": [
+        {
+          "speaker": "Cameriere",
+          "text": "Buonasera, prego, s'accomodino. Hanno una prenotazione?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Buonasera, veramente no. Ci sono tavoli liberi?"
+        },
+        {
+          "speaker": "Cameriere",
+          "text": "Sì. Prego, signori, da questa parte. Va bene questo tavolo?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Possiamo avere quello d'angolo?"
+        },
+        {
+          "speaker": "Cameriere",
+          "text": "Ma certamente. Ecco il menù. Vogliono ordinare adesso?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Sì, ordiniamo adesso. Come sono fatti i bucatini all'amatriciana?"
+        },
+        {
+          "speaker": "Cameriere",
+          "text": "Sono bucatini conditi con salsa di pomodoro e pancetta. Vogliono assaggiarli?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Sì, vogliamo assaggiarli; ce ne porti tre porzioni, per favore."
+        },
+        {
+          "speaker": "Cameriere",
+          "text": "E da bere cosa porto?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Ci porti una bottiglia di acqua minerale."
+        },
+        {
+          "speaker": "Cameriere",
+          "text": "Liscia o gassata?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Liscia, per favore."
+        },
+        {
+          "speaker": "Cameriere",
+          "text": "Va bene. E per secondo? Lo chef oggi consiglia: trancio di pescespada ai ferri, fegato di vitello alla veneta, bocconcini di vitello con contorno di funghi, e filetto di bue."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Bene. La signora prende un trancio di pescespada ai ferri, il signore prende un filetto di bue, ed io prendo i bocconcini di vitello con contorno di funghi, e poi porti dell'insalata mista per tutti."
+        },
+        {
+          "speaker": "Cameriere",
+          "text": "Va bene, ritorno subito."
+        }
+      ],
+      "notes": [
+        "The waiter speaks to the whole table, so his verbs are plural: s'accomodino, hanno, vogliono. One person would hear si accomodi, ha, vuole.",
+        "Come sono fatti? is how you ask what a dish actually is — literally how are they made. It is the single most useful question on this page.",
+        "Ce ne porti tre porzioni packs two small words together: ce is to us, ne is of it. Italian says bring us three portions of it where English simply says bring us three.",
+        "Liscia or gassata is the question you will always be asked about water: still or sparkling.",
+        "Prendere is the verb for ordering food: io prendo, il signore prende. You take a dish rather than having it.",
+        "Quello changes shape like an adjective. Quello d'angolo is the corner one, standing in for the table without naming it again.",
+        "A full meal here runs to three courses: something starchy like pasta, rice or soup; then meat or fish; then fruit. Il secondo is that middle course, and il contorno is the vegetable served beside it."
+      ],
+      "drills": [
+        {
+          "kind": "repetition",
+          "target_text": "Ci sono tavoli liberi?",
+          "english_gloss": "Are there any free tables?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Hanno una prenotazione?",
+          "english_gloss": "Do you have a reservation?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Possiamo avere quello d'angolo?",
+          "english_gloss": "Can we have the corner one?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Come sono fatti i bucatini?",
+          "english_gloss": "How are the bucatini made?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Vogliono assaggiarli?",
+          "english_gloss": "Would you like to taste them?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "ce ne porti tre porzioni",
+          "english_gloss": "bring us three servings of it"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "una bottiglia di acqua minerale",
+          "english_gloss": "a bottle of mineral water"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Liscia o gassata?",
+          "english_gloss": "Still or sparkling?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "salsa di pomodoro",
+          "english_gloss": "tomato sauce"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "contorno di funghi",
+          "english_gloss": "a side dish of mushrooms"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "dell'insalata mista",
+          "english_gloss": "some mixed salad"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Ecco il menù.",
+          "english_gloss": "Here is the menu."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Hanno una prenotazione?",
+          "expected_response": "Veramente no. Ci sono tavoli liberi?"
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Va bene questo tavolo?",
+          "expected_response": "Possiamo avere quello d'angolo?"
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Vogliono ordinare adesso?",
+          "expected_response": "Sì, ordiniamo adesso."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Come sono fatti i bucatini all'amatriciana?",
+          "expected_response": "Sono bucatini conditi con salsa di pomodoro e pancetta."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "E da bere cosa porto?",
+          "expected_response": "Ci porti una bottiglia di acqua minerale."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Liscia, per favore.",
+          "english_gloss": "Still, please."
+        }
+      ]
+    },
+    {
+      "id": "it-fast-06-phone-call-about-a-flat",
+      "position": 6,
+      "title": "A phone call about a flat",
+      "objective": "Telephone about somewhere to live and ask what it has: chi parla?, come sono suddivisi?, a che piano si trova?",
+      "source": {
+        "module": "Volume 1",
+        "unit": "XVII",
+        "page": 408
+      },
+      "dialogue_title": null,
+      "turns": [
+        {
+          "speaker": "Signor Curti",
+          "text": "Pronto, casa Curti, chi parla?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Buongiorno, sono il signor Bianchi, telefono per l'appartamento da affittare."
+        },
+        {
+          "speaker": "Signor Curti",
+          "text": "Ha bisogno d'informazioni? Dica pure, sono il proprietario."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Bene, l'annuncio parla di cinque locali più servizi; come sono suddivisi?"
+        },
+        {
+          "speaker": "Signor Curti",
+          "text": "Ci sono due belle grandi camere da letto, il salotto, la sala da pranzo con un grande balcone e la cucina."
+        },
+        {
+          "speaker": "Lei",
+          "text": "La cucina è grande?"
+        },
+        {
+          "speaker": "Signor Curti",
+          "text": "Abbastanza grande, c'è anche lo spazio per il tavolo e le sedie."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Come sono i servizi?"
+        },
+        {
+          "speaker": "Signor Curti",
+          "text": "C'è un bagno completo nella zona notte; il secondo che è nella zona giorno ha anche l'impianto per la lavatrice."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Vorrei sapere in che via è e a che piano si trova."
+        },
+        {
+          "speaker": "Signor Curti",
+          "text": "È in via Lombardia 2, al quinto piano. È molto luminoso perché non ci sono palazzi davanti e molte finestre danno su un giardino pubblico."
+        },
+        {
+          "speaker": "Lei",
+          "text": "Bene! Quando potrei vederlo?"
+        },
+        {
+          "speaker": "Signor Curti",
+          "text": "Domani pomeriggio alle quattro, andrebbe bene?"
+        },
+        {
+          "speaker": "Lei",
+          "text": "Va bene, signor Curti. A domani pomeriggio alle quattro allora, arrivederLa."
+        },
+        {
+          "speaker": "Signor Curti",
+          "text": "ArrivederLa!"
+        }
+      ],
+      "notes": [
+        "Pronto is how you answer the telephone, and chi parla? — who is speaking? — is how you ask who it is.",
+        "Dica pure invites you to go ahead and speak. Pure after a request softens it into by all means.",
+        "An Italian home is described by its locali, its rooms, plus its servizi, meaning the bathrooms and sometimes the kitchen. An advertisement counts them that way.",
+        "Zona giorno and zona notte split a home into the daytime half and the sleeping half, and estate agents still use both.",
+        "Si trova is the ordinary way to say where something is: a che piano si trova? is what floor is it on?",
+        "Italian counts floors differently: the one at street level is il pianterreno, and the counting starts above it with primo piano. So al quinto piano is five floors up from the street.",
+        "Dare su means to look out onto: le finestre danno su un giardino pubblico, the windows look onto a park.",
+        "ArrivederLa is goodbye to one person you are being formal with. Among friends it is arrivederci."
+      ],
+      "drills": [
+        {
+          "kind": "repetition",
+          "target_text": "Pronto, chi parla?",
+          "english_gloss": "Hello, who is speaking?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Telefono per l'appartamento da affittare.",
+          "english_gloss": "I'm calling about the flat to let."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Ha bisogno d'informazioni?",
+          "english_gloss": "Do you need any information?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Dica pure.",
+          "english_gloss": "Go ahead, please."
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Come sono suddivisi?",
+          "english_gloss": "How are they divided up?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "due camere da letto",
+          "english_gloss": "two bedrooms"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "la sala da pranzo",
+          "english_gloss": "the dining room"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "il salotto",
+          "english_gloss": "the living room"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "A che piano si trova?",
+          "english_gloss": "What floor is it on?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "al quinto piano",
+          "english_gloss": "on the fifth floor"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "Quando potrei vederlo?",
+          "english_gloss": "When could I see it?"
+        },
+        {
+          "kind": "repetition",
+          "target_text": "ArrivederLa!",
+          "english_gloss": "Goodbye!"
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Pronto, casa Curti, chi parla?",
+          "expected_response": "Buongiorno, sono il signor Bianchi."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Ha bisogno d'informazioni?",
+          "expected_response": "Sì, l'annuncio parla di cinque locali; come sono suddivisi?"
+        },
+        {
+          "kind": "cue_response",
+          "cue": "La cucina è grande?",
+          "expected_response": "Abbastanza grande, c'è anche lo spazio per il tavolo e le sedie."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "A che piano si trova?",
+          "expected_response": "È al quinto piano."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Quando potrei vederlo?",
+          "expected_response": "Domani pomeriggio alle quattro."
+        },
+        {
+          "kind": "cue_response",
+          "cue": "Domani pomeriggio alle quattro, andrebbe bene?",
+          "expected_response": "Va bene, a domani pomeriggio alle quattro."
+        }
+      ]
+    }
+  ]
+}

@@ -29,6 +29,16 @@ def _tables(instance_path: Path) -> tuple[str, ...]:
         connection.close()
 
 
+def _seeded_lesson_count() -> int:
+    """How many lesson rows the seed writes, from both places it takes them from.
+
+    len(SEED_LESSONS) was the whole answer until lessons converted from a published
+    course arrived in converted_lessons.json, and three tests were asserting it as
+    though it still were. A lesson is a lesson wherever its text is kept.
+    """
+    return len(store.SEED_LESSONS) + len(store._converted_lessons())
+
+
 def _counts(instance_path: Path) -> dict[str, int]:
     """Row counts for every table in the database, keyed by table name.
 
@@ -169,7 +179,7 @@ def test_deleted_learner_survives_a_seed_version_bump(tmp_path: Path) -> None:
     counts = _counts(tmp_path)
     assert counts["learners"] == 0, "a deleted learner must not come back on a seed bump"
     assert counts["lesson_results"] == 0, "nor may their results"
-    assert counts["lessons"] == len(store.SEED_LESSONS), "catalog rows should still converge"
+    assert counts["lessons"] == _seeded_lesson_count(), "catalog rows should still converge"
 
 
 def _seeded_ids_raw(instance_path: Path) -> str:
@@ -311,18 +321,22 @@ def test_seed_row_counts(tmp_path: Path) -> None:
     """Seed data covers two languages with several ordered lessons each."""
     store.ensure_learner_database(tmp_path)
 
+    converted = store._converted_lessons()
+
     assert _counts(tmp_path) == {
         "languages": len(store.SEED_LANGUAGES),
-        "lessons": len(store.SEED_LESSONS),
-        "lesson_sources": len(store.SEED_LESSON_SOURCES),
+        "lessons": _seeded_lesson_count(),
+        # Every lesson has provenance, from whichever of the two places it came.
+        "lesson_sources": _seeded_lesson_count(),
         "learners": 1,
         "lesson_results": 3,
-        # The content tables ship empty on purpose: the catalog is converted a unit at
-        # a time, and a lesson with nothing in it has to keep working meanwhile.
-        "lesson_dialogues": 0,
-        "lesson_dialogue_turns": 0,
-        "lesson_notes": 0,
-        "lesson_drills": 0,
+        # Content ships only for the converted lessons. The rest of the catalog has
+        # none yet and has to keep working meanwhile, which is why these are counted
+        # from the file rather than pinned to a number somebody would have to update.
+        "lesson_dialogues": sum(1 for lesson in converted if lesson["dialogue_title"] is not None),
+        "lesson_dialogue_turns": sum(len(lesson["turns"]) for lesson in converted),
+        "lesson_notes": sum(len(lesson["notes"]) for lesson in converted),
+        "lesson_drills": sum(len(lesson["drills"]) for lesson in converted),
     }
 
 
@@ -461,6 +475,9 @@ def test_empty_catalog_still_produces_usable_database(
     # the foreign key refuses them, and ensure_learner_database reports the store
     # unusable -- blaming the store for what is really an inconsistent seed.
     monkeypatch.setattr(store, "SEED_LESSON_SOURCES", ())
+    # The converted lessons come from a file rather than a constant, so emptying the
+    # constants is not enough: their foreign key would look for lessons nobody seeded.
+    monkeypatch.setattr(store, "_converted_lessons", tuple)
 
     assert store.ensure_learner_database(tmp_path).ready is True
     assert set(_counts(tmp_path).values()) == {0}, "no seed content means no rows anywhere"
@@ -829,7 +846,7 @@ def test_a_catalog_expansion_reaches_an_already_seeded_robot(tmp_path: Path) -> 
 
     after = _counts(tmp_path)
     assert after["languages"] == len(store.SEED_LANGUAGES)
-    assert after["lessons"] == len(store.SEED_LESSONS)
+    assert after["lessons"] == _seeded_lesson_count()
     # The reason Spanish stays. A lesson upsert never deletes, so the ON DELETE CASCADE
     # from lessons to lesson_results never fires and nobody's history is touched.
     assert after["lesson_results"] == behind["lesson_results"]
@@ -887,6 +904,7 @@ SHIPPED_CATALOGS = {
     1: "a739c1c9aed1de9888de223e3f4f31eb0800c965eb54d1d8271794751b62f389",  # Spanish, French
     2: "c6efbb187caf89a96c03c744fb5d2b9bd6baf63ab6e0cfe629c0fe72209913c8",  # + German, Italian, Portuguese
     3: "71d42df41af603be5d9471571273c40bdb91168fc6b4b111951e87358c7651fb",  # + a provenance row for every lesson
+    4: "1ae76c0c18e1843da97f71a42d0da66df41c39073e5bef06ffe6b2b36ab57b4f",  # + six Italian lessons converted from FSI Italian FAST
 }
 
 
@@ -909,7 +927,8 @@ def _catalog_fingerprint() -> str:
     part of what a robot receives, whatever its type, including the next one nobody
     has written yet.
 
-    Sorted by name so the hash depends on the seed data and not on declaration order.
+    Sorted by name so the hash depends on the seed data and not on declaration order,
+    with the bundled converted-lesson file hashed alongside it.
 
     What is EXCLUDED is named one constant at a time, and nothing else is. Filtering by
     type instead -- "every SEED_* that is a tuple" -- was the first version of this and
@@ -921,6 +940,13 @@ def _catalog_fingerprint() -> str:
     """
     import hashlib
 
+    # The converted lessons are seeded content that is not a Python constant at all --
+    # they live in a JSON file the seed reads at runtime. Hashing the file's bytes is
+    # what puts them under the same rule as everything else here: correct a drill, and
+    # this fingerprint moves, so the version has to move with it or a robot that
+    # already has a database keeps teaching the uncorrected line.
+    content = (Path(store.__file__).resolve().parent / store.CONVERTED_LESSONS_FILENAME).read_bytes()
+
     seeds = sorted(
         (name, repr(value))
         for name, value in vars(store).items()
@@ -931,7 +957,7 @@ def _catalog_fingerprint() -> str:
         # this function's own docstring rejects one paragraph above.
         if name.lstrip("_").startswith("SEED_") and name.lstrip("_") not in NOT_SEED_CONTENT
     )
-    return hashlib.sha256(repr(seeds).encode()).hexdigest()
+    return hashlib.sha256(repr(seeds).encode() + content).hexdigest()
 
 
 def test_a_seed_constant_that_is_not_a_tuple_is_still_fingerprinted(

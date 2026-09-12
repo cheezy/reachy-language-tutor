@@ -3619,6 +3619,19 @@ def test_no_entry_point_logs_a_fragment_of_a_surrogate_id(
     assert "UnicodeEncodeError" in caplog.text, "still diagnosable: the class, not the value"
 
 
+def _seeded_positions_for(language_code: str) -> list[int]:
+    """The positions the seed writes for one language, from both of its sources.
+
+    Lessons come from SEED_LESSONS and from the converted-lesson file, so counting
+    either alone answers a different question than the one being asked.
+    """
+    positions = [row[2] for row in store.SEED_LESSONS if row[1] == language_code]
+    course = store._converted_lesson_course()
+    if course["language_code"] == language_code:
+        positions += [int(lesson["position"]) for lesson in store._converted_lessons()]
+    return sorted(positions)
+
+
 @pytest.mark.parametrize("language_code", ("de", "it", "pt"))
 def test_a_newly_added_language_starts_from_lesson_one(instance: Path, language_code: str) -> None:
     """A learner who has never touched a new language is offered its first lesson.
@@ -3626,12 +3639,21 @@ def test_a_newly_added_language_starts_from_lesson_one(instance: Path, language_
     Parametrized over all three siblings rather than spot-checking one: the whole
     reason this task exists is that three languages arrived together, and checking
     German alone would say nothing about Italian or Portuguese.
+
+    What it asserts is the PROPERTY rather than the spelling, and that is a change
+    worth recording. It used to pin six lessons and the id `<code>-01-greetings`, which
+    was true when every language held the same six placeholders and stopped being true
+    the moment Italian got lessons converted from a published course: twelve rows, and
+    a first lesson that is not a greetings lesson at all. A test that has to be edited
+    whenever the catalog grows was testing the catalog, not the reader.
     """
     progress = store.get_progress("sample-learner", language_code, instance_path=instance)
+    catalog = _seeded_positions_for(language_code)
 
     assert progress is not None, "a taught language must never answer the silent None that means 'not taught'"
     assert progress.completed == ()
-    assert len(progress.remaining) == 6
+    assert [lesson.position for lesson in progress.remaining] == catalog, (
+        "everything the catalog holds for this language is still to do, in order"
+    )
     assert progress.next_lesson is not None
-    assert progress.next_lesson.id == f"{language_code}-01-greetings"
-    assert progress.next_lesson.position == 1
+    assert progress.next_lesson.position == 1, "and the one offered is the first"
