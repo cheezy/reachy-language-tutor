@@ -7,6 +7,8 @@ from reachy_language_tutor.startup_settings import (
     load_startup_settings_into_runtime,
 )
 
+from profile_lock import REQUIRES_PROFILE_SWITCHING
+
 
 def test_write_and_read_startup_settings(tmp_path) -> None:
     """Startup settings should round-trip through startup_settings.json."""
@@ -15,6 +17,7 @@ def test_write_and_read_startup_settings(tmp_path) -> None:
     assert read_startup_settings(tmp_path) == StartupSettings(profile="sorry_bro", voice="shimmer")
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_load_startup_settings_into_runtime_applies_profile_when_no_env(monkeypatch, tmp_path) -> None:
     """Startup settings should seed the runtime profile when no explicit env override exists."""
     write_startup_settings(tmp_path, profile="sorry_bro", voice="shimmer")
@@ -31,6 +34,7 @@ def test_load_startup_settings_into_runtime_applies_profile_when_no_env(monkeypa
     assert applied_profiles == ["sorry_bro"]
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_load_startup_settings_into_runtime_saved_settings_override_instance_env(monkeypatch, tmp_path) -> None:
     """Saved startup settings should override an instance-local profile env value."""
     write_startup_settings(tmp_path, profile="sorry_bro", voice="shimmer")
@@ -47,6 +51,7 @@ def test_load_startup_settings_into_runtime_saved_settings_override_instance_env
     assert applied_profiles == ["sorry_bro"]
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_load_startup_settings_into_runtime_saved_settings_override_inherited_env(monkeypatch, tmp_path) -> None:
     """Saved startup settings should override a profile inherited from another `.env`."""
     write_startup_settings(tmp_path, profile="nature_documentarian", voice="cedar")

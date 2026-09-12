@@ -18,6 +18,8 @@ from reachy_language_tutor.personality_routes import (
     build_personality_ops,
 )
 
+from profile_lock import REQUIRES_PROFILE_SWITCHING
+
 
 def _make_user_profile(name: str) -> None:
     personality_mod.save_user_personality(name, "Be brief.")
@@ -63,6 +65,7 @@ def test_delete_refuses_path_outside_user_root(tmp_path: Path, monkeypatch: pyte
     assert victim.is_dir()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_ops_refuses_deleting_current_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The active profile cannot be deleted."""
     monkeypatch.setattr(config, "INSTANCE_PATH", tmp_path)
@@ -76,6 +79,7 @@ def test_ops_refuses_deleting_current_profile(tmp_path: Path, monkeypatch: pytes
     assert (tmp_path / "user_personalities" / "live").is_dir()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_ops_refuses_deleting_startup_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The persisted startup profile cannot be deleted."""
     monkeypatch.setattr(config, "INSTANCE_PATH", tmp_path)
@@ -89,6 +93,7 @@ def test_ops_refuses_deleting_startup_profile(tmp_path: Path, monkeypatch: pytes
     assert (tmp_path / "user_personalities" / "boots").is_dir()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_ops_deletes_inactive_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An inactive user profile can be deleted."""
     monkeypatch.setattr(config, "INSTANCE_PATH", tmp_path)
@@ -102,6 +107,7 @@ def test_ops_deletes_inactive_profile(tmp_path: Path, monkeypatch: pytest.Monkey
     assert not (tmp_path / "user_personalities" / "spare").exists()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_ops_refuses_non_deletable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A built-in deletion reports the stable not-deletable reason."""
     monkeypatch.setattr(config, "INSTANCE_PATH", tmp_path)

@@ -27,6 +27,8 @@ from reachy_language_tutor.profile_toolsets import (
 from reachy_language_tutor.tool_space_routes import register_tool_space_methods
 from reachy_language_tutor.profile_tool_routes import register_profile_tool_methods
 
+from profile_lock import REQUIRES_PROFILE_SWITCHING
+
 
 SPACE_SLUG = "example/search-tool"
 SPACE_ALIAS = "example_search_tool"
@@ -102,6 +104,7 @@ def _mount_rpc(
     return TestClient(app)
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_web_install_adds_global_inventory_without_enabling_a_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -154,6 +157,7 @@ def test_preinstalled_space_tools_are_available_to_every_profile(
     assert preinstalled_tool_ids.isdisjoint(payload["enabled_tools"])
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_profile_tools_save_and_reset_control_one_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -192,6 +196,7 @@ def test_profile_tools_save_and_reset_control_one_profile(
     initialize_tools.assert_not_called()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_remove_tool_space_disables_its_tools_in_every_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -225,6 +230,7 @@ def test_remove_tool_space_disables_its_tools_in_every_profile(
     assert read_installed_tool_spaces(instance_path).spaces == []
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_add_tool_space_rejects_invalid_slug_without_network_access(tmp_path: Path) -> None:
     """The UI method should only accept Hugging Face owner/Space slugs."""
     app = FastAPI()
@@ -265,6 +271,7 @@ def test_locked_mode_exposes_inventory_but_rejects_tool_edits(
     )
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_active_profile_tool_update_restarts_a_running_conversation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -314,6 +321,7 @@ def test_active_profile_tool_update_restarts_a_running_conversation(
         conversation_loop.close()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_saved_tool_change_reports_success_when_runtime_reload_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

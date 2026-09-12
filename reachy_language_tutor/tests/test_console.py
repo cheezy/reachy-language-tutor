@@ -24,6 +24,8 @@ from reachy_language_tutor.personality_routes import (
     build_personality_ops,
 )
 
+from profile_lock import REQUIRES_PROFILE_SWITCHING
+
 
 def _rpc_call(app: FastAPI, method: str, params: Any = None) -> dict[str, Any]:
     """Send one JSON-RPC request over /rpc and return the response envelope."""
@@ -539,6 +541,7 @@ async def test_personality_ops_return_hf_voices() -> None:
     assert await ops.voices() == HF_AVAILABLE_VOICES
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_personality_ops_delete_builtin_is_not_deletable() -> None:
     """Deleting a built-in personality raises not_deletable (was REST 404)."""
     ops = build_personality_ops(MagicMock(), lambda: None)
@@ -571,6 +574,7 @@ async def test_personality_ops_apply_voice() -> None:
 
 
 @pytest.mark.asyncio
+@REQUIRES_PROFILE_SWITCHING
 async def test_personality_ops_persist_startup_with_voice_override() -> None:
     """Applying with persist=True saves the active manual voice override."""
     handler = MagicMock()
@@ -587,6 +591,7 @@ async def test_personality_ops_persist_startup_with_voice_override() -> None:
 
 
 @pytest.mark.asyncio
+@REQUIRES_PROFILE_SWITCHING
 async def test_personality_ops_apply_same_profile_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Re-applying the active personality is a no-op for the realtime handler."""
     monkeypatch.setattr(config, "REACHY_MINI_CUSTOM_PROFILE", "sorry_bro")
@@ -621,6 +626,7 @@ def test_personality_ops_startup_choice_survives_runtime_change(
 
 
 @pytest.mark.asyncio
+@REQUIRES_PROFILE_SWITCHING
 async def test_personality_ops_use_apply_callback() -> None:
     """Apply delegates to the injected apply_personality callback, not the handler."""
     handler = MagicMock()
@@ -697,6 +703,7 @@ async def test_local_stream_change_voice_delegates_without_backend_restart() -> 
     assert not stream._restart_requested.is_set()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_local_stream_persist_personality_stores_voice_override(tmp_path) -> None:
     """Persisting startup settings should write both profile and voice override."""
     stream = LocalStream(MagicMock(), MagicMock(), instance_path=str(tmp_path))
@@ -709,6 +716,7 @@ def test_local_stream_persist_personality_stores_voice_override(tmp_path) -> Non
     assert stream._read_persisted_personality() == "sorry_bro"
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_local_stream_persist_personality_clears_legacy_startup_env_overrides(tmp_path, monkeypatch) -> None:
     """Saving startup settings should remove legacy `.env` profile and voice overrides."""
     env_path = tmp_path / ".env"

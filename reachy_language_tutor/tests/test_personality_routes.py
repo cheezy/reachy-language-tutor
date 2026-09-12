@@ -27,6 +27,8 @@ from reachy_language_tutor.personality_routes import (
 )
 from reachy_language_tutor.profile_tool_routes import register_profile_tool_methods
 
+from profile_lock import REQUIRES_PROFILE_SWITCHING
+
 
 def _rpc_call(client: TestClient, method: str, params: dict[str, object] | None = None) -> dict[str, Any]:
     with client.websocket_connect("/rpc") as websocket:
@@ -43,6 +45,7 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_new_personality_inherits_packaged_default_tools(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -74,6 +77,7 @@ def test_new_personality_inherits_packaged_default_tools(
     assert loaded["enabled_tools"] == list(profile.default_tools)
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_personality_creation_does_not_overwrite_existing_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -91,6 +95,7 @@ def test_personality_creation_does_not_overwrite_existing_profile(
     assert profile.instructions == "Original."
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_personality_save_rejects_blank_instructions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -104,6 +109,7 @@ def test_personality_save_rejects_blank_instructions(
     assert not (tmp_path / "user_personalities" / "guide").exists()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_personality_save_rejects_unsafe_name(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -117,6 +123,7 @@ def test_personality_save_rejects_unsafe_name(
     assert not (tmp_path / "guide").exists()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_editing_personality_preserves_tool_defaults_and_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -147,6 +154,7 @@ def test_editing_personality_preserves_tool_defaults_and_override(
     assert read_profile_tool_override("user_personalities/guide", tmp_path) == ["camera"]
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_personality_save_materializes_submitted_tools(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -177,6 +185,7 @@ def test_personality_save_materializes_submitted_tools(
     assert loaded["tools_text"] == "go_to_sleep\n"
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_personality_save_rolls_back_tool_override_if_profile_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -246,6 +255,7 @@ def test_profile_load_failure_is_not_returned_as_editable_content() -> None:
     assert "result" not in response
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_applying_default_persists_runtime_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """The canonical default ID should map to no custom runtime profile."""
     monkeypatch.setattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
@@ -268,6 +278,7 @@ def test_applying_default_persists_runtime_none(monkeypatch: pytest.MonkeyPatch)
     persist_personality.assert_called_once_with(None, "Aiden")
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_force_reloads_active_personality(monkeypatch: pytest.MonkeyPatch) -> None:
     """An active profile edit must reload the running conversation."""
     monkeypatch.setattr(config, "REACHY_MINI_CUSTOM_PROFILE", "user_personalities/guide")

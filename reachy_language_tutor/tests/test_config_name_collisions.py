@@ -5,7 +5,10 @@ import pytest
 import reachy_language_tutor.config as config_mod
 from reachy_language_tutor.profile_store import write_profile
 
+from profile_lock import REQUIRES_PROFILE_SWITCHING
 
+
+@REQUIRES_PROFILE_SWITCHING
 def test_config_raises_on_external_profile_name_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Config should fail fast when external/built-in profile names collide."""
     external_profiles = tmp_path / "external_profiles"
@@ -18,6 +21,7 @@ def test_config_raises_on_external_profile_name_collision(tmp_path: Path, monkey
         config_mod.Config()
 
 
+@REQUIRES_PROFILE_SWITCHING
 def test_config_raises_on_external_profile_name_collision_with_builtin_alias(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

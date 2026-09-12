@@ -31,12 +31,26 @@ exclude = [ ".venv", "dist", "build", "**/__pycache__", "*.egg-info", ".mypy_cac
 
 [tool.pytest.ini_options]
 testpaths = [ "tests",]
-# These seven files come from the upstream conversation app and test profile
-# SWITCHING. This app sets config.LOCKED_PROFILE, which deliberately disables
-# switching, so 31 of their tests fail by design rather than by regression.
-# They are excluded so the suite is a trustworthy pass/fail signal.
-# Revisit if the app ever stops locking its profile.
-addopts = "--ignore-glob=*/test_personality_routes.py --ignore-glob=*/test_tool_space_routes.py --ignore-glob=*/test_console.py --ignore-glob=*/test_personality_delete.py --ignore-glob=*/test_startup_settings.py --ignore-glob=*/test_config_name_collisions.py --ignore-glob=*/test_profile_paths.py"
+# There is deliberately no addopts here, and in particular no file-level ignore pattern.
+#
+# Seven files from the upstream conversation app test profile SWITCHING, which this
+# app disables by setting config.LOCKED_PROFILE, so some of their tests fail by design
+# rather than by regression. They used to be excluded a whole FILE at a time. That
+# silenced 31 by-design failures at the cost of 69 passing tests in the same files --
+# and, worse, silently swallowed any test ADDED to one of those files afterwards. It
+# happened: tests for a .env line-injection fix were written in test_console.py, passed
+# when run directly, and were never collected by `pytest reachy_language_tutor -q`, the
+# command the after_doing hook and every verification step use. The suite total simply
+# did not move. A security test that never runs is a green tick that means nothing.
+#
+# So the refusal now lives on the tests that actually fail, conditioned on the real
+# cause: tests/profile_lock.py exports a skipif bound to config.LOCKED_PROFILE, and the
+# affected tests carry it. If the app ever stops locking its profile, every one of them
+# starts running again on its own -- nobody has to remember this comment exists.
+# See D21, and tests/profile_lock.py for the four mechanisms behind those failures.
+#
+# tests/test_pytest_configuration.py enforces the no-file-level-exclusion rule, so this
+# cannot quietly come back.
 
 [tool.mypy]
 python_version = "3.12"

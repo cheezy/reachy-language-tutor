@@ -7,9 +7,11 @@ and a token in the page it serves is readable by the same caller it would exclud
 docs/rpc-control-surface.md. So the protection is not "only the right caller may act", it
 is that the reachable methods cannot do harm. These tests pin that.
 
-In their own file because pyproject's addopts excludes test_console.py, the otherwise
-natural home, so a test written there is never collected by `pytest reachy_language_tutor -q`
--- the command the after_doing hook runs. See D21.
+They live here rather than in test_console.py, their otherwise natural home, because at
+the time they were written pyproject excluded that whole file from collection, so a test
+put there would never have run. D21 removed that exclusion -- every file is collected now
+-- so this is a historical reason, not a live constraint: these tests are welcome to move
+back beside their subject whenever somebody is editing them anyway.
 """
 
 from types import SimpleNamespace

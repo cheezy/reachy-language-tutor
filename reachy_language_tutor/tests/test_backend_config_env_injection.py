@@ -8,9 +8,11 @@ not go away with the delivery path: `_persist_env_values` is still the sink ever
 and future writer reaches, and `_is_an_hf_host` is still what decides a host, so they are
 asserted directly here rather than through a method that no longer answers.
 
-In their own file, not test_console.py, because pyproject's addopts excludes that one from
-collection -- a test written there never runs in `pytest reachy_language_tutor -q`, the
-command the after_doing hook uses. See D21.
+They live here rather than in test_console.py because at the time they were written
+pyproject excluded that whole file from collection: these tests passed when run directly
+and were silently absent from the suite, which is what made the exclusion visible at all.
+D21 removed it, so the reason is historical rather than live -- and this file is the
+worked example D21 was filed from, which is reason enough to leave it where it is.
 """
 
 import os

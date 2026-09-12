@@ -167,10 +167,18 @@ Format and lint your changes before finishing a task:
 These same three commands are the Stride `after_doing` hook, so a task cannot be completed
 while any of them fails. See `.stride.md`.
 
-> **The suite ignores seven test files.** They come from the upstream conversation app and
-> test profile *switching*, which this app deliberately disables via `config.LOCKED_PROFILE`.
-> 31 of their tests fail by design, not by regression. The exclusions are in
-> `[tool.pytest.ini_options]` in `reachy_language_tutor/pyproject.toml`.
+> **The suite reports 30 skips, and that is expected.** Seven files come from the upstream
+> conversation app and test profile *switching*, which this app deliberately disables via
+> `config.LOCKED_PROFILE`. Those 30 tests are skipped individually by a `skipif` bound to that
+> constant (`reachy_language_tutor/tests/profile_lock.py`), so they resume on their own if the
+> app ever stops locking its profile. A 31st test fails for an unrelated reason — a packaged
+> path three characters over the Windows wheel budget — and pins that one known violation
+> rather than being marked, so any further violation fails the suite. See D23.
+>
+> They used to be excluded a whole file at a time, which also threw away 69 passing tests and
+> silently swallowed anything added to those files afterwards. D21 replaced that with the
+> per-test marks; `tests/test_pytest_configuration.py` now fails if any test file on disk
+> stops being collected.
 
 ## 7. Hugging Face login
 
