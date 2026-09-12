@@ -47,6 +47,14 @@ import pytest
 from test_tool_identity_boundary import _reads_learner_data
 
 from reachy_language_tutor import tools, config
+
+# Bound at module scope. That is the whole point of D28: until test_external_loading.py,
+# test_tool_space_runtime.py and test_profile_load_resilience.py stopped re-importing the
+# tools package, a binding made here went stale the moment one of them ran -- the re-import
+# built a second Tool base class, and _load_enabled_tools filters with issubclass, so it
+# matched nothing and the loader blamed the profile. This file used to carry a lookup helper
+# that fetched the module per call to dodge exactly that. See tools_module_graph.py.
+from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.profile_store import read_profile_from_directory
 
 
@@ -67,21 +75,6 @@ LEARNER_TOOLS = {"get_profile", "get_progress", "record_result"}
 PERMITTED_LEARNER_TOOL_PARAMETERS = {"language", "lesson_id", "outcome"}
 
 
-def _core_tools():
-    """Import core_tools on every use rather than once at module scope.
-
-    Still needed, but for a narrower reason than when it was written. D28 fixed
-    test_external_loading.py, which no longer creates a second core_tools. Two files
-    still do: test_tool_space_runtime.py and test_profile_load_resilience.py, whose
-    reloads exist to re-bind monkeypatched dependencies rather than to refresh the
-    registry, so tools_module_graph's in-place reset does not serve them. Until those
-    two are converted, a module-scope binding here can still go stale.
-    """
-    from reachy_language_tutor.tools import core_tools
-
-    return core_tools
-
-
 def _locked_profile():
     name = config.LOCKED_PROFILE
     return read_profile_from_directory(name, config.DEFAULT_PROFILES_DIRECTORY / name)
@@ -89,7 +82,6 @@ def _locked_profile():
 
 def _registry(declared):
     """Build the tool registry the way the running app builds it."""
-    core_tools = _core_tools()
     return core_tools._build_tool_registry(core_tools._load_enabled_tools(list(declared), []))
 
 
@@ -147,7 +139,6 @@ def misfiled_tool():
         finally:
             tools.__path__[:] = original
             sys.modules.pop("reachy_language_tutor.tools._probe_misfiled_module", None)
-            core_tools = _core_tools()
             core_tools._LOADED_TOOL_CLASS_CACHE.clear()
             core_tools._LOADED_REMOTE_TOOL_CACHE.clear()
             importlib.invalidate_caches()
@@ -168,7 +159,7 @@ def _learner_reading_tools() -> set:
     read at all is treated as learner-reading, so the unknown case fails closed.
     """
     discovered = set()
-    for name, tool in _core_tools().get_tools().items():
+    for name, tool in core_tools.get_tools().items():
         module = sys.modules.get(type(tool).__module__)
         path = getattr(module, "__file__", None)
         if path is None:
@@ -252,7 +243,7 @@ def test_the_learner_tools_are_offered_to_the_realtime_session() -> None:
     _run_realtime_session logs these names and puts them in session.update, so this
     is the seam between "declared in a file" and "callable by the model".
     """
-    assert LEARNER_TOOLS <= {spec["name"] for spec in _core_tools().get_tool_specs()}
+    assert LEARNER_TOOLS <= {spec["name"] for spec in core_tools.get_tool_specs()}
 
 
 def test_no_learner_tool_asks_the_model_for_anything_outside_the_catalog_vocabulary() -> None:
@@ -264,7 +255,7 @@ def test_no_learner_tool_asks_the_model_for_anything_outside_the_catalog_vocabul
     rule the boundary suite uses -- so a fourth learner tool added later is covered
     without anyone having to remember this rule exists.
     """
-    specs = {spec["name"]: spec for spec in _core_tools().get_tool_specs()}
+    specs = {spec["name"]: spec for spec in core_tools.get_tool_specs()}
     discovered = _learner_reading_tools()
     assert discovered, "discovery found no learner-reading tool among the offered specs"
     assert LEARNER_TOOLS <= discovered, "a known learner tool was not discovered"

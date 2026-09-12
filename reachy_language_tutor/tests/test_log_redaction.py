@@ -18,8 +18,8 @@ at the bottom of this file, beside the tool-result ones, because the two share a
 single branch and a change to either can break the other.
 """
 
-import ast
 import re
+import ast
 import json
 import asyncio
 import logging
@@ -38,6 +38,13 @@ from reachy_language_tutor.streaming import AdditionalOutputs
 from reachy_language_tutor.tools.core_tools import ToolDependencies
 from reachy_language_tutor.huggingface_realtime import HuggingFaceRealtimeHandler
 from reachy_language_tutor.tools.background_tool_manager import ToolState, ToolNotification
+
+
+# Bound at module scope, which D28 is what made possible. Until test_external_loading.py,
+# test_tool_space_runtime.py and test_profile_load_resilience.py stopped re-importing the
+# tools package, a binding made here went stale the moment one of them ran: the re-import
+# built a second Tool base class and _load_enabled_tools, which filters with issubclass,
+# then matched nothing. See tests/tools_module_graph.py.
 
 
 LEARNER_NAME = "Alice Ferreira"
@@ -397,8 +404,6 @@ def test_malformed_arguments_are_not_echoed_by_the_dispatcher() -> None:
     --debug does not gate), and is the branch a truncated realtime argument stream
     lands on -- so it is exactly where a W9 lesson result would be echoed.
     """
-    from reachy_language_tutor.tools import core_tools
-
     truncated = '{"lesson_id": "es-3", "outcome": "completed", "notes": "Alice Ferreira did wel'
 
     with caplog_at_warning() as records:
@@ -418,8 +423,6 @@ async def test_a_remote_tools_first_failure_is_not_echoed(monkeypatch: Any) -> N
     the learner's data, so it can quote them back. Only the RETRY's failure reaches
     the dispatch-level guard, so the first failure needs its own.
     """
-    from reachy_language_tutor.tools import core_tools
-
     leaky = f"Failed to call MCP tool 'record_result' from 'backend': no lesson es-3 for {LEARNER_NAME}"
 
     class _Client:

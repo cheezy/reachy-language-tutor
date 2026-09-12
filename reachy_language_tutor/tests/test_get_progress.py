@@ -29,6 +29,12 @@ from unittest.mock import MagicMock
 import pytest
 from untaught_language import UNTAUGHT_NAME
 
+# Bound at module scope, which D28 is what made possible. Until test_external_loading.py,
+# test_tool_space_runtime.py and test_profile_load_resilience.py stopped re-importing the
+# tools package, a binding made here went stale the moment one of them ran: the re-import
+# built a second Tool base class and _load_enabled_tools, which filters with issubclass,
+# then matched nothing. See tests/tools_module_graph.py.
+from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.tools import get_progress as module
 from reachy_language_tutor.learners import store
 from reachy_language_tutor.tools.core_tools import ToolDependencies
@@ -408,8 +414,6 @@ def test_the_tool_name_matches_its_module_filename() -> None:
 
 def test_the_runtime_loader_actually_registers_the_tool() -> None:
     """The loader imports tools.<name>, so only this proves the file is wired up."""
-    from reachy_language_tutor.tools import core_tools
-
     registry = core_tools._build_tool_registry(core_tools._load_enabled_tools(["get_progress"], []))
     assert sorted(registry) == ["get_progress"]
     # Identity by module and class name, not isinstance: another test in this suite

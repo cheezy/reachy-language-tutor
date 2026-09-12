@@ -1,14 +1,12 @@
-import sys
 import json
-import importlib
 from types import ModuleType
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from tools_module_graph import reload_tools_package
 
 import reachy_language_tutor.config as config_mod
-import reachy_language_tutor.tool_spaces as tool_spaces_mod
 from reachy_language_tutor.mcp_client import McpToolTimeoutError, McpToolInvocationError
 from reachy_language_tutor.tool_spaces import (
     InstalledToolSpace,
@@ -27,12 +25,27 @@ SEARCH_MCP_URL = "https://example-search-tool.hf.space/gradio_api/mcp/"
 
 
 def _reload_core_tools() -> ModuleType:
-    for module_name in list(sys.modules):
-        if module_name.startswith("reachy_language_tutor.tools."):
-            sys.modules.pop(module_name, None)
+    """Reset the tool registry in place, WITHOUT building a second ``Tool`` class.
 
-    sys.modules.pop("reachy_language_tutor.tools.core_tools", None)
-    return importlib.import_module("reachy_language_tutor.tools.core_tools")
+    This used to pop every ``reachy_language_tutor.tools.*`` module and re-import.
+    That is D28: the re-import creates a second ``Tool`` base class, every
+    module-scope ``core_tools`` binding elsewhere stays pointed at the first, and
+    ``_load_enabled_tools`` -- which filters with ``issubclass(value, Tool)`` --
+    then matches nothing and reports "the profile declares unknown tools" in
+    whichever file happens to run next.
+
+    ``tools_module_graph`` carries the full account, including the two theories
+    that were measured and found wrong. Nothing here needs to know more than that
+    the module identity must be preserved.
+
+    THE ORDER OF USE MATTERS in this file, which is why the reload is no longer a
+    drop-in. ``core_tools`` binds ``build_remote_client`` DIRECTLY at
+    ``core_tools.py:20``, so patching ``tool_spaces.build_remote_client`` only ever
+    reached ``core_tools`` because the re-import re-executed that ``from`` line.
+    With no re-import there is nothing to re-execute, so the three tests that stub
+    the remote client now obtain the module FIRST and patch ``core_tools`` itself.
+    """
+    return reload_tools_package()
 
 
 def _installed_search_space() -> InstalledToolSpace:
@@ -98,14 +111,17 @@ async def test_initialize_tools_loads_enabled_installed_remote_tools_and_dispatc
         captured_cached_tools = cached_tools
         return client
 
-    monkeypatch.setattr(tool_spaces_mod, "build_remote_client", _build_remote_client)
-
     write_installed_tool_spaces(
         None,
         InstalledToolSpacesManifest(spaces=[_installed_search_space()]),
     )
 
+    # Obtain the module BEFORE patching, and patch core_tools rather than
+    # tool_spaces: core_tools.py:20 binds build_remote_client by value, so a patch
+    # on tool_spaces reaches it only through a re-import, which is the very thing
+    # this no longer does.
     core_tools_mod = _reload_core_tools()
+    monkeypatch.setattr(core_tools_mod, "build_remote_client", _build_remote_client)
     core_tools_mod.initialize_tools()
 
     assert SEARCH_TOOL_ID in core_tools_mod.ALL_TOOLS
@@ -217,10 +233,10 @@ async def test_remote_tool_retries_once_after_transport_failure(
             "text": "hello",
         },
     ]
-    monkeypatch.setattr(tool_spaces_mod, "build_remote_client", lambda *a, **k: client)
     write_installed_tool_spaces(None, InstalledToolSpacesManifest(spaces=[_installed_search_space()]))
 
     core_tools_mod = _reload_core_tools()
+    monkeypatch.setattr(core_tools_mod, "build_remote_client", lambda *a, **k: client)
     monkeypatch.setattr(core_tools_mod, "_REMOTE_TOOL_RETRY_DELAY_S", 0.0)
     core_tools_mod.initialize_tools()
 
@@ -245,10 +261,10 @@ async def test_remote_tool_does_not_retry_timeout(
 
     client = AsyncMock()
     client.call_tool.side_effect = McpToolTimeoutError("slow tool")
-    monkeypatch.setattr(tool_spaces_mod, "build_remote_client", lambda *a, **k: client)
     write_installed_tool_spaces(None, InstalledToolSpacesManifest(spaces=[_installed_search_space()]))
 
     core_tools_mod = _reload_core_tools()
+    monkeypatch.setattr(core_tools_mod, "build_remote_client", lambda *a, **k: client)
     core_tools_mod.initialize_tools()
 
     result = await core_tools_mod.dispatch_tool_call(

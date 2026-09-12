@@ -6,27 +6,42 @@ layer, which migrates legacy profiles and degrades to the packaged default
 instead of exiting.
 """
 
-import sys
 import logging
-import importlib
 from pathlib import Path
 
 import pytest
+from tools_module_graph import reload_tools_package
 
 import reachy_language_tutor.config as config_mod
 from reachy_language_tutor import app_lifecycle
+
+# Bound at module scope, which D28 is what made possible. Until test_external_loading.py,
+# test_tool_space_runtime.py and test_profile_load_resilience.py stopped re-importing the
+# tools package, a binding made here went stale the moment one of them ran: the re-import
+# built a second Tool base class and _load_enabled_tools, which filters with issubclass,
+# then matched nothing. See tests/tools_module_graph.py.
+from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.profile_store import write_profile
 
 
 def _reset_core_tools() -> None:
-    """Drop the cached tool registry so each case reloads from its profile."""
-    for module_name in list(sys.modules):
-        if module_name.startswith(
-            ("reachy_language_tutor.tools.", "reachy_language_tutor._external_tools.")
-        ):
-            sys.modules.pop(module_name, None)
-    sys.modules.pop("reachy_language_tutor.tools.core_tools", None)
-    importlib.reload(app_lifecycle)
+    """Drop the cached tool registry so each case reloads from its profile.
+
+    This used to pop every tools module and then ``importlib.reload(app_lifecycle)``.
+    Both halves were D28. The pop built a second ``Tool`` base class that broke later
+    files, and the ``app_lifecycle`` reload existed only to cope with it:
+    ``app_lifecycle.py:17`` binds ``initialize_tools`` by value, so once a NEW
+    core_tools module existed, app_lifecycle's binding pointed into the old one and
+    had to be re-executed.
+
+    With the registry reset in place there is no new module, so app_lifecycle's
+    binding is still the right function object and the reload has nothing to do.
+    Measured rather than assumed: dropping it leaves all six tests here passing, and
+    the three in-function ``core_tools`` imports below became module-scope as a
+    result -- which is the whole point of the defect, since a module-scope import is
+    exactly what used to be impossible.
+    """
+    reload_tools_package()
 
 
 def _use_profile(monkeypatch: pytest.MonkeyPatch, profiles_root: Path, profile: str) -> None:
@@ -63,8 +78,6 @@ def test_legacy_user_profile_is_migrated_and_kept(
     assert config_mod.config.REACHY_MINI_CUSTOM_PROFILE == "user_personalities/legacy_profile"
     assert (legacy_profile / "profile.md").is_file()
 
-    from reachy_language_tutor.tools import core_tools
-
     assert core_tools.ALL_TOOLS
 
 
@@ -83,7 +96,6 @@ def test_malformed_profile_document_falls_back_to_default(
     abandoned = app_lifecycle.initialize_tools_with_default_fallback(None, logging.getLogger(__name__))
 
     assert abandoned == "broken_profile"
-    from reachy_language_tutor.tools import core_tools
 
     assert core_tools.ALL_TOOLS
 
@@ -103,7 +115,6 @@ def test_readable_profile_is_left_alone(
 
     assert abandoned is None
     assert config_mod.config.REACHY_MINI_CUSTOM_PROFILE == "good_profile"
-    from reachy_language_tutor.tools import core_tools
 
     assert "dance" in core_tools.ALL_TOOLS
 

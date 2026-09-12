@@ -32,23 +32,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
+# Bound at module scope. That is the whole point of D28: until test_external_loading.py,
+# test_tool_space_runtime.py and test_profile_load_resilience.py stopped re-importing the
+# tools package, a binding made here went stale the moment one of them ran -- the re-import
+# built a second Tool base class, and _load_enabled_tools filters with issubclass, so it
+# matched nothing and the loader blamed the profile. This file used to carry a lookup helper
+# that fetched the module per call to dodge exactly that. See tools_module_graph.py.
+from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.learners import store
 from reachy_language_tutor.tools.core_tools import ToolDependencies
-
-
-def _core_tools():
-    """Look core_tools up per call rather than binding it at module scope.
-
-    Still needed, but for a narrower reason than when it was written. D28 fixed
-    test_external_loading.py, which no longer creates a second core_tools. Two files
-    still do: test_tool_space_runtime.py and test_profile_load_resilience.py, whose
-    reloads exist to re-bind monkeypatched dependencies rather than to refresh the
-    registry, so tools_module_graph's in-place reset does not serve them. Until those
-    two are converted, a module-scope binding here can still go stale.
-    """
-    from reachy_language_tutor.tools import core_tools
-
-    return core_tools
 
 
 SEEDED_LEARNER = store.SEED_LEARNERS[0][0]
@@ -72,7 +64,7 @@ def _deps(instance: Path, learner_id: str | None = SEEDED_LEARNER) -> ToolDepend
 
 async def _call(name: str, args: dict[str, Any], deps: ToolDependencies) -> dict[str, Any]:
     """Dispatch exactly as the realtime layer does: a name and a JSON string."""
-    return await _core_tools().dispatch_tool_call(name, json.dumps(args), deps)
+    return await core_tools.dispatch_tool_call(name, json.dumps(args), deps)
 
 
 @pytest.mark.asyncio
