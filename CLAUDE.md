@@ -12,7 +12,7 @@ Full planning notes: `docs/plan.md`
 
 - Mac, with the Reachy Mini Control desktop app running the robot in simulation mode (lightweight "mockup-sim").
 - The robot service listens on `localhost:8000`.
-- Python environment: `~/dev/reachy/reachy_mini_env`. The SDK version matches the desktop app's robot service (1.8.0). Don't upgrade `reachy-mini` without checking the app's service version first.
+- Python environment: `~/dev/reachy/reachy_mini_env`, on the 1.10 line. `reachy_language_tutor/pyproject.toml` holds the authoritative requirement (`reachy-mini>=1.10.0rc5`) — read it rather than trusting this line, which is the sort that goes stale. The SDK has to match the desktop app's robot service, and an app update can silently provision an older one into its own managed venv (`docs/SETUP.md`). Don't upgrade `reachy-mini` without checking the app's service version first.
 - The simulation has no camera. Use `ReachyMini(media_backend="no_media")` in standalone scripts. Prototype face recognition with the Mac's built-in webcam via OpenCV until real hardware is available.
 - Final target is the Wireless model, where the app runs on the robot's small onboard computer. Keep on-robot work lightweight; heavy AI runs in the cloud.
 
