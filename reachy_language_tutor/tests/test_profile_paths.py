@@ -40,6 +40,42 @@ from reachy_language_tutor.profile_store import read_profile, write_profile, rea
 #   In practice the copy fails at 257 because of an intermediate \.\
 #   folder, bringing the real budget down to 71.
 
+# ─────────────────
+# D23: the two totals above are WRONG, by one mistake made three times, and the fix is
+# not the one you would guess. Do not "tidy" these constants without reading this.
+#
+# The comment counts `reachy_language_tutor` as 28 characters. It is 21. That single
+# miscount reproduces every number above exactly:
+#   * `\spaces--pollen-robotics--reachy_language_tutor` counted as 54, really 47
+#     -> project prefix 158 (really 151), wheel prefix 186 (really 179)
+#   * `len("reachy_language_tutor\")` asserted as 29, really 22
+# Three figures, one cause; that is what makes this a determination rather than a guess
+# between two readings.
+#
+# WINDOWS_PATH_BUDGET = 130 IS CORRECT -- and correct by accident, which is why it must
+# not be "fixed". The two errors cancel: the prefix is overstated by 7 (158 vs 151), so
+# the remainder is understated by 7 (101 vs 108), and then 7 too much is added back
+# (29 vs 22). 108 + 22 = 130, the same answer. Changing either half alone breaks it.
+#
+# WINDOWS_WHEEL_PATH_BUDGET has no such cancellation, so the error survives there:
+# 259 - 179 = 80, less 2 for the intermediate `\.\`, gives 78. The recorded 71 is 7
+# too strict.
+#
+# What that means for the defect D23 was filed to fix: there wasn't one. The path it
+# named, at 74 characters, was inside the real budget of 78 all along; it only looked
+# over because of the miscount.
+#
+# 71 IS KEPT ANYWAY, DELIBERATELY. Too strict is the safe direction to be wrong in -- it
+# costs a rename, where too lenient ships a wheel that fails on a user's machine -- and
+# the arithmetic above is only as good as the path it assumes. The packaged path is 66
+# characters today, inside both 71 and 78, so nothing is paying for the margin.
+#
+# STILL NOT ESTABLISHED, and not to be written up as though it were: the Windows
+# behaviour itself. 259 as the usable MAX_PATH, and the 2-character `\.\` penalty taken
+# from "in practice the copy fails at 257", are both inherited from whoever wrote the
+# original comment. No Windows machine was available in D21, D22 or D23. Installing the
+# built wheel on a real Windows box under a long HF Spaces cache path is the one thing
+# that would settle it, and it is the open manual test this file cannot perform.
 WINDOWS_PATH_BUDGET = 130
 WINDOWS_WHEEL_PATH_BUDGET = 71
 
@@ -297,20 +333,29 @@ def test_project_file_paths_stay_within_windows_budget() -> None:
     assert not violations, "\n".join(violations)
 
 
-# NOT a profile-switching failure, and this test is deliberately not skipped.
+# NOT a profile-switching failure, and this test is deliberately not skipped or marked.
 #
-# It asserts something real: that every packaged file stays inside the 71-character
-# Windows wheel-path budget derived above. It fails because this app's own locked profile
-# directory is long enough to break that budget -- see the pinned violation below and D23,
-# which owns the fix. Nothing to do with profile switching; a Windows user installing the
-# wheel is the one who would feel it.
+# It asserts that every packaged file stays inside the Windows wheel-path budget derived
+# above. A Windows user installing the wheel is the one who would feel a violation.
 #
-# It carried an xfail(strict=True) first. That was wrong in a way worth recording: xfail
-# blankets the WHOLE test, so a second packaged path going over budget later, or the
-# `uv build` step failing outright, would both have been absorbed as "expected" and
-# reported green. Pinning the one known violation is strictly stronger -- it is exact
-# about what is broken today and fails immediately on anything else, while still failing
-# the moment somebody shortens the name, which is the signal D23 needs.
+# History worth keeping, because both of the weaker forms were tried. It carried an
+# xfail(strict=True) first: wrong, because xfail blankets the WHOLE test, so a second
+# packaged path going over budget, or the `uv build` step failing outright, would have
+# been absorbed as "expected" and reported green. D21 replaced that with a pin on the one
+# known violation, which was strictly stronger -- exact about what was broken and failing
+# on anything else. D23 then removed the pin -- but NOT by fixing what the pin described,
+# because there was nothing wrong with it. The budget it was measured against was itself
+# miscounted by 7 (see the derivation above), so the packaged path was inside the real
+# budget all along. The pin had to go regardless: it asserts a violation a correctly
+# derived budget does not produce.
+#
+# The locked profile directory was shortened anyway, from 37 characters to 29 and the
+# packaged path from 74 to 66, by dropping a `_profile` suffix that was redundant under a
+# parent directory already called `profiles/`. The corrected arithmetic did NOT require
+# that. It is kept because it is safe under every reading of a budget whose underlying
+# Windows behaviour nobody here could observe, and it costs nothing. (The old name is
+# deliberately not spelled here; D23 greps the tree for it and expects no hits.) The
+# assertion below is now the plain one, with nothing tolerated.
 def test_wheel_file_paths_stay_within_windows_budget(tmp_path: Path) -> None:
     """Built wheel paths should stay below the agreed Windows budget."""
     project_root = Path(__file__).parents[1].resolve()
@@ -349,11 +394,4 @@ def test_wheel_file_paths_stay_within_windows_budget(tmp_path: Path) -> None:
                 f"{path.as_posix()} is {length} characters long"
             )
 
-    # D23 owns removing this pin. Built from the budget constant rather than hard-coded so
-    # the two cannot drift; raising the budget empties `violations` and fails the equality,
-    # which is the intended reminder rather than a nuisance.
-    known_d23_violation = (
-        f"Windows wheel path budget exceeded ({WINDOWS_WHEEL_PATH_BUDGET}): "
-        "reachy_talk_data/profiles/_reachy_language_tutor_locked_profile/profile.md is 74 characters long"
-    )
-    assert violations == [known_d23_violation], "\n".join(violations)
+    assert not violations, "\n".join(violations)

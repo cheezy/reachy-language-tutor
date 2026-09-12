@@ -26,7 +26,7 @@ tooling) lives one level up in the repository.
 
 | Path | What it is |
 |---|---|
-| `profiles/_reachy_language_tutor_locked_profile/profile.md` | The tutor's identity, teaching style and enabled tools |
+| `profiles/_reachy_language_tutor_locked/profile.md` | The tutor's identity, teaching style and enabled tools |
 | `src/reachy_language_tutor/tools/` | Tool implementations, one `Tool` subclass per file |
 | `src/reachy_language_tutor/main.py` | App entry point (`ReachyLanguageTutor`) |
 | `src/reachy_language_tutor/static/` | The app's settings web UI |
@@ -35,7 +35,7 @@ tooling) lives one level up in the repository.
 ## Customising the tutor
 
 The app is locked to a single profile, so there is no personality switcher. Edit
-`profiles/_reachy_language_tutor_locked_profile/profile.md`:
+`profiles/_reachy_language_tutor_locked/profile.md`:
 
 ```
 +++

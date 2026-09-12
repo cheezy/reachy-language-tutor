@@ -113,7 +113,7 @@ echo
 echo "Application"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/reachy_language_tutor"
-PROFILE="$APP/profiles/_reachy_language_tutor_locked_profile/profile.md"
+PROFILE="$APP/profiles/_reachy_language_tutor_locked/profile.md"
 
 # The 1.8.0 app assistant generated an obsolete profile layout that makes the app
 # sys.exit(1) at startup. Catch that here rather than in a confusing crash.

@@ -29,9 +29,13 @@ Four mechanisms produce the same by-design failure, which is why the symptoms di
   ``Config.__init__`` raises about the locked profile before it reaches the
   name-collision branch the test wanted to exercise.
 
-Not every failure in these files belongs here. ``test_profile_paths.py``'s Windows
-wheel-path test fails for a reason of its own and is marked in place, with its own
-explanation -- do not reach for this mark without reading why the test fails.
+Not every failure in these files belongs here, and the case that proves it is worth
+knowing. ``test_profile_paths.py``'s Windows wheel-path test used to fail for a reason
+entirely its own, and was deliberately NOT given this mark -- marking it would have filed a
+real packaging question away as "expected". D23 then found the failure was not real at all:
+the budget it was measured against had been miscounted. The test passes unmarked today.
+The rule this leaves behind: before reaching for this mark, establish that the failure is
+the profile lock, not merely that a test is red.
 """
 
 import pytest

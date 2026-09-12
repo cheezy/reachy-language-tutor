@@ -175,9 +175,11 @@ while any of them fails. See `.stride.md`.
 > conversation app and test profile *switching*, which this app deliberately disables via
 > `config.LOCKED_PROFILE`. Those 30 tests are skipped individually by a `skipif` bound to that
 > constant (`reachy_language_tutor/tests/profile_lock.py`), so they resume on their own if the
-> app ever stops locking its profile. A 31st test fails for an unrelated reason — a packaged
-> path three characters over the Windows wheel budget — and pins that one known violation
-> rather than being marked, so any further violation fails the suite. See D23.
+> app ever stops locking its profile. **Nothing else is skipped, marked or failing.** A 31st
+> test used to fail over a packaged path three characters above the Windows wheel budget, and
+> pinned that one violation rather than being marked. D23 re-derived the budget, found it had
+> been miscounted by 7 characters — the path was inside it all along — and removed the pin.
+> See D23 and the derivation comment in `tests/test_profile_paths.py`.
 >
 > They used to be excluded a whole file at a time, which also threw away 69 passing tests and
 > silently swallowed anything added to those files afterwards. D21 replaced that with the
@@ -260,13 +262,13 @@ Version skew. See [step 5](#5-keeping-the-sdk-and-daemon-in-step). The SDK also 
 Look for:
 
 ```
-CRITICAL LOCKED_PROFILE '_reachy_language_tutor_locked_profile' has no profile definition
+CRITICAL LOCKED_PROFILE '_reachy_language_tutor_locked' has no profile definition
 ```
 
 The app is locked to a single profile and calls `sys.exit(1)` if it cannot find it. It needs:
 
 ```
-reachy_language_tutor/profiles/_reachy_language_tutor_locked_profile/profile.md
+reachy_language_tutor/profiles/_reachy_language_tutor_locked/profile.md
 ```
 
 **Profile format.** Profiles are a single `profile.md`: a TOML front-matter block delimited by

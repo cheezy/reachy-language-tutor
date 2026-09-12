@@ -15,7 +15,7 @@ Built on the **conversation template** (fork of `reachy_mini_conversation_app`, 
 `v1.0.1`), which supplies the audio pipeline, voice backend, LLM loop, tool dispatch and
 movement coordination. Our work is confined to three seams:
 
-1. **The profile** (`profiles/_reachy_language_tutor_locked_profile/profile.md`) — the tutor's
+1. **The profile** (`profiles/_reachy_language_tutor_locked/profile.md`) — the tutor's
    identity, teaching style and movement rules. The app is locked to this profile
    (`config.LOCKED_PROFILE`), so end users can't switch personalities.
 2. **Custom tools** — `get_profile`, `get_progress(language)`, `record_result`, following the
@@ -56,7 +56,7 @@ number — a hallucinated "you're on lesson 6" during a demo would be worse than
    `src/reachy_language_tutor/profiles/`, but upstream `v1.0.1` reads `profile.md` from the
    top-level `profiles/`. As generated, `config.py` would `sys.exit(1)` at startup with
    "LOCKED_PROFILE has no profile definition". Fixed by authoring
-   `profiles/_reachy_language_tutor_locked_profile/profile.md` in the current format and
+   `profiles/_reachy_language_tutor_locked/profile.md` in the current format and
    deleting the stale sidecar directory (referenced nowhere; its `sweep_look.py` duplicated a
    builtin tool).
 

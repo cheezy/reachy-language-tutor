@@ -19,7 +19,7 @@ def _locked_profile():
 
 def test_locked_profile_is_set() -> None:
     """The app ships locked to one profile; end users must not switch personalities."""
-    assert config.LOCKED_PROFILE == "_reachy_language_tutor_locked_profile"
+    assert config.LOCKED_PROFILE == "_reachy_language_tutor_locked"
 
 
 def test_locked_profile_parses() -> None:
