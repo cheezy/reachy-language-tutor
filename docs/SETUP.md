@@ -401,13 +401,22 @@ All read-only. Nothing captured, stored or transmitted an image; the probe count
 
 4. **It is a deadlock, not a slow path.** A second sample three minutes later showed all four
    threads at the same leaves, 1959/1959.
-5. **It reproduces on a fresh process.** After quitting and reopening the app, the new daemon
-   (PID 27910) was sampled ~90 s after boot and showed the **identical** four-thread cycle,
-   1879/1879, with a different session UUID. Both of today's boots wedged the same way: 16 s
-   after the 11:43 boot (after five short-lived sessions) and 11 s after the 16:47 boot (after
-   one). Timeline of the second: daemon up `16:47:27`; a `[Listener]` registers `16:47:28`; the
+5. **It reproduces on every fresh process — three for three.** After quitting and reopening
+   the app, the new daemon (PID 27910) was sampled ~90 s after boot and showed the **identical**
+   four-thread cycle, 1879/1879, with a different session UUID. A third daemon (PID 54487,
+   started 17:10) was sampled 23 minutes in and showed the same cycle again at 2086/2086, again
+   with its own session UUID, and its socket probe and 8443 probe both came back 0. So all three
+   of today's boots wedged the same way, each within seconds: 16 s after the 11:43 boot (after
+   five short-lived sessions), 11 s after the 16:47 boot (after one), and 13 s after the 17:10
+   boot. Timeline of the second: daemon up `16:47:27`; a `[Listener]` registers `16:47:28`; the
    `[Producer]` registers `16:47:30`; a session starts and the SDP exchange runs at `16:47:32`;
-   last signalling line ever, `16:47:38`.
+   that process's last signalling line, `16:47:38`.
+
+   The third boot is worth calling out because it nearly produced a wrong conclusion. Writing
+   the upstream report, a re-check of the log found signalling activity long after the 16:47
+   process should have been silent — which looked at first like the server recovering. It was
+   not: the app had been restarted again at 17:10 and that was a *new* process, wedging on its
+   own schedule. Re-measure before believing a recovery.
 
 **What this establishes, and what it does not.** The deadlock is established — four threads,
 two processes, 100 % of samples, a named cycle. That the camera hardware and the app's macOS
@@ -496,10 +505,16 @@ Affected versions, all confirmed on this machine in this session:
 - GStreamer core, `webrtcbin`, `unixfd`, `applemedia` — all **1.28.7**
 - macOS 26.6.1 (25G76), arm64
 
-The report to `pollen-robotics/reachy_mini` is: **`webrtcsink` deadlocks during the first
-session's `on_remote_description_set`, and because the daemon puts the camera IPC branch behind
-the same `tee` as the WebRTC branch, the deadlock also kills the local camera socket.** Include
-the two thread tables above and the version list; there is no exploit and nothing to weaponise.
+**Filed as <https://github.com/pollen-robotics/reachy_mini/issues/1416>** (W20, 2026-09-12).
+Check there first for a fix or a workaround before spending time on this locally.
+
+The report is: **`webrtcsink` deadlocks during the first session's `on_remote_description_set`,
+and because the daemon puts the camera IPC branch behind the same `tee` as the WebRTC branch,
+the deadlock also kills the local camera socket.** It carries the two thread tables above and
+the version list; there is no exploit and nothing to weaponise. The published text is
+deliberately cleaner than this entry: no PIDs, no wall-clock timestamps, no local socket path,
+and the timeline rebased to relative offsets, because an upstream issue is public and permanent
+while this file is not.
 Two things are worth saying to upstream beyond the bug itself, because they are what turned one
 broken feature into two:
 
