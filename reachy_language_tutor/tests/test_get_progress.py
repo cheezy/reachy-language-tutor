@@ -27,6 +27,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from untaught_language import UNTAUGHT_NAME
 
 from reachy_language_tutor.tools import get_progress as module
 from reachy_language_tutor.learners import store
@@ -316,16 +317,16 @@ async def test_a_non_string_language_is_refused_without_touching_the_store(
 @pytest.mark.asyncio
 async def test_an_unknown_language_returns_a_clear_error_and_says_what_is_taught(instance: Path) -> None:
     """Saying which languages exist lets the turn recover in one exchange."""
-    result = await _call({"language": "German"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    result = await _call({"language": UNTAUGHT_NAME}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
 
     assert "error" in result
-    assert sorted(result["languages_taught"]) == ["French", "Spanish"]
+    assert sorted(result["languages_taught"]) == ["French", "German", "Italian", "Portuguese", "Spanish"]
 
 
 @pytest.mark.asyncio
 async def test_an_unknown_language_is_not_an_empty_success(instance: Path) -> None:
     """An empty success would have the tutor report zero progress in a real language."""
-    result = await _call({"language": "German"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    result = await _call({"language": UNTAUGHT_NAME}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
 
     assert "completed_count" not in result
     assert "next_lesson" not in result
@@ -424,7 +425,21 @@ def test_the_declared_enum_matches_the_seeded_catalog() -> None:
     """A static hint can go stale; this is what keeps it honest against the seed data."""
     declared = GetProgress.parameters_schema["properties"]["language"]["enum"]
 
-    assert sorted(declared) == sorted(name for _, name in store.SEED_LANGUAGES)
+    # Sequence, not set. The order is what _benign_args depends on, and a set
+    # comparison would let somebody alphabetise this list without anything failing.
+    assert tuple(declared) == tuple(name for _, name in store.SEED_LANGUAGES)
+
+    # The sibling of test_record_result.py's benign-arguments guard. _benign_args takes
+    # enum[0] for BOTH tools, and the boundary suite tells its two probe learners apart
+    # by their differing history -- so a first entry naming a language neither has
+    # practised makes get_progress answer identically for both and the injection test
+    # covers nothing. The hazard is caught either way, but only this says why.
+    practised = {lesson[1] for lesson in store.SEED_LESSONS if lesson[0] in {r[1] for r in store.SEED_RESULTS}}
+    by_name = {name: code for code, name in store.SEED_LANGUAGES}
+    assert by_name[declared[0]] in practised, (
+        f"enum[0] names {declared[0]!r}, which no seeded learner has practised, so get_progress "
+        "answers identically for both probe learners and the boundary suite reports it inert"
+    )
 
 
 def test_the_profile_persona_no_longer_denies_progress_lookup() -> None:

@@ -47,7 +47,7 @@ from reachy_language_tutor.learners.models import (
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
-SEED_VERSION = 1
+SEED_VERSION = 2
 LEARNER_DB_FILENAME = "learners.v1.sqlite3"
 SEED_VERSION_KEY = "seed_version"
 # Which sample learners have ever been seeded. Kept separately from the learners
@@ -62,12 +62,25 @@ _DAY_MS = 86_400_000
 
 _SCHEMA_LOCK = threading.Lock()
 
+# Appended, never interleaved. get_language_catalog orders by name in SQL, so this
+# tuple's order has no user-visible effect -- its only job is to feed the get_progress
+# enum, whose FIRST entry must name a language a seeded learner has practised. Spanish
+# stays first for that reason; see tools/get_progress.py.
 SEED_LANGUAGES: tuple[tuple[str, str], ...] = (
     ("es", "Spanish"),
     ("fr", "French"),
+    ("de", "German"),
+    ("it", "Italian"),
+    ("pt", "Portuguese"),
 )
 
 # (id, language_code, position, title, objective)
+#
+# Spanish stays FIRST. tests/test_tool_identity_boundary.py's _benign_args takes
+# enum[0] from record_result's lesson_id enum, which is pinned to this sequence, and
+# the suite tells its two probe learners apart by their Spanish and French history.
+# A first entry in a language nobody has practised makes both answers identical and
+# the injection test silently covers nothing.
 SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
     (
         "es-01-greetings",
@@ -146,6 +159,114 @@ SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
         6,
         "Your daily routine",
         "Describe your morning with reflexive verbs: je me lève, je me prépare.",
+    ),
+    (
+        "it-01-greetings",
+        "it",
+        1,
+        "Greetings and goodbyes",
+        "Greet someone, ask how they are, and say goodbye: ciao, buongiorno, come stai?, arrivederci.",
+    ),
+    (
+        "it-02-introductions",
+        "it",
+        2,
+        "Introducing yourself",
+        "Give your name and where you are from, and ask the same back: mi chiamo…, sono di…, e tu?",
+    ),
+    ("it-03-numbers", "it", 3, "Numbers one to twenty", "Count to twenty out loud and say your age and a price."),
+    (
+        "it-04-ordering-food",
+        "it",
+        4,
+        "At the bar",
+        "Order a coffee and something to eat, then ask the price: vorrei…, quanto costa?",
+    ),
+    (
+        "it-05-directions",
+        "it",
+        5,
+        "Asking for directions",
+        "Ask where a place is and follow a simple answer: dov'è…?, a destra, a sinistra.",
+    ),
+    (
+        "it-06-daily-routine",
+        "it",
+        6,
+        "Talking about your day",
+        "Describe your morning with reflexive verbs: mi alzo, mi preparo.",
+    ),
+    (
+        "de-01-greetings",
+        "de",
+        1,
+        "Greetings and politeness",
+        "Greet someone and use hallo, guten Tag, bitte, danke, auf Wiedersehen.",
+    ),
+    (
+        "de-02-introductions",
+        "de",
+        2,
+        "Introducing yourself",
+        "Give your name, age, and where you live: ich heiße…, ich bin … Jahre alt, ich wohne in…",
+    ),
+    ("de-03-numbers", "de", 3, "Numbers one to twenty", "Count to twenty out loud and say a price and a time."),
+    (
+        "de-04-ordering-food",
+        "de",
+        4,
+        "At the bakery",
+        "Order a coffee and a pastry, then ask for the bill: ich hätte gern…, die Rechnung, bitte.",
+    ),
+    (
+        "de-05-directions",
+        "de",
+        5,
+        "Getting around town",
+        "Ask the way to the station and understand geradeaus, links, rechts.",
+    ),
+    (
+        "de-06-daily-routine",
+        "de",
+        6,
+        "Your daily routine",
+        "Describe your morning with separable verbs: ich stehe auf, ich ziehe mich an.",
+    ),
+    (
+        "pt-01-greetings",
+        "pt",
+        1,
+        "Greetings and goodbyes",
+        "Greet someone, ask how they are, and say goodbye: olá, bom dia, como está?, adeus.",
+    ),
+    (
+        "pt-02-introductions",
+        "pt",
+        2,
+        "Introducing yourself",
+        "Give your name and where you are from, and ask the same back: chamo-me…, sou de…, e tu?",
+    ),
+    ("pt-03-numbers", "pt", 3, "Numbers one to twenty", "Count to twenty out loud and say your age and a time."),
+    (
+        "pt-04-ordering-food",
+        "pt",
+        4,
+        "At the café",
+        "Order a coffee and a pastry, then ask the price: queria…, quanto custa?",
+    ),
+    (
+        "pt-05-directions",
+        "pt",
+        5,
+        "Asking for directions",
+        "Ask where a place is and follow a simple answer: onde fica…?, à direita, à esquerda.",
+    ),
+    (
+        "pt-06-daily-routine",
+        "pt",
+        6,
+        "Talking about your day",
+        "Describe your morning with reflexive verbs: levanto-me, preparo-me.",
     ),
 )
 
@@ -1458,7 +1579,7 @@ def get_progress(
 
     The rule that separates them is silence, not store_is_available. **A genuine
     absence logs nothing. Every other None logs a warning first.** So a caller about to
-    tell a person "I do not teach German" must know that this call was quiet. One
+    tell a person "I do not teach that language" must know that this call was quiet. One
     prefix per meaning, and each means only that one thing:
 
       "Could not read a language code"  -- the code could not name a catalog row.

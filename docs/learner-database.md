@@ -155,8 +155,11 @@ Seeded so the app is demonstrable before any real learner exists.
 |---|---|
 | `es` | Spanish |
 | `fr` | French |
+| `de` | German |
+| `it` | Italian |
+| `pt` | Portuguese |
 
-### Lessons (12 total)
+### Lessons (30 total)
 
 | ID | Language | Position | Title | Objective |
 |---|---|---|---|---|
@@ -172,6 +175,24 @@ Seeded so the app is demonstrable before any real learner exists.
 | `fr-04-ordering-food` | French | 4 | At the café | Order a drink and a pastry, then ask for the bill: je voudrais…, l'addition, s'il vous plaît. |
 | `fr-05-directions` | French | 5 | Getting around town | Ask the way to the station and understand tout droit, à gauche, à droite. |
 | `fr-06-daily-routine` | French | 6 | Your daily routine | Describe your morning with reflexive verbs: je me lève, je me prépare. |
+| `it-01-greetings` | Italian | 1 | Greetings and goodbyes | Greet someone, ask how they are, and say goodbye: ciao, buongiorno, come stai?, arrivederci. |
+| `it-02-introductions` | Italian | 2 | Introducing yourself | Give your name and where you are from, and ask the same back: mi chiamo…, sono di…, e tu? |
+| `it-03-numbers` | Italian | 3 | Numbers one to twenty | Count to twenty out loud and say your age and a price. |
+| `it-04-ordering-food` | Italian | 4 | At the bar | Order a coffee and something to eat, then ask the price: vorrei…, quanto costa? |
+| `it-05-directions` | Italian | 5 | Asking for directions | Ask where a place is and follow a simple answer: dov'è…?, a destra, a sinistra. |
+| `it-06-daily-routine` | Italian | 6 | Talking about your day | Describe your morning with reflexive verbs: mi alzo, mi preparo. |
+| `de-01-greetings` | German | 1 | Greetings and politeness | Greet someone and use hallo, guten Tag, bitte, danke, auf Wiedersehen. |
+| `de-02-introductions` | German | 2 | Introducing yourself | Give your name, age, and where you live: ich heiße…, ich bin … Jahre alt, ich wohne in… |
+| `de-03-numbers` | German | 3 | Numbers one to twenty | Count to twenty out loud and say a price and a time. |
+| `de-04-ordering-food` | German | 4 | At the bakery | Order a coffee and a pastry, then ask for the bill: ich hätte gern…, die Rechnung, bitte. |
+| `de-05-directions` | German | 5 | Getting around town | Ask the way to the station and understand geradeaus, links, rechts. |
+| `de-06-daily-routine` | German | 6 | Your daily routine | Describe your morning with separable verbs: ich stehe auf, ich ziehe mich an. |
+| `pt-01-greetings` | Portuguese | 1 | Greetings and goodbyes | Greet someone, ask how they are, and say goodbye: olá, bom dia, como está?, adeus. |
+| `pt-02-introductions` | Portuguese | 2 | Introducing yourself | Give your name and where you are from, and ask the same back: chamo-me…, sou de…, e tu? |
+| `pt-03-numbers` | Portuguese | 3 | Numbers one to twenty | Count to twenty out loud and say your age and a time. |
+| `pt-04-ordering-food` | Portuguese | 4 | At the café | Order a coffee and a pastry, then ask the price: queria…, quanto custa? |
+| `pt-05-directions` | Portuguese | 5 | Asking for directions | Ask where a place is and follow a simple answer: onde fica…?, à direita, à esquerda. |
+| `pt-06-daily-routine` | Portuguese | 6 | Talking about your day | Describe your morning with reflexive verbs: levanto-me, preparo-me. |
 
 ### Sample learner
 
@@ -201,6 +222,10 @@ like the sample learner practised at install time.
   obvious immediately.
 - **French** → next lesson is `fr-01-greetings`. Nothing attempted, so the language
   starts from the beginning.
+- **German, Italian and Portuguese** → next lesson is `<code>-01-greetings` in each.
+  Nothing attempted. They were added after the first two, so they are also the case that
+  proves a catalog expansion reaches a robot whose database was seeded before they
+  existed — see `SEED_VERSION` below.
 
 ## Versioning and re-seeding
 
@@ -337,7 +362,7 @@ is its only parameter and may be passed positionally.
 
 `None` carries three meanings, not two: the thing genuinely does not exist, the store
 could not be read, or the reader refused the argument shape it was given. A caller that
-treats `None` as "does not exist" will tell someone "I don't teach German" when the
+treats `None` as "does not exist" will tell someone "I don't teach that language" when the
 database is broken, or when the tool layer sent a language code the reader refused — a
 confident falsehood either way.
 
@@ -366,13 +391,13 @@ always-populated one:
 | Situation | Result | What the tutor should say |
 |---|---|---|
 | Language taught, never practised | populated; `completed` empty, `next_lesson` is lesson 1 | "You haven't started French — shall we?" |
-| Language not taught here | `None`, **and nothing logged** | "I don't teach German yet." |
+| Language not taught here | `None`, **and nothing logged** | "I don't teach that language yet." |
 | Language taught, no lessons written | populated; `remaining` empty, `next_lesson` is `None` | "I teach it, but I have nothing prepared." |
 | Every lesson completed | `remaining` empty, `completed` full | "You've finished Spanish." |
 
 The "nothing logged" in the second row is load-bearing, not decoration: `None` also
 comes back when the store is unreadable or an argument was refused, and saying "I don't
-teach German yet" on either of those is the confident falsehood the section above is
+teach that language yet" on either of those is the confident falsehood the section above is
 about. Only silence distinguishes them.
 
 Silence is a weak signal to build a tutor on, so callers do not have to. `get_language_catalog`

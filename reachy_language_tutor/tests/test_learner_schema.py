@@ -2,11 +2,12 @@
 
 import os
 import json
-import sqlite3
 import logging
+import sqlite3
 from pathlib import Path
 
 import pytest
+from untaught_language import UNTAUGHT_CODE
 
 from reachy_language_tutor.learners import store
 
@@ -144,7 +145,7 @@ def test_deleted_learner_survives_a_seed_version_bump(tmp_path: Path) -> None:
     counts = _counts(tmp_path)
     assert counts["learners"] == 0, "a deleted learner must not come back on a seed bump"
     assert counts["lesson_results"] == 0, "nor may their results"
-    assert counts["lessons"] == 12, "catalog rows should still converge"
+    assert counts["lessons"] == len(store.SEED_LESSONS), "catalog rows should still converge"
 
 
 def _seeded_ids_raw(instance_path: Path) -> str:
@@ -287,8 +288,8 @@ def test_seed_row_counts(tmp_path: Path) -> None:
     store.ensure_learner_database(tmp_path)
 
     assert _counts(tmp_path) == {
-        "languages": 2,
-        "lessons": 12,
+        "languages": len(store.SEED_LANGUAGES),
+        "lessons": len(store.SEED_LESSONS),
         "learners": 1,
         "lesson_results": 3,
     }
@@ -379,7 +380,7 @@ def test_next_lesson_is_unambiguous(tmp_path: Path) -> None:
         french = connection.execute(store.NEXT_LESSON_SQL, ("fr", "sample-learner")).fetchone()
         assert french["id"] == "fr-01-greetings"
 
-        assert connection.execute(store.NEXT_LESSON_SQL, ("de", "sample-learner")).fetchone() is None
+        assert connection.execute(store.NEXT_LESSON_SQL, (UNTAUGHT_CODE, "sample-learner")).fetchone() is None
     finally:
         connection.close()
 
@@ -537,7 +538,7 @@ def test_a_stored_json_string_loses_its_quotes(tmp_path: Path) -> None:
 def test_a_stored_boolean_warns_rather_than_becoming_an_id(
     tmp_path: Path, raw: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """bool subclasses int, so it slipped through the number arm and became "True".
+    """Bool subclasses int, so it slipped through the number arm and became "True".
 
     An id of "True" matches no learner, so the record was effectively empty -- but
     silently, and silence here is the permissive direction: it lets a deleted learner
@@ -721,3 +722,172 @@ def test_a_numeric_id_read_from_the_raw_text_still_suppresses_the_reseed(
     # Same oracle as above: the rewritten record is what shows this pass seeded.
     assert _seeded_ids_raw(tmp_path) == json.dumps(["1e5"])
     assert _counts(tmp_path)["learners"] == 0, "a numeric id must make deletion permanent too"
+
+
+def test_the_untaught_placeholders_are_never_taught(tmp_path: Path) -> None:
+    """The suite uses these to mean "a language this robot does not teach".
+
+    Several tests depend on that being true, and nothing used to enforce it. They
+    spelled it as German and Portuguese instead, which was a fact about the seed
+    data rather than a property of the test -- so the task that added German broke
+    six tests at once, one of them with a UNIQUE constraint violation, and hid a
+    Portuguese sibling behind the first failure.
+
+    Asserted against the live catalog as well as the constants, because a future
+    catalog that came from somewhere other than SEED_LANGUAGES would slip past a
+    constant-only check.
+    """
+    from untaught_language import (
+        UNTAUGHT_CODE,
+        UNTAUGHT_NAME,
+        UNTAUGHT_CODE_ABSENT,
+        UNTAUGHT_LANGUAGE_ROW_NAME,
+    )
+
+    reserved_codes = {UNTAUGHT_CODE, UNTAUGHT_CODE_ABSENT}
+    reserved_names = {UNTAUGHT_NAME, UNTAUGHT_LANGUAGE_ROW_NAME}
+    why = (
+        "the test suite uses this to mean 'a language we do not teach'; "
+        "seeding it makes several tests assert a falsehood"
+    )
+
+    assert reserved_codes.isdisjoint({code for code, _ in store.SEED_LANGUAGES}), why
+    assert reserved_names.isdisjoint({name for _, name in store.SEED_LANGUAGES}), why
+
+    assert store.ensure_learner_database(tmp_path).ready is True
+    catalog = store.get_language_catalog(instance_path=tmp_path)
+    assert reserved_codes.isdisjoint({entry.code for entry in catalog}), why
+    assert reserved_names.isdisjoint({entry.name for entry in catalog}), why
+
+
+def test_a_catalog_expansion_reaches_an_already_seeded_robot(tmp_path: Path) -> None:
+    """The acceptance criterion that only a test can settle, so it is tested not asserted.
+
+    Twenty robots are already in homes with a seeded database. Adding a language to
+    SEED_LANGUAGES does nothing for any of them unless SEED_VERSION moves: _seed
+    returns early on `_seed_version(connection) >= SEED_VERSION`, and no error is
+    raised anywhere. The robot simply goes on teaching the old catalog forever.
+
+    Rewound to SEED_VERSION - 1 rather than to 0, so this tests the bump that was
+    actually made. A rewind to 0 would pass even if the constant had not moved.
+    """
+    assert store.ensure_learner_database(tmp_path).ready is True
+    new_codes = ("de", "it", "pt")
+
+    connection = store.connect(tmp_path)
+    try:
+        placeholders = ",".join("?" for _ in new_codes)
+        connection.execute(f"DELETE FROM lessons WHERE language_code IN ({placeholders})", new_codes)
+        connection.execute(f"DELETE FROM languages WHERE code IN ({placeholders})", new_codes)
+        connection.execute(
+            "UPDATE schema_meta SET value = ? WHERE key = ?",
+            (str(store.SEED_VERSION - 1), store.SEED_VERSION_KEY),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    behind = _counts(tmp_path)
+    assert behind["languages"] == len(store.SEED_LANGUAGES) - len(new_codes)
+
+    assert store.ensure_learner_database(tmp_path).seeded is True
+
+    after = _counts(tmp_path)
+    assert after["languages"] == len(store.SEED_LANGUAGES)
+    assert after["lessons"] == len(store.SEED_LESSONS)
+    # The reason Spanish stays. A lesson upsert never deletes, so the ON DELETE CASCADE
+    # from lessons to lesson_results never fires and nobody's history is touched.
+    assert after["lesson_results"] == behind["lesson_results"]
+
+    catalog = store.get_language_catalog(instance_path=tmp_path)
+    assert {entry.code for entry in catalog} >= set(new_codes)
+
+
+def test_existing_progress_survives_a_catalog_expansion(tmp_path: Path) -> None:
+    """Nobody mid-course loses a lesson because three languages arrived."""
+    assert store.ensure_learner_database(tmp_path).ready is True
+    learner = store.SEED_LEARNERS[0][0]
+
+    # Both languages the criterion names. SEED_RESULTS is Spanish-only, so a French
+    # result has to be recorded here or the French half of the claim is untested.
+    assert store.record_result(learner, "fr-01-greetings", "completed", instance_path=tmp_path).recorded is True
+
+    before = {
+        code: store.get_progress(learner, code, instance_path=tmp_path) for code in ("es", "fr")
+    }
+    assert all(progress is not None and progress.completed for progress in before.values())
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute(
+            "UPDATE schema_meta SET value = ? WHERE key = ?",
+            (str(store.SEED_VERSION - 1), store.SEED_VERSION_KEY),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    assert store.ensure_learner_database(tmp_path).seeded is True
+
+    for code, was in before.items():
+        now = store.get_progress(learner, code, instance_path=tmp_path)
+        assert now is not None, code
+        assert [lesson.id for lesson in now.completed] == [lesson.id for lesson in was.completed], code
+        assert (now.next_lesson.id if now.next_lesson else None) == (
+            was.next_lesson.id if was.next_lesson else None
+        ), code
+
+
+# Every catalog that has ever shipped, keyed by the seed version that shipped it.
+#
+# APPEND ONLY. Never edit an existing entry: each line is a record of what a robot in
+# somebody's home actually received, and rewriting one makes this file lie about the
+# installed base. To change the catalog, bump SEED_VERSION and add a line.
+SHIPPED_CATALOGS = {
+    1: "a739c1c9aed1de9888de223e3f4f31eb0800c965eb54d1d8271794751b62f389",  # Spanish, French
+    2: "c6efbb187caf89a96c03c744fb5d2b9bd6baf63ab6e0cfe629c0fe72209913c8",  # + German, Italian, Portuguese
+}
+
+
+def _catalog_fingerprint() -> str:
+    import hashlib
+
+    return hashlib.sha256((repr(store.SEED_LANGUAGES) + repr(store.SEED_LESSONS)).encode()).hexdigest()
+
+
+def test_changing_the_seeded_catalog_requires_bumping_seed_version() -> None:
+    """The pitfall that costs the most in the field, and the only guard that can see it.
+
+    Editing SEED_LANGUAGES or SEED_LESSONS without moving SEED_VERSION is silent. _seed
+    returns early on `_seed_version(connection) >= SEED_VERSION`, so every robot that
+    already has a database keeps the old catalog forever and nothing reports a problem.
+    The learner is simply never offered the new language.
+
+    A convergence test cannot catch this alone: rewinding a database to SEED_VERSION - 1
+    re-seeds it whether or not the constant ever moved. Measured - leaving SEED_VERSION
+    at 1 while adding three languages left the whole suite green.
+
+    A single pinned fingerprint could not catch it either, and that is the more
+    interesting failure: the first version of this test told you in its own message to
+    paste the new hash, which satisfied it without bumping anything. A guard whose
+    instructions describe the bypass is worse than none, because it reads as protection.
+
+    So the pin is a HISTORY, not a value. Each shipped catalog keeps its own line, the
+    current version must be the newest one, and a version can never be reused for
+    different content - so the only way to change the catalog is to add a version.
+    """
+    fingerprint = _catalog_fingerprint()
+
+    assert store.SEED_VERSION == max(SHIPPED_CATALOGS), (
+        f"SEED_VERSION is {store.SEED_VERSION} but the newest shipped catalog is "
+        f"{max(SHIPPED_CATALOGS)}. Bump SEED_VERSION and ADD a line to SHIPPED_CATALOGS; "
+        "never overwrite an existing one."
+    )
+    assert SHIPPED_CATALOGS[store.SEED_VERSION] == fingerprint, (
+        f"the seeded catalog is now {fingerprint}, which is not what seed version "
+        f"{store.SEED_VERSION} shipped. You changed the catalog: bump SEED_VERSION so "
+        "already-seeded robots converge, and ADD a new line to SHIPPED_CATALOGS. Do not "
+        "edit the existing line - it records what robots in homes actually received."
+    )
+    assert len(set(SHIPPED_CATALOGS.values())) == len(SHIPPED_CATALOGS), (
+        "two seed versions ship an identical catalog, so one of them changed nothing"
+    )

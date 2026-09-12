@@ -549,7 +549,8 @@ def test_the_declared_lesson_enum_matches_the_seeded_catalog() -> None:
     """A static hint can go stale; this is what keeps it honest against the seed data."""
     declared = RecordResult.parameters_schema["properties"]["lesson_id"]["enum"]
 
-    assert sorted(declared) == sorted(lesson[0] for lesson in store.SEED_LESSONS)
+    # Sequence, not set -- see test_the_benign_arguments... below for what the order buys.
+    assert tuple(declared) == tuple(lesson[0] for lesson in store.SEED_LESSONS)
 
 
 def test_the_declared_outcome_enum_matches_the_stores_vocabulary() -> None:
@@ -573,6 +574,19 @@ def test_the_benign_arguments_the_boundary_suite_synthesises_name_a_real_lesson(
 
     assert lesson_id in {lesson[0] for lesson in store.SEED_LESSONS}
     assert outcome in OUTCOMES
+
+    # Naming a REAL lesson is not enough; it must name one in a language a seeded
+    # learner has actually practised. The boundary suite tells its two probe learners
+    # apart by their differing history, so a first entry in an untouched language makes
+    # record_result answer identically for both -- and the suite then reports the tool
+    # inert rather than catching anything. A vacuous injection test, not a caught bug.
+    by_id = {lesson[0]: lesson[1] for lesson in store.SEED_LESSONS}
+    practised = {by_id[result[1]] for result in store.SEED_RESULTS}
+    assert by_id[lesson_id] in practised, (
+        f"enum[0] names a lesson in {by_id[lesson_id]!r}, which no seeded learner has practised, "
+        "so record_result answers identically for both probe learners and "
+        "test_every_learner_tool_is_individually_observable reports it inert"
+    )
     assert "default" not in properties["lesson_id"], "a default would be used before the enum"
     assert "default" not in properties["outcome"], "a default would be used before the enum"
 

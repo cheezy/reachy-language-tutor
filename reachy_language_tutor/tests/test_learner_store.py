@@ -9,17 +9,18 @@ verification is scoped to the application package, not to the test suite.
 import re
 import ast
 import inspect
-import sqlite3
 import logging
+import sqlite3
 import dataclasses
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from untaught_language import UNTAUGHT_CODE, UNTAUGHT_CODE_ABSENT, UNTAUGHT_LANGUAGE_ROW_NAME
 
 import reachy_language_tutor.learners as learners
 from reachy_language_tutor.learners import store
-from reachy_language_tutor.learners.models import Lesson, LearnerProfile, LessonAttempt
+from reachy_language_tutor.learners.models import Lesson, LessonAttempt, LearnerProfile
 
 
 @pytest.fixture
@@ -118,7 +119,7 @@ def test_get_progress_untouched_language_starts_at_lesson_one(instance: Path) ->
     assert progress.next_lesson.id == "fr-01-greetings"
 
 
-@pytest.mark.parametrize("language_code", ["de", "ES", ""])
+@pytest.mark.parametrize("language_code", [UNTAUGHT_CODE, "ES", ""])
 def test_get_progress_unknown_language_returns_none(instance: Path, language_code: str) -> None:
     """None means one thing only: this robot does not teach that language."""
     assert store.get_progress("sample-learner", language_code, instance_path=instance) is None
@@ -174,12 +175,14 @@ def test_get_progress_language_without_lessons_is_not_unknown(instance: Path) ->
     """A taught language with no content differs from a language that is not taught."""
     connection = store.connect(instance)
     try:
-        connection.execute("INSERT INTO languages (code, name) VALUES (?, ?)", ("de", "German"))
+        connection.execute(
+            "INSERT INTO languages (code, name) VALUES (?, ?)", (UNTAUGHT_CODE, UNTAUGHT_LANGUAGE_ROW_NAME)
+        )
         connection.commit()
     finally:
         connection.close()
 
-    progress = store.get_progress("sample-learner", "de", instance_path=instance)
+    progress = store.get_progress("sample-learner", UNTAUGHT_CODE, instance_path=instance)
 
     assert progress is not None, "the language is taught, so this is not None"
     assert progress.remaining == ()
@@ -594,11 +597,11 @@ def test_every_published_reason_is_documented() -> None:
 def test_store_is_available_separates_absence_from_breakage(tmp_path: Path, instance: Path) -> None:
     """Both readers answer None twice over, so a caller needs this to tell which it is.
 
-    Saying "I do not teach German" when the database is simply unreadable would be a
+    Saying "I do not teach that language" when the database is simply unreadable would be a
     confident falsehood, which is worse than admitting the lookup failed.
     """
     assert store.store_is_available(instance) is True
-    assert store.get_progress("sample-learner", "de", instance_path=instance) is None, "not taught"
+    assert store.get_progress("sample-learner", UNTAUGHT_CODE, instance_path=instance) is None, "not taught"
 
     broken = tmp_path / "no-database"
     broken.mkdir()
@@ -2947,7 +2950,13 @@ def test_the_language_catalog_lists_every_taught_language(instance: Path) -> Non
     """The catalog is what a caller checks instead of reading get_progress's None."""
     catalog = store.get_language_catalog(instance_path=instance)
 
-    assert [(entry.code, entry.name) for entry in catalog] == [("fr", "French"), ("es", "Spanish")]
+    assert [(entry.code, entry.name) for entry in catalog] == [
+        ("fr", "French"),
+        ("de", "German"),
+        ("it", "Italian"),
+        ("pt", "Portuguese"),
+        ("es", "Spanish"),
+    ]
 
 
 def test_the_language_catalog_is_empty_and_noisy_when_the_store_is_unreadable(
@@ -3211,7 +3220,7 @@ def test_an_unbindable_language_code_is_separable_from_a_language_we_do_not_teac
     well teach, with every available signal agreeing.
     """
     with caplog.at_level(logging.WARNING):
-        assert store.get_progress("sample-learner", "de", instance_path=instance) is None
+        assert store.get_progress("sample-learner", UNTAUGHT_CODE, instance_path=instance) is None
     assert caplog.text == "", "a language we genuinely do not teach is not a failure"
 
     with caplog.at_level(logging.WARNING):
@@ -3253,8 +3262,8 @@ def test_silence_is_what_separates_a_real_absence_from_every_other_none(
         ("the empty string, too short to be a code", "sample-learner", "", "Could not read a language code"),
         ("padded, which no CHECK forbids and nothing matched", "sample-learner", " es", "Could not read a language code"),
         ("a control character", "sample-learner", "es\x00", "Could not read a language code"),
-        ("a language we really do not teach", "sample-learner", "de", ""),
-        ("a legal-shaped code that is simply absent", "sample-learner", "pt", ""),
+        ("a language we really do not teach", "sample-learner", UNTAUGHT_CODE, ""),
+        ("a legal-shaped code that is simply absent", "sample-learner", UNTAUGHT_CODE_ABSENT, ""),
         ("an unbindable language code", "sample-learner", 10**30, "Could not read a language code"),
         ("an unbindable learner id", 10**30, "es", "Could not read learner progress"),
     ]
@@ -3589,3 +3598,21 @@ def test_no_entry_point_logs_a_fragment_of_a_surrogate_id(
 
     assert "ud800" not in caplog.text and "position" not in caplog.text
     assert "UnicodeEncodeError" in caplog.text, "still diagnosable: the class, not the value"
+
+
+@pytest.mark.parametrize("language_code", ("de", "it", "pt"))
+def test_a_newly_added_language_starts_from_lesson_one(instance: Path, language_code: str) -> None:
+    """A learner who has never touched a new language is offered its first lesson.
+
+    Parametrized over all three siblings rather than spot-checking one: the whole
+    reason this task exists is that three languages arrived together, and checking
+    German alone would say nothing about Italian or Portuguese.
+    """
+    progress = store.get_progress("sample-learner", language_code, instance_path=instance)
+
+    assert progress is not None, "a taught language must never answer the silent None that means 'not taught'"
+    assert progress.completed == ()
+    assert len(progress.remaining) == 6
+    assert progress.next_lesson is not None
+    assert progress.next_lesson.id == f"{language_code}-01-greetings"
+    assert progress.next_lesson.position == 1

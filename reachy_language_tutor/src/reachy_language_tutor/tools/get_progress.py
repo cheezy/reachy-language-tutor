@@ -33,6 +33,13 @@ class GetProgress(Tool):
     # rather than as a limit on what the tool accepts. A test pins it to the seeded
     # catalog so it cannot quietly go stale.
     #
+    # The ORDER is load-bearing too, not just the membership. _benign_args over in
+    # test_tool_identity_boundary.py takes enum[0], and the two probe learners are told
+    # apart by their Spanish and French history -- so a first entry naming a language
+    # NEITHER of them has practised makes both answers identical and quietly turns the
+    # injection test vacuous. Seed order, not alphabetical, and a drift test pins the
+    # sequence rather than the set.
+    #
     # It is also load-bearing for the boundary suite: with no enum, _benign_args
     # synthesises "w11", the tool short-circuits on its not-taught branch, and
     # test_every_learner_tool_is_individually_observable fails rather than silently
@@ -42,7 +49,7 @@ class GetProgress(Tool):
         "properties": {
             "language": {
                 "type": "string",
-                "enum": ["French", "Spanish"],
+                "enum": ["Spanish", "French", "German", "Italian", "Portuguese"],
                 "description": "The language to report progress for, e.g. 'Spanish'.",
             }
         },

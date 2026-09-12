@@ -56,6 +56,15 @@ class RecordResult(Tool):
     # reached_only_validator) and test_every_learner_tool_is_individually_observable
     # (via inert -- the same error for both learners) fail, with no waiver available.
     #
+    # Do NOT derive this list from SEED_LESSONS, tempting though it is -- this module
+    # already imports from reachy_language_tutor.learners. Deriving it would make the
+    # drift test a tautology and delete the only mechanism that notices the model's hint
+    # going stale. The duplication IS the test.
+    #
+    # At ~10 languages this becomes 60 entries and the right move is a different tool
+    # shape: lesson_id as a free string the model copies from get_progress's answer, with
+    # the store as the validator. Truncating the list now would be the worst of both.
+    #
     # Do NOT add a `default` to either property: _benign_args reads `default` before
     # `enum`, and a provider that materialises schema defaults would silently record a
     # lesson nobody named in a real household's database.
@@ -77,6 +86,24 @@ class RecordResult(Tool):
                     "fr-04-ordering-food",
                     "fr-05-directions",
                     "fr-06-daily-routine",
+                    "it-01-greetings",
+                    "it-02-introductions",
+                    "it-03-numbers",
+                    "it-04-ordering-food",
+                    "it-05-directions",
+                    "it-06-daily-routine",
+                    "de-01-greetings",
+                    "de-02-introductions",
+                    "de-03-numbers",
+                    "de-04-ordering-food",
+                    "de-05-directions",
+                    "de-06-daily-routine",
+                    "pt-01-greetings",
+                    "pt-02-introductions",
+                    "pt-03-numbers",
+                    "pt-04-ordering-food",
+                    "pt-05-directions",
+                    "pt-06-daily-routine",
                 ],
                 "description": "The id of the lesson that was just practised, exactly as get_progress reported it.",
             },
