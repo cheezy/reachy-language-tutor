@@ -184,7 +184,92 @@ Only names, emails, and learning progress leave the home. Faceprints stay on eac
 - A clear privacy policy and a way to delete accounts and data.
 - Parental consent if children in these homes will use it.
 
-## 9. Appendix: shared public locations
+## 9. Lesson content: the FSI/DLI public-domain courses
+
+The architecture above says "lesson catalog" and never says what is in it. Milestone 2
+shipped a catalog that is really a *syllabus*: five languages, six lessons each, and for
+each lesson a title and a one-sentence objective of about seventy characters. There is no
+content column. The tutor improvises the entire lesson from that sentence plus five lines
+of teaching style, which means no two runs of the same lesson are alike and nothing
+constrains what a child is actually taught.
+
+**Decision: base lesson content on the Foreign Service Institute and Defense Language
+Institute courses** published at https://www.fsi-language-courses.org/fsi-courses/.
+
+### Why they fit
+
+Their structure is almost exactly what a speaking robot needs. Measured from *Italian
+Headstart, Modules 1-3* (283 pages), one unit is:
+
+1. **Conversazione** - a short dialogue, named speakers, target language only.
+2. **Notes on the conversation** - numbered usage and grammar points, in English.
+3. **Exercises** - typed, and two of the types are directly runnable as speech:
+   *Repetition* (term and gloss, side by side) and a cue-response drill printed as
+   "You hear: morning/Capitano - You say: Buon giorno, Signor Capitano."
+
+That last one is a spoken exchange with a right answer. It is what our tutor is for, and
+it is why these courses are worth the work of ingesting rather than writing lessons from
+scratch.
+
+Coverage is good for our five languages: French (Basic, Fast, Headstart), German (Basic,
+Fast, Headstart, Programmed), Italian (Fast, Headstart, Programmed), Portuguese (Brazilian
+Fast, Programmatic), Spanish (Basic, Fast, Programmatic, three Headstarts).
+
+### Licensing - free, but not uniformly, and it must be checked per course
+
+FSI and DLI materials are works of the US federal government and so carry no copyright in
+the United States (17 U.S.C. 105). The site states plainly: "These courses are in the
+public domain and free to use."
+
+Two exceptions matter and neither is theoretical:
+
+- **Some FSI courses were produced under contract and ARE copyrighted.** Russian and
+  Japanese are the commonly cited examples. Public domain is a property of a particular
+  course, not of the FSI label.
+- **Repackaged and edited editions carry their own copyright** in the derivative work.
+  Take material from the original scans, not from a cleaned-up commercial reissue.
+
+So each course we actually use gets its provenance and rights status recorded before a
+single line of it reaches the database.
+
+### Three measured constraints, all of which shape the work
+
+1. **These are scans, not documents.** *Italian Headstart Modules 1-3* is 277 JBIG2
+   images across 283 pages. There is an OCR text layer and `pdftotext -layout` preserves
+   the two-column drill structure well.
+
+2. **The OCR loses accents, which for a language course is the worst possible failure.**
+   Measured across 101 pages: 93 accented characters survived and 58 were replaced by a
+   stray `~` - roughly four in ten lost. "Il piacere e mio" instead of "Il piacere e' mio"
+   is not a typo in this application, it is teaching a child the wrong word. Also seen:
+   "THE" read as "TUE" (4 times) and list markers "1." read as "l." (19 times). **The OCR
+   layer cannot be bulk-imported.** Either re-OCR at higher quality with an
+   accent-aware engine, or correct per unit against the page image, and in both cases
+   verify against the scan before anything ships.
+
+3. **The content is military and forty years old.** *Italian Headstart* was written by the
+   Defense Language Institute in 1985 for US service personnel. Unit 1's vocabulary is
+   ranks - Generale, Ammiraglio, Colonnello, Sergente - and its dialogue is two naval
+   officers introducing a wife. One note reads: "Women do not serve in the armed forces of
+   Italy, but there are women in the police forces." That was already being overtaken in
+   1985 and Italy opened its armed forces to women in 1999. It is false today, and it is
+   not what these robots should be saying in family homes.
+
+### What follows from that
+
+**Curate, do not import.** The asset is the *structure* and the *method*; the text needs
+correction and the content needs selection. A realistic shape:
+
+- Prove the pipeline on **one** language end to end before touching the other four.
+- Evaluate the diplomatic **Basic/Fast** courses against the military **Headstart** ones
+  for each language - the Headstart series is the most practical and the most military,
+  and that trade-off may resolve differently per language.
+- Keep a provenance record per lesson: course, module, unit, page. It is what makes a
+  correction auditable and a rights question answerable later.
+- The audio (42 files, 15+ hours for Italian Headstart alone) is native-speaker reference.
+  The tutor speaks through realtime TTS and does not need it now. Do not ingest it yet.
+
+## 10. Appendix: shared public locations
 
 If the robots were ever placed in shared settings such as classrooms or libraries, the design would change:
 
@@ -194,9 +279,12 @@ If the robots were ever placed in shared settings such as classrooms or librarie
 - A learner portal would handle enrollment, consent, and a QR code or PIN alternative to face recognition.
 - Canada's privacy commissioners have acted against facial recognition used without meaningful consent (the 2020 Cadillac Fairview mall directory case is the standard example). Face recognition should be opt-in, deletable on request, and hosted in Canada. Consult a privacy lawyer before any public launch.
 
-## 10. Open questions and next steps
+## 11. Open questions and next steps
 
 - Which languages will be offered first, and does the chosen voice backend handle them well?
+- For each language, is the Headstart course or the Basic/Fast course the better source?
+- Re-OCR the scans, or correct the existing text layer unit by unit? Section 9 measures the
+  accent loss that makes this a real decision rather than a detail.
 - Will most homes have one learner or several? This decides whether face recognition is needed.
 - Which LLM provider fits the budget at the expected practice minutes?
 - Next: set up the simulator, build a simple app, then design the database tables and learner tools.
@@ -211,3 +299,4 @@ If the robots were ever placed in shared settings such as classrooms or librarie
 - Adding MCP tools to Reachy Mini: https://huggingface.co/blog/adding-mcp-tools-to-reachy-mini
 - Running conversations locally: https://huggingface.co/blog/local-reachy-mini-conversation
 - Speech-to-speech pipeline: https://github.com/huggingface/speech-to-speech
+- FSI and DLI language courses (public domain): https://www.fsi-language-courses.org/fsi-courses/
