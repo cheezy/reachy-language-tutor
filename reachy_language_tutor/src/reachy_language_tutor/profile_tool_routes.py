@@ -105,11 +105,15 @@ def register_profile_tool_methods(
                 else await asyncio.to_thread(read_profile_default_tool_names, profile_name)
             )
             available_tools = await asyncio.to_thread(available_tool_catalog)
-        except ValueError as exc:
-            raise_tool_settings_error("unknown_profile", str(exc))
-        except Exception as exc:
+        # Same reasoning as personality_routes._load_profile: profile_tools.get is
+        # exposed on the network, so an exception string -- which may quote a
+        # resolved path -- must not become the response.
+        except ValueError:
+            logger.warning("Unknown profile requested for tools: %r", requested_profile)
+            raise_tool_settings_error("unknown_profile", "Unknown personality.")
+        except Exception:
             logger.exception("Failed to read profile tools for %r", requested_profile)
-            raise_tool_settings_error("profile_tools_unavailable", str(exc))
+            raise_tool_settings_error("profile_tools_unavailable", "Could not read the profile's tools.")
         return _profile_tool_payload(
             profile_name,
             known_profile_names,

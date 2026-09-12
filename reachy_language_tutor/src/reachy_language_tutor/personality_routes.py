@@ -9,6 +9,7 @@ from reachy_mini.io.jsonrpc import JsonRpcError
 from reachy_mini.apps.jsonrpc_server import JsonRpcServer
 from reachy_language_tutor.config import (
     LOCKED_PROFILE,
+    ProfileNameError,
     config,
     get_default_voice,
     get_available_voices,
@@ -138,16 +139,30 @@ class PersonalityOps:
         }
 
     def _load_profile(self, name: str, available_tools: list[str]) -> dict[str, Any]:
+        # personalities.load is reachable from the network and ungated on purpose
+        # (D20 classed it a read), so nothing derived from an exception may reach
+        # the caller. profile_store's messages quote the resolved directory, which
+        # turns a failed load into a filesystem existence oracle -- and the
+        # ProfileFormatError branch is the sharper half of it, because a DIFFERENT
+        # message comes back when a profile.md really is there. One fixed string
+        # for both, so neither the path nor the distinction between them escapes.
+        # The detail still reaches the operator's log, which is where it belongs.
         try:
             profile = read_profile(name)
+        except ProfileNameError as exc:
+            # Mapped deliberately rather than left to propagate. The name never named
+            # anything loadable, so "invalid_name" is the honest answer and it is the
+            # same code the save route already returns for the same rule.
+            logger.warning("Rejected a profile name that is not a bare segment")
+            raise RouteError("invalid_name") from exc
         except (FileNotFoundError, ProfileFormatError) as exc:
             logger.warning("Failed to load profile %r: %s", name, exc)
-            raise RouteError("profile_unavailable", message=str(exc)) from exc
+            raise RouteError("profile_unavailable") from exc
         try:
             override = read_profile_tool_override(name, config.INSTANCE_PATH)
         except (OSError, RuntimeError) as exc:
             logger.warning("Failed to load tools for profile %r: %s", name, exc)
-            raise RouteError("profile_tools_unavailable", message=str(exc)) from exc
+            raise RouteError("profile_tools_unavailable") from exc
         enabled_tools = list(override) if override is not None else list(profile.default_tools)
         return {
             "instructions": profile.instructions,

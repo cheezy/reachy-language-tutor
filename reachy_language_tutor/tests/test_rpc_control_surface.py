@@ -14,6 +14,7 @@ put there would never have run. D21 removed that exclusion -- every file is coll
 back beside their subject whenever somebody is editing them anyway.
 """
 
+import re
 from types import SimpleNamespace
 from typing import Any
 from pathlib import Path
@@ -215,3 +216,265 @@ def test_the_robots_mdns_name_is_admitted_so_the_dashboard_is_not_locked_out(
     for name in ("reachy-mini.local:7860", "REACHY-MINI.LOCAL:7860", "robot.local"):
         admitted = _call(app, "conversation.mic", None, {"Host": name, "Origin": f"http://{name}"})
         assert admitted["result"] == {"muted": False}, name
+
+
+# --- D25: a LAN caller cannot walk out of the profiles root -------------------------------
+#
+# personalities.load and personalities.avatar are on the network allow-list and carry NO
+# LOCKED_PROFILE gate, because D20 classed them as reads. Both passed a caller-supplied name
+# into Config.resolve_profile_dir, which joined it onto the profiles root unvalidated. Measured
+# before the fix: a canary profile.md and avatar.svg outside the repository were both read back
+# in full, through an absolute path AND through a ../ traversal, through BOTH sinks.
+
+
+def _canary_outside(tmp_path: Path) -> Path:
+    """Write a profile.md and an avatar.svg somewhere no profile lookup may reach."""
+    outside = tmp_path / "outside_the_root"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "profile.md").write_text(
+        "+++\nschema_version = 1\ndefault_tools = []\n+++\n\nCANARY-D25-PROFILE\n", encoding="utf-8"
+    )
+    (outside / "avatar.svg").write_text("<svg>CANARY-D25-AVATAR</svg>", encoding="utf-8")
+    return outside
+
+
+# The four shapes that reached outside the root before the fix, TWO PER BRANCH of
+# resolve_profile_dir. Both branches matter and the second pair is the one that catches
+# a partial fix: validating only the bare-name branch leaves "user_personalities/<tail>"
+# joining an unvalidated tail, and measured here, that partial fix passes every test in
+# this file that does not carry a user_personalities prefix.
+_ESCAPE_SHAPES = ("absolute", "traversal", "user_personalities_absolute", "user_personalities_traversal")
+
+
+def _escape_name(shape: str, target: Path) -> str:
+    """Build a name that, before the fix, resolved to `target` outside the profiles root."""
+    walk = "../" * 24 + str(target).lstrip("/")
+    return {
+        "absolute": str(target),
+        "traversal": walk,
+        "user_personalities_absolute": f"user_personalities/{target}",
+        "user_personalities_traversal": f"user_personalities/{walk}",
+    }[shape]
+
+
+@pytest.mark.parametrize("shape", _ESCAPE_SHAPES)
+def test_a_lan_caller_cannot_read_a_profile_outside_the_profiles_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """personalities.load must not return a profile.md from anywhere on the device."""
+    app, _ = _stream(tmp_path, monkeypatch)
+    outside = _canary_outside(tmp_path)
+    name = _escape_name(shape, outside)
+
+    answer = _call(app, "personalities.load", {"name": name})
+
+    # The specific refusal, not merely "something went wrong": a load that succeeded and
+    # happened to return empty instructions would pass a looser assertion.
+    assert "result" not in answer, answer
+    assert answer["error"]["message"] == "invalid_name"
+    assert "CANARY-D25-PROFILE" not in str(answer)
+
+
+@pytest.mark.parametrize("shape", _ESCAPE_SHAPES)
+def test_a_lan_caller_cannot_read_an_avatar_outside_the_profiles_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """The second sink. Fixing only the profile read would leave this one open."""
+    app, _ = _stream(tmp_path, monkeypatch)
+    outside = _canary_outside(tmp_path)
+    name = _escape_name(shape, outside)
+
+    answer = _call(app, "personalities.avatar", {"name": name})
+
+    assert "CANARY-D25-AVATAR" not in str(answer)
+
+
+@pytest.mark.parametrize("shape", _ESCAPE_SHAPES)
+def test_the_avatar_route_is_not_a_filesystem_existence_oracle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """avatar_id_for echoed the caller's own name back when the file existed.
+
+    That made it a never-raising boolean probe for "<any directory>/avatar.svg" -- it leaks
+    whether a path exists even when the bytes are withheld, so closing the read alone is not
+    enough. A hostile name must be indistinguishable from one that simply has no avatar.
+    """
+    from reachy_language_tutor.avatars import avatar_id_for
+
+    outside = _canary_outside(tmp_path)
+    hostile = _escape_name(shape, outside)
+
+    # The directory really does contain an avatar.svg, which is what makes this a probe.
+    assert (outside / "avatar.svg").is_file()
+    assert avatar_id_for(hostile) != hostile
+
+
+def test_the_unknown_profile_error_carries_no_filesystem_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """profile_store quotes the resolved directory; that text must not reach the caller.
+
+    The ProfileFormatError branch is the sharper half of the oracle, because a DIFFERENT
+    message came back when a profile.md really was present -- so the two failures must be
+    indistinguishable from outside, not merely path-free.
+    """
+    app, _ = _stream(tmp_path, monkeypatch)
+
+    missing = _call(app, "personalities.load", {"name": "no_such_profile_anywhere"})
+    rendered = str(missing)
+
+    assert "result" not in missing, missing
+    assert missing["error"]["message"] == "profile_unavailable"
+    for leaked in (str(config.PROFILES_DIRECTORY), str(tmp_path), "profile.md", "no_such_profile_anywhere"):
+        assert leaked not in rendered, f"the RPC error leaked {leaked!r}"
+
+    # The sharper half of the oracle: a directory that EXISTS but holds an unparsable
+    # profile.md used to come back with a different message, so the pair of answers told
+    # a caller whether a path was there. Drive that branch too and require the two to be
+    # indistinguishable -- the previous version of this test asserted this in a docstring
+    # and exercised only the not-found path.
+    # Into tmp_path, never the checkout. _stream redirects INSTANCE_PATH only, so
+    # config.PROFILES_DIRECTORY still points at the version-controlled profiles/ directory;
+    # an earlier revision of this test created its probe there, which a crash between the
+    # mkdir and the cleanup would have left behind as a real-looking profile.
+    monkeypatch.setattr(config, "PROFILES_DIRECTORY", tmp_path / "profiles")
+    present = config.PROFILES_DIRECTORY / "d25_unparsable_probe"
+    present.mkdir(parents=True, exist_ok=True)
+    (present / "profile.md").write_text("+++\nthis is not valid toml at all\n", encoding="utf-8")
+    malformed = _call(app, "personalities.load", {"name": "d25_unparsable_probe"})
+
+    assert "result" not in malformed, malformed
+    assert malformed["error"] == missing["error"], "a present-but-broken profile is distinguishable from an absent one"
+
+
+# Every reference to a profiles root outside config.py, frozen. An allow-list, because the
+# previous version of this test matched only `root / name` -- one join FORM -- and a
+# reviewer bypassed it in seconds with .joinpath() and os.path.join(). Counting every
+# mention instead means a new path builder cannot arrive in any spelling without turning
+# this red, whatever syntax it uses. config.py is exempt: it owns the resolver.
+PERMITTED_PROFILE_ROOT_REFERENCES = {
+    "app_lifecycle.py": 1,
+    "personality.py": 7,
+    "profile_store.py": 2,
+    "tool_spaces.py": 3,
+    "tools/core_tools.py": 1,
+}
+
+
+def test_nothing_outside_the_resolver_gains_a_new_profiles_root_reference() -> None:
+    """A fifth path builder must not be able to arrive unnoticed, in any spelling.
+
+    The validation lives inside Config.resolve_profile_dir so every caller inherits it,
+    which only holds while the resolver stays the only place a caller-supplied name meets
+    a profiles root. This does not try to recognise a join -- that is a deny-list, and it
+    was defeated by .joinpath() and os.path.join() when it was written that way. It counts
+    MENTIONS of the roots instead, so any new one fails regardless of syntax.
+
+    A red result is not automatically a defect: it means someone touched a profiles root
+    outside the resolver and a human should decide whether that new reference builds a
+    path from a caller-supplied name. Update the count when the answer is no.
+    """
+    import reachy_language_tutor as package
+
+    source_root = Path(package.__file__).parent
+    # Every spelling config.py exports for these roots, not the two that came to mind.
+    # Measured: with only the first two, a builder written as
+    # `config.INSTANCE_PATH / USER_PERSONALITIES_DIRNAME / n` or as
+    # `TERMINAL_USER_PERSONALITIES_DIRECTORY / n` slipped past -- both live idioms in
+    # config.py itself. Inverting the SYNTAX check was not enough while the list of
+    # root NAMES under it stayed a deny-list.
+    roots = (
+        "PROFILES_DIRECTORY",
+        "DEFAULT_PROFILES_DIRECTORY",
+        "user_personalities_root",
+        "USER_PERSONALITIES_DIRNAME",
+        "TERMINAL_USER_PERSONALITIES_DIRECTORY",
+    )
+    found: dict[str, int] = {}
+    for module in sorted(source_root.rglob("*.py")):
+        if module.name == "config.py":
+            continue
+        hits = sum(
+            1
+            for line in module.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("#") and any(root in line for root in roots)
+        )
+        if hits:
+            found[str(module.relative_to(source_root))] = hits
+
+    assert found == PERMITTED_PROFILE_ROOT_REFERENCES
+
+
+# --- the allow-list, proven on its own terms -----------------------------------------------
+#
+# These names stay INSIDE the profiles root, so the containment guard accepts them and the
+# character allow-list is the only thing that can refuse them. Without a case like this the
+# allow-list is untestable: a reviewer deleted it entirely and the suite stayed green,
+# because every traversal shape was being caught downstream by containment instead.
+INSIDE_THE_ROOT_BUT_NOT_A_BARE_NAME = [
+    # Branch B -- the bare-name else-branch.
+    "my profile",
+    "guide.md",
+    "guide\u0661",
+    "guide!",
+    "",
+    # Branch A -- the user_personalities tail. These were missing, so _permitted_segment(tail)
+    # had no read-path proof at all: the four escape shapes are absorbed by containment, and
+    # the only thing left failing was a WRITE-path test in another file that would silently
+    # unprove this one if it were ever deleted.
+    "user_personalities/my profile",
+    "user_personalities/guide.md",
+    "user_personalities/guide!",
+]
+
+
+@pytest.mark.parametrize("name", INSIDE_THE_ROOT_BUT_NOT_A_BARE_NAME)
+def test_the_character_allow_list_refuses_a_name_containment_would_accept(name: str) -> None:
+    """Pin the allow-list itself, not the guard standing behind it."""
+    from reachy_language_tutor.config import ProfileNameError
+
+    # Precondition: this would land inside the root, so containment is not what refuses it.
+    if name:
+        assert (config.PROFILES_DIRECTORY / name).resolve().is_relative_to(config.PROFILES_DIRECTORY.resolve())
+
+    with pytest.raises(ProfileNameError):
+        config.resolve_profile_dir(name)
+
+
+def test_a_symlink_inside_the_root_cannot_be_read_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The escape the character allow-list cannot see, and why there are two guards.
+
+    A symlink planted inside the profiles root is reached by a name that is entirely
+    legitimate -- "evil" contains nothing a character rule could object to -- so only
+    resolving the path and checking containment catches it. Measured before that check
+    existed: this returned the target's profile.md in full.
+
+    Lower severity than the name-based escape, and worth saying so rather than inflating
+    it: planting the symlink needs local write access to the root, and anyone holding
+    that can read the target directly. Closed as defence in depth, not because it is
+    remotely reachable.
+
+    This test was lost once already -- a careless whole-file rewrite truncated it, and a
+    revert-proof was then reported against a test that no longer existed. That is the
+    reason the suite total is asserted nowhere and each guard is revert-proved by name.
+    """
+    from reachy_language_tutor.config import ProfileNameError
+
+    monkeypatch.setattr(config, "INSTANCE_PATH", tmp_path)
+    outside = _canary_outside(tmp_path)
+    root = config.user_personalities_root()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "evil").symlink_to(outside)
+
+    # The name itself is unimpeachable; it is where it POINTS that is the problem, which
+    # is exactly what the character allow-list cannot detect.
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", "evil")
+
+    with pytest.raises(ProfileNameError):
+        config.resolve_profile_dir("user_personalities/evil")
+
+    # A real directory beside it in the same root still resolves.
+    (root / "guide").mkdir()
+    assert config.resolve_profile_dir("user_personalities/guide") == root / "guide"

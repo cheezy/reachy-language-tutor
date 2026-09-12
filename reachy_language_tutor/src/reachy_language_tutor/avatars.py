@@ -8,7 +8,7 @@ the built-in map, then the default.
 import logging
 from pathlib import Path
 
-from reachy_language_tutor.config import config
+from reachy_language_tutor.config import ProfileNameError, config
 from reachy_language_tutor.profile_store import DEFAULT_PROFILE_NAME, canonical_profile_name
 
 
@@ -46,6 +46,14 @@ def _own_avatar_path(name: str) -> Path | None:
     try:
         candidate = config.resolve_profile_dir(profile_name) / "avatar.svg"
         return candidate if candidate.is_file() else None
+    except ProfileNameError:
+        # None, not an exception, and deliberately the SAME answer this returns
+        # for a valid profile that simply has no avatar. avatar_id_for echoes the
+        # caller's own name back when this is not None, which made it a
+        # never-raising boolean oracle for "<any directory>/avatar.svg" -- so a
+        # distinguishable answer here would leave that oracle open even with the
+        # read closed.
+        return None
     except OSError as exc:
         logger.warning("Failed to inspect avatar for profile %r: %s", profile_name, exc)
         return None

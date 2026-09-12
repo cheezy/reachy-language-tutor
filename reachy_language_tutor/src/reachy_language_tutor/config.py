@@ -45,6 +45,42 @@ def _resolve_default_profiles_directory() -> Path:
 DEFAULT_PROFILES_DIRECTORY = _resolve_default_profiles_directory()
 
 USER_PERSONALITIES_DIRNAME = "user_personalities"
+
+# The complete set of characters a profile name segment may contain.
+#
+# Named as what is PERMITTED, never as what is forbidden. CLAUDE.md records four
+# defects in this repository caused by a deny-list that was only ever as complete
+# as the last person to read it, and a traversal deny-list is the worst case of
+# it: pathlib's ``/`` discards the left operand entirely when the right one is
+# ABSOLUTE, so a rule that strips every ``..`` still hands back ``/etc``. Neither
+# ``..`` nor a separator nor a leading ``/`` is listed below, so all three are
+# refused without anyone having had to think of them.
+#
+# This is deliberately the same rule personality.py already applies when a
+# profile is CREATED, so nothing the write path can name becomes unreadable
+# here. A leading underscore must stay legal: the app's own LOCKED_PROFILE is
+# "_reachy_language_tutor_locked", and a "must start with a letter" rule would
+# refuse to start the app.
+_PERMITTED_PROFILE_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
+
+
+class ProfileNameError(ValueError):
+    """A profile name that is not a bare, single path segment."""
+
+
+def _permitted_segment(segment: str) -> str:
+    """Return the segment unchanged, or raise if it is not a bare name.
+
+    The message never quotes the segment. It arrives from the network -- two
+    /rpc read routes pass request data into resolve_profile_dir and are ungated
+    on purpose because they are reads -- and echoing hostile input back into an
+    error that is rendered elsewhere is a habit worth not having.
+    """
+    if _PERMITTED_PROFILE_SEGMENT.fullmatch(segment) is None:
+        raise ProfileNameError("Profile names may contain only letters, numbers, dashes, and underscores.")
+    return segment
+
+
 TERMINAL_USER_PERSONALITIES_DIRECTORY = Path("external_content") / USER_PERSONALITIES_DIRNAME
 
 # Qwen3-TTS CustomVoice speaker catalog from the deployed Hugging Face backend.
@@ -420,11 +456,47 @@ class Config:
         return self.INSTANCE_PATH / USER_PERSONALITIES_DIRNAME
 
     def resolve_profile_dir(self, profile: str) -> Path:
-        """On-disk directory for a profile selection."""
+        """On-disk directory for a profile selection.
+
+        This is the one function every path-building caller passes through, so the
+        check lives here rather than at any call site: a later caller will not know
+        to repeat it. Deliberately not stating a count -- an earlier revision said
+        "four", and the same change that wrote the sentence added a fifth by routing
+        save_user_personality through here. test_rpc_control_surface.py keeps the
+        real inventory, where it cannot go stale unnoticed.
+
+        BOTH branches validate, and the first is the one an obvious fix misses.
+        ``tail`` is everything after the first ``/``, so ``user_personalities//etc``
+        hands an absolute path to the join and ``user_personalities/../..`` walks
+        out of the root. Measured before this guard existed: a canary profile.md
+        outside the repository was read in full through the second branch by an
+        absolute path AND by a ``../`` traversal, and through the FIRST branch by
+        an absolute tail.
+
+        Raises ProfileNameError, a ValueError, for anything that is not a bare
+        segment. Callers that must not raise catch it and answer in their own
+        vocabulary -- delete_personality returns False, _own_avatar_path returns
+        None -- which also closes the avatar existence oracle.
+        """
         head, _, tail = profile.partition("/")
         if head == USER_PERSONALITIES_DIRNAME and tail:
-            return self.user_personalities_root() / tail
-        return self.PROFILES_DIRECTORY / profile
+            root, candidate = self.user_personalities_root(), self.user_personalities_root() / _permitted_segment(tail)
+        else:
+            root, candidate = self.PROFILES_DIRECTORY, self.PROFILES_DIRECTORY / _permitted_segment(profile)
+        # Second guard, for the escape the first one cannot see. The allow-list closes
+        # names that walk out; a SYMLINK inside the root walks out under a name that is
+        # perfectly valid, and no rule about characters can detect it. Measured: before
+        # this check, user_personalities/<symlink to elsewhere> returned the target's
+        # profile.md in full. delete_personality already had this check; the READ paths
+        # did not, which is the asymmetry this closes.
+        if root.resolve() not in candidate.resolve().parents:
+            # Its own message, because the name-character one would be a FALSE statement
+            # here: this fires on names that are perfectly well formed and simply point
+            # somewhere else. The network caller never sees either text -- _load_profile
+            # maps every ProfileNameError to the bare code "invalid_name" -- so accuracy
+            # costs nothing and the operator log and the gated save route both gain by it.
+            raise ProfileNameError("Profile selections must resolve inside their profiles root.")
+        return candidate
 
 
 config = Config()

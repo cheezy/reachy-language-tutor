@@ -1,6 +1,5 @@
 """Personality profile data layer."""
 
-import re
 import shutil
 import logging
 from typing import Literal, TypedDict
@@ -9,6 +8,7 @@ from collections.abc import Iterable
 
 from reachy_language_tutor.config import (
     USER_PERSONALITIES_DIRNAME,
+    ProfileNameError,
     config,
     get_default_voice,
     list_tool_module_names,
@@ -109,8 +109,26 @@ def available_tool_catalog() -> list[AvailableTool]:
 
 
 def delete_personality(name: str) -> bool:
-    """Delete a user-created personality without touching bundled profiles."""
-    target = config.resolve_profile_dir(name).resolve()
+    """Delete a user-created personality without touching bundled profiles.
+
+    Answers False for a name that is not a bare segment rather than raising:
+    this function's contract is a boolean, and its RPC caller turns False into
+    "not_deletable", which is the right answer for a name that can never name
+    anything deletable.
+
+    The containment check below is still load-bearing, but NOT for the reason an
+    earlier revision of this docstring gave. It claimed the check caught a symlink
+    pointing out of the root; resolve_profile_dir now performs that containment
+    itself, so such a name raises before this function ever inspects the path.
+    What this check actually does is the job the summary line names: a bundled
+    profile resolves perfectly well, and is refused here because the user root is
+    not among its parents. Deleting a shipped personality is not this function's
+    business.
+    """
+    try:
+        target = config.resolve_profile_dir(name).resolve()
+    except ProfileNameError:
+        return False
     user_root = config.user_personalities_root().resolve()
     if user_root not in target.parents:
         return False
@@ -135,13 +153,22 @@ def save_user_personality(
 ) -> str:
     """Save a custom personality with optional authored tool defaults."""
     profile_name = name.strip()
-    if re.fullmatch(r"[a-zA-Z0-9_-]+", profile_name) is None:
-        raise ValueError("Profile names may contain only letters, numbers, dashes, and underscores.")
+    # Name first. The instructions check quotes the name back, and unifying this
+    # function onto resolve_profile_dir moved name validation later, so a hostile
+    # name with empty instructions started getting echoed into an error the save
+    # route returns as message=str(exc). Validating first restores the old order.
+    selection = f"{USER_PERSONALITIES_DIRNAME}/{profile_name}"
+    profile_directory = config.resolve_profile_dir(selection)
     if not instructions.strip():
         raise ValueError(f"Profile {profile_name!r} must have non-empty instructions.")
 
-    profile_directory = config.user_personalities_root() / profile_name
-    selection = f"{USER_PERSONALITIES_DIRNAME}/{profile_name}"
+    # One rule, one place. This used to carry its own copy of the name allow-list
+    # and then join the root itself, which meant the write path and the read path
+    # each had a rule that could drift from the other. Building the directory
+    # through resolve_profile_dir validates the name AND yields the same path the
+    # readers will later resolve for this selection, by construction rather than
+    # by two functions agreeing. ProfileNameError is a ValueError, so the route
+    # above still maps it to "invalid_name".
     selected_voice = voice or get_default_voice()
     authored_tools = tuple(default_tools) if default_tools is not None else None
     with profile_toolsets_transaction():
