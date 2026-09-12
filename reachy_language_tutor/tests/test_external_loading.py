@@ -1,27 +1,30 @@
 import sys
 import json
-import importlib
 import threading
 from types import ModuleType
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from tools_module_graph import reload_tools_package
 
 import reachy_language_tutor.config as config_mod
+from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.profile_store import write_profile
 
 
 def _reload_core_tools() -> ModuleType:
-    """Reload core_tools after config object has been patched."""
-    for module_name in list(sys.modules):
-        if module_name.startswith(
-            ("reachy_language_tutor.tools.", "reachy_language_tutor._external_tools.")
-        ):
-            sys.modules.pop(module_name, None)
+    """Return a fresh core_tools under the patched config, leaving the graph consistent.
 
-    sys.modules.pop("reachy_language_tutor.tools.core_tools", None)
-    core_tools_mod = importlib.import_module("reachy_language_tutor.tools.core_tools")
+    This is the reloader that caused D28. It popped every tools submodule and
+    re-imported, which is fine, and left the parent package's `core_tools` attribute
+    pointing at the module it had just discarded, which is not: every later
+    `from reachy_language_tutor.tools import core_tools` got the dead module, with a
+    different `Tool` base class, and `_load_enabled_tools` then matched nothing and
+    reported it as "the profile declares unknown tools" in whichever test ran next.
+    tools_module_graph carries the full account and does the popping now.
+    """
+    core_tools_mod = reload_tools_package()
     core_tools_mod.initialize_tools()
     return core_tools_mod
 
@@ -247,3 +250,45 @@ def test_tool_registry_reads_wait_for_forced_reload(
     assert "move_head" in spec_names
     assert "sweep_look" not in spec_names
     assert spec_names == set(core_tools_mod.get_tools())
+
+
+# --- D28: the reload must not leave the module graph inconsistent -------------------------
+
+
+def test_the_package_attribute_still_names_the_imported_core_tools() -> None:
+    """The invariant the hand-rolled reloaders broke, stated directly.
+
+    Popping a submodule out of sys.modules does not clear the parent package's
+    attribute for it. CPython's IMPORT_FROM reads that attribute first, so once the
+    two disagree, `from reachy_language_tutor.tools import core_tools` and
+    `importlib.import_module(...)` return different module objects with different
+    `Tool` base classes -- and every `issubclass` check between them is False.
+
+    This is asserted as an identity rather than through a symptom because the symptom
+    surfaces in an unrelated file, as "the profile declares unknown tools".
+    """
+    import sys
+
+    reload_tools_package()
+
+    from reachy_language_tutor.tools import core_tools as by_attribute
+
+    by_sys_modules = sys.modules["reachy_language_tutor.tools.core_tools"]
+    package = sys.modules["reachy_language_tutor.tools"]
+
+    assert by_attribute is by_sys_modules
+    assert package.core_tools is by_sys_modules
+
+
+def test_a_module_scope_import_still_resolves_tools_after_a_reload() -> None:
+    """The consequence a later test file actually meets, with no in-function import.
+
+    `core_tools` here is bound at module scope, which is exactly what the seven
+    defensive in-function imports existed to avoid. If the reloader leaves the graph
+    inconsistent this resolves nothing and blames the profile.
+    """
+    reload_tools_package()
+
+    registry = core_tools._build_tool_registry(core_tools._load_enabled_tools(["get_profile"], []))
+
+    assert sorted(registry) == ["get_profile"]

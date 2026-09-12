@@ -70,20 +70,12 @@ PERMITTED_LEARNER_TOOL_PARAMETERS = {"language", "lesson_id", "outcome"}
 def _core_tools():
     """Import core_tools on every use rather than once at module scope.
 
-    This is load-bearing, not a stylistic preference. test_external_loading.py's
-    ``_reload_core_tools`` pops every ``reachy_language_tutor.tools.*`` module out
-    of ``sys.modules`` and re-imports it WITHOUT restoring it, which builds a second
-    ``Tool`` base class that outlives that file. A name bound at import time would
-    keep pointing at the first one, and the loader -- which filters by
-    ``issubclass`` -- would then resolve nothing at all while reporting it as "the
-    profile declares unknown tools".
-
-    Measured, so nobody deletes this helper on the theory that it is redundant:
-    with a module-scope import here instead, that pair of files fails seven tests.
-    Several other test files carry the same in-function import for the same reason.
-    Fixing the leak at its source is the right repair and is filed separately -- a
-    restoring fixture was tried here and reverted, because it fixed this pair and
-    broke thirteen tests elsewhere in the suite.
+    Still needed, but for a narrower reason than when it was written. D28 fixed
+    test_external_loading.py, which no longer creates a second core_tools. Two files
+    still do: test_tool_space_runtime.py and test_profile_load_resilience.py, whose
+    reloads exist to re-bind monkeypatched dependencies rather than to refresh the
+    registry, so tools_module_graph's in-place reset does not serve them. Until those
+    two are converted, a module-scope binding here can still go stale.
     """
     from reachy_language_tutor.tools import core_tools
 

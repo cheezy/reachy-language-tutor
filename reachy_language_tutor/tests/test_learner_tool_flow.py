@@ -39,12 +39,12 @@ from reachy_language_tutor.tools.core_tools import ToolDependencies
 def _core_tools():
     """Look core_tools up per call rather than binding it at module scope.
 
-    This is load-bearing. test_external_loading.py re-imports the tools package and
-    does not restore it, so a name bound at import time would point at a ``Tool``
-    base class the reloaded modules no longer inherit from -- every dispatch here
-    would then answer "unknown tool" for a reason unrelated to the flow being
-    tested. The leak is NOT fixed at its source; repairing it is filed separately.
-    Do not replace this with a module-scope import.
+    Still needed, but for a narrower reason than when it was written. D28 fixed
+    test_external_loading.py, which no longer creates a second core_tools. Two files
+    still do: test_tool_space_runtime.py and test_profile_load_resilience.py, whose
+    reloads exist to re-bind monkeypatched dependencies rather than to refresh the
+    registry, so tools_module_graph's in-place reset does not serve them. Until those
+    two are converted, a module-scope binding here can still go stale.
     """
     from reachy_language_tutor.tools import core_tools
 
