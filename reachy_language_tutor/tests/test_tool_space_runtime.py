@@ -48,6 +48,22 @@ def _reload_core_tools() -> ModuleType:
     return reload_tools_package()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_tool_registry():
+    """Reset the registry before AND after every test in this file.
+
+    Before, because each case builds its own manifest. After, because this file
+    installs a MagicMock-backed remote tool and, now that the registry is shared
+    rather than rebuilt from a fresh module, leaving it behind would hand that mock
+    to every later file through the module-scope bindings D28 just made possible.
+    The sibling converted in the same change, test_profile_load_resilience.py,
+    already resets on both sides; this file only reset on the way in.
+    """
+    reload_tools_package()
+    yield
+    reload_tools_package()
+
+
 def _installed_search_space() -> InstalledToolSpace:
     return InstalledToolSpace(
         slug=SEARCH_SPACE_SLUG,

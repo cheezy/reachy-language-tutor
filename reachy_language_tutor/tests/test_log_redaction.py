@@ -31,6 +31,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import reachy_language_tutor.huggingface_realtime as hf_mod
+
+# Bound at module scope, which D28 is what made possible. Until test_external_loading.py,
+# test_tool_space_runtime.py and test_profile_load_resilience.py stopped re-importing the
+# tools package, a binding made here went stale the moment one of them ran: the re-import
+# built a second Tool base class and _load_enabled_tools, which filters with issubclass,
+# then matched nothing. See tests/tools_module_graph.py.
 from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.utils import describe_for_log, tool_call_message, describe_json_for_log
 from reachy_language_tutor.console import log_handler_message
@@ -38,13 +44,6 @@ from reachy_language_tutor.streaming import AdditionalOutputs
 from reachy_language_tutor.tools.core_tools import ToolDependencies
 from reachy_language_tutor.huggingface_realtime import HuggingFaceRealtimeHandler
 from reachy_language_tutor.tools.background_tool_manager import ToolState, ToolNotification
-
-
-# Bound at module scope, which D28 is what made possible. Until test_external_loading.py,
-# test_tool_space_runtime.py and test_profile_load_resilience.py stopped re-importing the
-# tools package, a binding made here went stale the moment one of them ran: the re-import
-# built a second Tool base class and _load_enabled_tools, which filters with issubclass,
-# then matched nothing. See tests/tools_module_graph.py.
 
 
 LEARNER_NAME = "Alice Ferreira"

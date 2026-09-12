@@ -244,6 +244,11 @@ def format_table(rows: list[tuple[str, str, str, str, str]]) -> str:
 
 async def run_session(instance: Path, probes: list[Probe]) -> tuple[list[Any], Any, str | None]:
     """Hold the live conversation and return (turns, deps, vacuity reason)."""
+    # Imported here rather than at module scope, and NOT for the reason D28 is about.
+    # This module is a standalone runner, not a collected test: the import is deferred so
+    # that --dry-run and --help cost nothing and do not touch the tool registry. The
+    # D28 module-graph trap does not apply, because nothing re-imports the tools package
+    # any more -- see tests/tools_module_graph.py.
     from reachy_language_tutor.tools import core_tools
 
     core_tools.initialize_tools(instance_path=instance, force=True)
