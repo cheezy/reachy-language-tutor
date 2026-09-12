@@ -299,6 +299,7 @@ Everything above describes the data. This is how the application reaches it.
 ```python
 from reachy_language_tutor.learners import (
     get_language_catalog,
+    get_lesson,
     get_profile,
     get_practised_languages,
     get_progress,
@@ -316,6 +317,7 @@ are SQLite's business, and a hosted backend would have no equivalent.
 | `get_profile(learner_id, *, instance_path=None)` | `LearnerProfile \| None` | `None` = no such learner, **or** the store is unreadable, **or** the learner id was refused |
 | `get_practised_languages(learner_id, *, instance_path=None)` | `tuple[PractisedLanguage, ...]` | `()` = nothing practised, **or** every attempt was `skipped`, **or** the store is unreadable, **or** the learner id was refused |
 | `get_language_catalog(*, instance_path=None)` | `tuple[CatalogLanguage, ...]` | `()` = the store is unreadable, **or** the catalog holds no rows — both mean a caller must not say which languages are taught |
+| `get_lesson(lesson_id, *, instance_path=None)` | `Lesson \| None` | `None` = no such lesson, **or** the store is unreadable, **or** the id was refused. Carries `language_code`, so a caller holding a lesson id finds its language in one read |
 | `get_progress(learner_id, language_code, *, instance_path=None)` | `LanguageProgress \| None` | `None` = that language is not taught, **or** the store is unreadable, **or** either argument was refused |
 | `record_result(learner_id, lesson_id, outcome, *, score=None, recorded_at=None, instance_path=None)` | `RecordResultOutcome` | never raises; see the reason codes below |
 | `store_is_available(instance_path=None)` | `bool` | `False` = the store could not be read, **or** `instance_path` itself was refused. It binds no caller value into SQL, so it is **not** a test of whether a *learner id or language code* was refused |

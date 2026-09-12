@@ -2860,6 +2860,7 @@ def test_package_exports_only_the_interface() -> None:
         "RECORD_REASONS",
         "RecordResultOutcome",
         "get_language_catalog",
+        "get_lesson",
         "get_practised_languages",
         "get_profile",
         "get_progress",
@@ -2883,6 +2884,63 @@ def test_the_documented_import_block_lists_every_exported_function() -> None:
 
     exported_functions = {name for name in learners.__all__ if not name[0].isupper()}
     assert documented == exported_functions
+
+
+def test_a_lesson_can_be_looked_up_by_id(instance: Path) -> None:
+    """One read, so a caller holding a lesson id need not scan every language."""
+    lesson = store.get_lesson("es-03-numbers", instance_path=instance)
+
+    assert lesson is not None
+    assert lesson.language_code == "es"
+    assert lesson.position == 3
+
+
+def test_an_unknown_lesson_id_is_none(instance: Path) -> None:
+    """No such lesson is an answer, not a failure."""
+    assert store.get_lesson("es-99-nonexistent", instance_path=instance) is None
+
+
+@pytest.mark.parametrize(
+    "lesson_id",
+    [None, 7, b"es-03-numbers", "", ["es-03-numbers"], " es-03-numbers", "es-03-numbers ", "es-03\nnumbers"],
+)
+def test_an_unusable_lesson_id_is_refused_rather_than_bound(
+    instance: Path, lesson_id: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Values the database would ACCEPT as a binding but that can never match.
+
+    The same class store.get_progress refuses for a catalog code: bound cleanly,
+    matched nothing, and came back as a silent absence.
+
+    Asserting the LOG, not only the None, is what gives this teeth: an UNGUARDED
+    get_lesson returns None for every one of these too, by binding and missing, so a
+    bare `is None` cannot tell "refused" from "matched nothing" -- which is the exact
+    distinction this test's name claims. Delete the guard and this fails.
+    """
+    with caplog.at_level(logging.WARNING):
+        assert store.get_lesson(lesson_id, instance_path=instance) is None
+
+    assert "Could not read a lesson id" in caplog.text
+
+
+def test_an_unreadable_store_makes_a_lesson_lookup_empty_and_noisy(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Breakage logs; a genuine absence does not."""
+    with caplog.at_level(logging.WARNING):
+        assert store.get_lesson("es-03-numbers", instance_path=tmp_path / "nonexistent") is None
+
+    # The colon matters: "Could not read a lesson" is a prefix of BOTH this message and
+    # the argument guard's, so without it a guard that started firing on valid input
+    # would pass this test. One prefix per meaning, asserted as one prefix per meaning.
+    assert "Could not read a lesson:" in caplog.text
+    assert "Could not read a lesson id" not in caplog.text
+
+
+def test_the_lesson_lookup_query_names_no_personal_table() -> None:
+    """Shared reference data, so it is correctly absent from the learner-scoped set."""
+    assert _personal(store._LESSON_BY_ID_SQL) is False
+    assert store._LESSON_BY_ID_SQL not in store._LEARNER_SCOPED_SQL
 
 
 def test_the_language_catalog_lists_every_taught_language(instance: Path) -> None:

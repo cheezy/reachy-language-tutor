@@ -1224,6 +1224,7 @@ _LESSONS_SQL = (
     "SELECT id, language_code, position, title, objective FROM lessons WHERE language_code = ? ORDER BY position"
 )
 _LESSON_EXISTS_SQL = "SELECT 1 FROM lessons WHERE id = ? LIMIT 1"
+_LESSON_BY_ID_SQL = "SELECT id, language_code, position, title, objective FROM lessons WHERE id = ?"
 # Not a question about any learner: it asks whether the store can be read at all, so
 # the cheapest catalog row is enough and there is nothing here to scope.
 _STORE_READABLE_SQL = "SELECT 1 FROM languages LIMIT 1"
@@ -1365,6 +1366,47 @@ def get_practised_languages(
         # Never the learner id: these are personal data and this is a log line.
         logger.warning("Could not read a learner's practised languages: %s", _log_safe(exc))
         return ()
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def get_lesson(lesson_id: str, *, instance_path: str | Path | None = None) -> Lesson | None:
+    """Return one lesson from the catalog, or None if there is no such lesson.
+
+    Takes no learner: a lesson is shared reference data, the same for everyone.
+
+    Exists so a caller holding a lesson id can find the language it belongs to in one
+    read, rather than walking every taught language and asking for progress in each --
+    a scan that grows with the catalog and that a caller in the conversation path
+    should not be paying for.
+
+    None means no such lesson, OR the store could not be read; an unreadable store logs
+    first, keeping the one-prefix-per-meaning rule the other readers follow.
+    """
+    # A lesson id is not a catalog code -- it is 13+ characters and carries a language
+    # prefix, so _cannot_be_a_catalog_code's 2-to-8 length rule is the wrong guard here.
+    # What matters is the same class it protects against: a value the database ACCEPTS
+    # as a binding but that can never match, which comes back as a silent "no such
+    # lesson" indistinguishable from a genuine absence.
+    #
+    # So close that class, not the two spellings that are easiest to name. Padding and
+    # control characters bind cleanly and match nothing, exactly as a bad type does.
+    if not isinstance(lesson_id, str) or not lesson_id:
+        logger.warning("Could not read a lesson id: it was not a usable string")
+        return None
+    if lesson_id != lesson_id.strip() or any(ch.isspace() or ord(ch) < 0x20 for ch in lesson_id):
+        logger.warning("Could not read a lesson id: it carried padding or a control character")
+        return None
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        row = connection.execute(_LESSON_BY_ID_SQL, (lesson_id,)).fetchone()
+        return None if row is None else _lesson_from_row(row)
+    except _READER_ABSORBS as exc:
+        logger.warning("Could not read a lesson: %s", _log_safe(exc))
+        return None
     finally:
         if connection is not None:
             connection.close()

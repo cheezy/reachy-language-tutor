@@ -11,6 +11,7 @@ path, discovers learner-reading tools rather than naming them, and is the guard 
 actually holds the boundary.
 """
 
+import ast
 import inspect
 import logging
 import sqlite3
@@ -146,16 +147,24 @@ def test_the_tool_accepts_no_named_parameter_beyond_its_dependencies() -> None:
 
 
 def test_the_tool_module_never_reads_an_identity_from_kwargs() -> None:
-    """A weak backstop, kept deliberately and worth being honest about.
+    """Permit no mention of kwargs at all, since this tool declares no parameters.
 
-    This catches the two obvious spellings and nothing else -- not `kwargs.pop`, not
-    `dict(kwargs)`, not `locals()`, not `**kwargs` forwarded into a store call. The
-    test that actually holds the boundary is the behavioural one above, which passes
-    a housemate's id and asserts their data does not come back.
+    Was a substring check for "kwargs.get" and "kwargs[", which caught two spellings
+    and nothing else -- `kwargs.pop`, `dict(kwargs)`, an alias, or `**kwargs` forwarded
+    into a store call all passed it while reading an identity. W9 swept the family:
+    the sibling guards in test_get_progress.py and test_record_result.py permit one
+    access SHAPE, and this one permits none, which is the strongest form available
+    to a tool that reads nothing.
+
+    The bound, stated rather than overclaimed: this reads the module's SYNTAX, so a
+    string-mediated dynamic read (locals()["kwargs"], eval) is not an ast.Name mention
+    and would pass. The behavioural test above -- which passes a housemate's id and
+    asserts their data does not come back -- is what holds the boundary for real.
     """
-    text = Path(module.__file__).read_text(encoding="utf-8")
-    assert "kwargs.get" not in text, "get_profile must not read anything out of kwargs"
-    assert "kwargs[" not in text, "get_profile must not read anything out of kwargs"
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    mentions = [node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == "kwargs"]
+
+    assert mentions == [], "get_profile declares no parameters, so it must not read anything out of kwargs"
 
 
 # --- Failure modes return an error dict, never an exception ----------------------------

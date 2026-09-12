@@ -6,6 +6,7 @@ needs, and it is what a future hosted backend has to provide.
 """
 
 from reachy_language_tutor.learners.store import (
+    get_lesson,
     get_profile,
     get_progress,
     record_result,
@@ -37,6 +38,7 @@ __all__ = [
     "RECORD_REASONS",
     "RecordResultOutcome",
     "get_language_catalog",
+    "get_lesson",
     "get_practised_languages",
     "get_profile",
     "get_progress",
