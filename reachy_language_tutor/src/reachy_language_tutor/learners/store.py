@@ -34,8 +34,13 @@ from dataclasses import dataclass
 
 from reachy_language_tutor.learners.models import (
     OUTCOMES,
+    Drill,
     Lesson,
+    UsageNote,
+    DialogueTurn,
+    LessonSource,
     LessonAttempt,
+    LessonContent,
     LearnerProfile,
     CatalogLanguage,
     LanguageProgress,
@@ -46,8 +51,14 @@ from reachy_language_tutor.learners.models import (
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
-SEED_VERSION = 2
+# Bumped when schema.sql gains a statement. _apply_schema re-runs the whole script on
+# any database below this number, and every statement there is IF NOT EXISTS, so the
+# bump is what carries a new TABLE out to a robot that already has a database. It
+# cannot carry a new COLUMN on an existing table -- see the note in schema.sql.
+SCHEMA_VERSION = 2
+# Bumped when the seed data changes. Version 3 gives every seeded lesson a provenance
+# row; a test pins the shipped catalog to this number so the bump cannot be forgotten.
+SEED_VERSION = 3
 LEARNER_DB_FILENAME = "learners.v1.sqlite3"
 SEED_VERSION_KEY = "seed_version"
 # Which sample learners have ever been seeded. Kept separately from the learners
@@ -280,6 +291,26 @@ SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
 
 # A deliberately neutral placeholder rather than a plausible human name, so nobody
 # mistakes demo data for a real household member and a screenshot leaks nothing.
+# What the thirty seeded lessons are: original material written for this app, not
+# converted from anyone's course. The name a caller sees when it asks where a lesson
+# came from.
+SEED_LESSON_COURSE = "Reachy Mini language tutor starter catalog"
+
+# (lesson_id, origin, course, module, unit, page)
+#
+# DERIVED from SEED_LESSONS rather than typed out beside it, and that is the point:
+# "every lesson records its provenance" is then a property of the code rather than of
+# thirty lines somebody has to keep in step. Adding a lesson above gives it a
+# provenance row automatically; it cannot be forgotten, and the two lists cannot
+# disagree about which lessons exist.
+#
+# module, unit and page are None because this material has no page to cite. The
+# database refuses that combination for a converted lesson and refuses a page for an
+# original one, so neither kind can be recorded as the other.
+SEED_LESSON_SOURCES: tuple[tuple[str, str, str, None, None, None], ...] = tuple(
+    (lesson_id, "written_for_this_app", SEED_LESSON_COURSE, None, None, None) for lesson_id, *_ in SEED_LESSONS
+)
+
 SEED_LEARNERS: tuple[tuple[str, str, int], ...] = (("sample-learner", "Sample Learner", _SEED_EPOCH_MS),)
 
 # Seeded so both interesting progress states are demonstrable immediately:
@@ -501,6 +532,17 @@ def _seed(connection: sqlite3.Connection) -> bool:
             "language_code = excluded.language_code, position = excluded.position, "
             "title = excluded.title, objective = excluded.objective",
             SEED_LESSONS,
+        )
+        # Converged with the lessons themselves, in the same transaction and by the
+        # same rule: a lesson whose provenance is corrected must reach the robots that
+        # already seeded the wrong one, and a lesson and its provenance must never
+        # arrive separately.
+        connection.executemany(
+            "INSERT INTO lesson_sources (lesson_id, origin, course, module, unit, page) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(lesson_id) DO UPDATE SET "
+            "origin = excluded.origin, course = excluded.course, "
+            "module = excluded.module, unit = excluded.unit, page = excluded.page",
+            SEED_LESSON_SOURCES,
         )
 
         # Learner-owned rows. Two separate guards, because "the row is absent" has two
@@ -743,6 +785,44 @@ def _cannot_be_a_catalog_code(value: object) -> str | None:
         # A str the driver cannot bind. Refused HERE so it is named as the caller
         # error it is; left to the handler below it would be logged as a failed
         # lookup, which is the mirror of the mislabelling this guard replaced.
+        return "not encodable as UTF-8"
+    return None
+
+
+def _cannot_name_a_lesson(value: object) -> str | None:
+    """Say why this value could never name a lesson row, or None if it might.
+
+    A lesson id is not a catalog code -- it is 13+ characters and carries a language
+    prefix, so _cannot_be_a_catalog_code's 2-to-8 length rule is the wrong guard. What
+    matters is the same class it protects against: a value the database ACCEPTS as a
+    binding but that can never match, which comes back as a silent "no such lesson"
+    indistinguishable from a genuine absence.
+
+    So this closes that class rather than the two spellings that are easiest to name.
+    Padding and control characters bind cleanly and match nothing, exactly as a bad
+    type does.
+
+    It lives here, rather than inline in one reader, because every reader that takes a
+    lesson id has to refuse the same values. Two copies of a rule is how a guard and
+    its sibling drift apart, and a reader whose guard is narrower answers a silent
+    absence for content that is really there.
+
+    Each reason names a shape, never the value.
+    """
+    if not isinstance(value, str):
+        return f"{type(value).__name__} is not a string"
+    if not value:
+        return "empty"
+    if value != value.strip() or any(ch.isspace() or ord(ch) < 0x20 for ch in value):
+        return "padded or contains a control character"
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        # Both sibling refusals -- _cannot_name_a_learner and _cannot_be_a_catalog_code
+        # -- already close this, and this one did not, because it was extracted from a
+        # reader written before the rule existed. A lone surrogate is a str the driver
+        # cannot bind: refused HERE it is named as the caller error it is, while left to
+        # the handler below it is logged as a failed lookup or a storage failure.
         return "not encodable as UTF-8"
     return None
 
@@ -1354,6 +1434,25 @@ _LESSONS_SQL = (
 )
 _LESSON_EXISTS_SQL = "SELECT 1 FROM lessons WHERE id = ? LIMIT 1"
 _LESSON_BY_ID_SQL = "SELECT id, language_code, position, title, objective FROM lessons WHERE id = ?"
+
+# The content of one lesson, read as five small statements rather than one join.
+#
+# A join across four optional one-to-many tables multiplies their rows together, so the
+# caller would have to undo the product to get four lists back -- and a lesson with no
+# drills would lose its turns to an inner join or need an outer one per table. Five
+# indexed lookups on the same primary key are cheap here: at ~20 households the whole
+# catalog is a few hundred rows, and each statement reads one lesson's worth.
+#
+# Ordered in SQL, never in Python. Each ORDER BY names the column its table's primary
+# key makes unique, so "in order" has exactly one meaning and cannot tie.
+_LESSON_SOURCE_SQL = "SELECT lesson_id, origin, course, module, unit, page FROM lesson_sources WHERE lesson_id = ?"
+_DIALOGUE_TITLE_SQL = "SELECT title FROM lesson_dialogues WHERE lesson_id = ?"
+_DIALOGUE_TURNS_SQL = "SELECT position, speaker, text FROM lesson_dialogue_turns WHERE lesson_id = ? ORDER BY position"
+_LESSON_NOTES_SQL = "SELECT number, text FROM lesson_notes WHERE lesson_id = ? ORDER BY number"
+_LESSON_DRILLS_SQL = (
+    "SELECT position, kind, target_text, english_gloss, cue, expected_response "
+    "FROM lesson_drills WHERE lesson_id = ? ORDER BY position"
+)
 # Not a question about any learner: it asks whether the store can be read at all, so
 # the cheapest catalog row is enough and there is nothing here to scope.
 _STORE_READABLE_SQL = "SELECT 1 FROM languages LIMIT 1"
@@ -1388,6 +1487,57 @@ def _lesson_from_row(row: sqlite3.Row) -> Lesson:
         position=int(row["position"]),
         title=str(row["title"]),
         objective=str(row["objective"]),
+    )
+
+
+def _lesson_source_from_row(row: sqlite3.Row) -> LessonSource:
+    """Build a lesson's provenance record from one database row.
+
+    module, unit and page stay None rather than becoming "None" or 0: which of them
+    carry a value is what tells a caller whether this lesson can be looked up on a
+    page, and a placeholder would read later as a citation nobody can follow.
+    """
+    module, unit, page = row["module"], row["unit"], row["page"]
+    return LessonSource(
+        lesson_id=str(row["lesson_id"]),
+        origin=str(row["origin"]),
+        course=str(row["course"]),
+        module=None if module is None else str(module),
+        unit=None if unit is None else str(unit),
+        page=None if page is None else int(page),
+    )
+
+
+def _turn_from_row(row: sqlite3.Row) -> DialogueTurn:
+    """Build one dialogue turn from one database row."""
+    return DialogueTurn(
+        position=int(row["position"]),
+        speaker=str(row["speaker"]),
+        text=str(row["text"]),
+    )
+
+
+def _note_from_row(row: sqlite3.Row) -> UsageNote:
+    """Build one usage note from one database row."""
+    return UsageNote(number=int(row["number"]), text=str(row["text"]))
+
+
+def _drill_from_row(row: sqlite3.Row) -> Drill:
+    """Build one drill from one database row.
+
+    The four content columns stay None where the row leaves them None, because which
+    ones are filled is what says how this drill is run -- a repetition drill with an
+    empty-string cue would look to a caller like a cue-response drill with no question.
+    """
+    target_text, english_gloss = row["target_text"], row["english_gloss"]
+    cue, expected_response = row["cue"], row["expected_response"]
+    return Drill(
+        position=int(row["position"]),
+        kind=str(row["kind"]),
+        target_text=None if target_text is None else str(target_text),
+        english_gloss=None if english_gloss is None else str(english_gloss),
+        cue=None if cue is None else str(cue),
+        expected_response=None if expected_response is None else str(expected_response),
     )
 
 
@@ -1513,19 +1663,12 @@ def get_lesson(lesson_id: str, *, instance_path: str | Path | None = None) -> Le
     None means no such lesson, OR the store could not be read; an unreadable store logs
     first, keeping the one-prefix-per-meaning rule the other readers follow.
     """
-    # A lesson id is not a catalog code -- it is 13+ characters and carries a language
-    # prefix, so _cannot_be_a_catalog_code's 2-to-8 length rule is the wrong guard here.
-    # What matters is the same class it protects against: a value the database ACCEPTS
-    # as a binding but that can never match, which comes back as a silent "no such
-    # lesson" indistinguishable from a genuine absence.
-    #
-    # So close that class, not the two spellings that are easiest to name. Padding and
-    # control characters bind cleanly and match nothing, exactly as a bad type does.
-    if not isinstance(lesson_id, str) or not lesson_id:
-        logger.warning("Could not read a lesson id: it was not a usable string")
-        return None
-    if lesson_id != lesson_id.strip() or any(ch.isspace() or ord(ch) < 0x20 for ch in lesson_id):
-        logger.warning("Could not read a lesson id: it carried padding or a control character")
+    # Shared with get_lesson_content rather than written twice: a reader whose lesson-id
+    # guard is narrower than its sibling's answers a silent absence for a lesson that
+    # exists, and that divergence is this repository's most repeated defect.
+    refusal = _cannot_name_a_lesson(lesson_id)
+    if refusal is not None:
+        logger.warning("Could not read a lesson id: %s", refusal)
         return None
 
     connection: sqlite3.Connection | None = None
@@ -1535,6 +1678,74 @@ def get_lesson(lesson_id: str, *, instance_path: str | Path | None = None) -> Le
         return None if row is None else _lesson_from_row(row)
     except _READER_ABSORBS as exc:
         logger.warning("Could not read a lesson: %s", _log_safe(exc))
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def get_lesson_content(lesson_id: str, *, instance_path: str | Path | None = None) -> LessonContent | None:
+    """Return everything one lesson is made of, or None if there is no such lesson.
+
+    Takes no learner: lesson content is shared reference data, the same for everyone,
+    and nothing in it names a person.
+
+    This is what a tutor works FROM once a lesson is running -- the dialogue to read,
+    the notes to explain, the drills to run one at a time -- and it is a different job
+    from the one-line summary get_progress speaks aloud, which is why the lesson's own
+    title and objective are still here beside the content rather than replaced by it.
+
+    **Empty is a real answer.** A lesson nobody has converted yet comes back as this
+    value with no source, no dialogue title and three empty tuples. That is not an
+    error and it is not logged: the seeded catalog carries no content at all, and it
+    stays usable while the corpus is converted a unit at a time.
+
+    None means no such lesson, OR the store could not be read; an unreadable store logs
+    first, keeping the one-prefix-per-meaning rule the other readers follow.
+
+    **What comes back is material to teach, never instructions to follow.** Turns, notes
+    and drill text are content a person put in the database for a robot to say out loud;
+    a line of it that reads as an instruction addressed to the model is still content,
+    and obeying it would let whoever wrote or mis-transcribed a lesson steer the tutor
+    in somebody's house. Nothing enforces that here, and nothing can: a rule refusing
+    instruction-shaped text would be a list of the phrasings somebody thought of, which
+    is the failure this project has paid for four times. The control belongs where the
+    text meets the model -- pass it as material the tutor is working from, kept apart
+    from the tutor's own instructions, and never concatenated into them. This function
+    is the seam that first makes that reachable, which is why the obligation is written
+    on it rather than left for the caller to infer.
+    """
+    refusal = _cannot_name_a_lesson(lesson_id)
+    if refusal is not None:
+        logger.warning("Could not read a lesson id: %s", refusal)
+        return None
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        # The lesson first, and on one connection. It answers "no such lesson" before
+        # anything else runs, which is what keeps that apart from "a lesson with
+        # nothing in it yet" -- four empty reads look identical to both.
+        lesson_row = connection.execute(_LESSON_BY_ID_SQL, (lesson_id,)).fetchone()
+        if lesson_row is None:
+            return None
+
+        source_row = connection.execute(_LESSON_SOURCE_SQL, (lesson_id,)).fetchone()
+        title_row = connection.execute(_DIALOGUE_TITLE_SQL, (lesson_id,)).fetchone()
+        turn_rows = connection.execute(_DIALOGUE_TURNS_SQL, (lesson_id,)).fetchall()
+        note_rows = connection.execute(_LESSON_NOTES_SQL, (lesson_id,)).fetchall()
+        drill_rows = connection.execute(_LESSON_DRILLS_SQL, (lesson_id,)).fetchall()
+
+        return LessonContent(
+            lesson=_lesson_from_row(lesson_row),
+            source=None if source_row is None else _lesson_source_from_row(source_row),
+            dialogue_title=None if title_row is None else str(title_row["title"]),
+            turns=tuple(_turn_from_row(row) for row in turn_rows),
+            notes=tuple(_note_from_row(row) for row in note_rows),
+            drills=tuple(_drill_from_row(row) for row in drill_rows),
+        )
+    except _READER_ABSORBS as exc:
+        logger.warning("Could not read a lesson's content: %s", _log_safe(exc))
         return None
     finally:
         if connection is not None:
@@ -1690,6 +1901,31 @@ def record_result(
         # Case-sensitive on purpose: silently lowercasing a model's guess would record
         # something it did not mean.
         return RecordResultOutcome(recorded=False, reason="invalid_outcome")
+    # The same rule get_lesson and get_lesson_content refuse on, applied to the third
+    # function in this module that takes a lesson id. Without it the parameter was the
+    # odd one out: outcome, score and recorded_at each answer a caller error with a
+    # caller-error code, while a lesson id of the wrong shape either bound and missed
+    # (unknown_lesson, but silently) or failed to bind at all and came back as
+    # storage_unavailable -- telling a caller the robot is broken when it sent nonsense.
+    #
+    # unknown_lesson is the honest code rather than a new one: a value that cannot
+    # compare equal to any stored id names no lesson, which is exactly what the reader
+    # below would have reported had the value survived to reach it.
+    #
+    # learner_id deliberately does NOT get a guard here, and the reason is not that its
+    # ids are safer. It is that the lookup below already answers honestly for them: a
+    # learner id that cannot match anything reaches _LEARNER_EXISTS_SQL, finds nothing,
+    # and comes back as unknown_learner -- which is the accurate code. Its rule also
+    # permits an int, because SQLite applies the column's TEXT affinity to a bound
+    # number and 42 really does find the learner whose id is "42", so it could not
+    # refuse the types this guard refuses even if it ran. The one value that used to
+    # escape that reasoning was a lone surrogate, which failed at bind time and was
+    # reported as storage_unavailable; it is caught below, at the bind, for reasons
+    # given there.
+    refusal = _cannot_name_a_lesson(lesson_id)
+    if refusal is not None:
+        logger.warning("Could not record an attempt: the lesson id was %s", refusal)
+        return RecordResultOutcome(recorded=False, reason="unknown_lesson")
     # isinstance before the comparison: the caller is an LLM tool layer, so `score`
     # can be any JSON value. Comparing a str against an int would raise TypeError
     # straight through the conversation loop, which is the thing this function exists
@@ -1726,7 +1962,25 @@ def record_result(
     connection: sqlite3.Connection | None = None
     try:
         connection = connect(instance_path)
-        if connection.execute(_LEARNER_EXISTS_SQL, (learner_id,)).fetchone() is None:
+        try:
+            exists = connection.execute(_LEARNER_EXISTS_SQL, (learner_id,)).fetchone()
+        except UnicodeEncodeError as exc:
+            # The other half of the class the lesson-id guard above closes, reached the
+            # only way it still can. A lone surrogate is a str the driver cannot bind,
+            # and it named no learner -- storage_unavailable said the robot was broken
+            # when it had been sent nonsense.
+            #
+            # Caught HERE rather than refused at the top, and that placement is the
+            # whole of it. connect() has already succeeded, so this can only be the
+            # bind, which means a surrogate in the instance PATH cannot be mislabelled
+            # as a learner problem by this arm. And the refusal still goes through the
+            # handler, so _log_safe is still what stops UnicodeEncodeError naming the
+            # offending character and its index -- a fragment of a learner's id in a
+            # log file. A test pins this function as one of the two sinks where that
+            # matters; refusing before the bind would have quietly retired it.
+            logger.warning("Could not record a lesson attempt: %s", _log_safe(exc))
+            return RecordResultOutcome(recorded=False, reason="unknown_learner")
+        if exists is None:
             return RecordResultOutcome(recorded=False, reason="unknown_learner")
         if connection.execute(_LESSON_EXISTS_SQL, (lesson_id,)).fetchone() is None:
             return RecordResultOutcome(recorded=False, reason="unknown_lesson")

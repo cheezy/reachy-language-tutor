@@ -2853,6 +2853,14 @@ def test_learner_id_is_the_first_argument() -> None:
 def test_package_exports_only_the_interface() -> None:
     """The package boundary must not leak the storage engine."""
     assert set(learners.__all__) == {
+        "DRILL_KINDS",
+        "DialogueTurn",
+        "Drill",
+        "LESSON_ORIGINS",
+        "LessonContent",
+        "LessonSource",
+        "UsageNote",
+        "get_lesson_content",
         "CatalogLanguage",
         "LanguageProgress",
         "LearnerProfile",
@@ -3481,19 +3489,27 @@ def test_a_number_is_still_looked_up_because_sqlite_can_compare_it(instance: Pat
 def test_every_entry_point_answers_rather_than_raises_for_a_bad_instance_path(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Fifteen combinations that used to raise TypeError, including the two this task
-    does not otherwise touch.
+    """Twenty-four combinations that used to raise TypeError: seven readers, three values
+    each, plus record_result's own three below.
 
-    The fix is one guard in learner_db_path_for_instance, which all five entry points
-    reach through connect, raising ValueError rather than TypeError -- ValueError is
+    The fix is one guard in learner_db_path_for_instance, which every entry point
+    reaches through connect, raising ValueError rather than TypeError -- ValueError is
     already in every one of their handlers, so each answers with its own contract
-    value. Fixing three of five here would have left the interface less predictable
-    than it was.
+    value. Fixing some of them would have left the interface less predictable than it
+    was, which is also why the list below is now every reader that takes an
+    instance_path rather than the four a past task happened to be looking at.
     """
+    # Every reader that takes an instance_path, not the subset a past task happened to
+    # touch: get_lesson and get_language_catalog were missing from this list since it
+    # was written, and get_lesson_content would have been the third. A sweep that
+    # covers four of seven entry points reports on four of seven.
     entry_points = [
         ("get_profile", lambda p: store.get_profile("a", instance_path=p), None),
         ("get_practised_languages", lambda p: store.get_practised_languages("a", instance_path=p), ()),
         ("get_progress", lambda p: store.get_progress("a", "es", instance_path=p), None),
+        ("get_lesson", lambda p: store.get_lesson("es-01-greetings", instance_path=p), None),
+        ("get_lesson_content", lambda p: store.get_lesson_content("es-01-greetings", instance_path=p), None),
+        ("get_language_catalog", lambda p: store.get_language_catalog(instance_path=p), ()),
         ("store_is_available", lambda p: store.store_is_available(p), False),
     ]
 
@@ -3559,6 +3575,9 @@ def test_no_entry_point_raises_when_the_home_directory_cannot_be_found(
         assert store.get_profile("sample-learner") is None
         assert store.get_practised_languages("sample-learner") == ()
         assert store.get_progress("sample-learner", "es") is None
+        assert store.get_lesson("es-01-greetings") is None
+        assert store.get_lesson_content("es-01-greetings") is None
+        assert store.get_language_catalog() == ()
         assert store.store_is_available() is False
         assert store.record_result("sample-learner", "es-01-greetings", "completed").recorded is False
 

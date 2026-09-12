@@ -28,6 +28,23 @@ RECORD_REASONS: tuple[str, ...] = (
     "storage_unavailable",
 )
 
+# The only kinds of drill a lesson may carry, and what each one is for:
+#
+#   repetition   -- the tutor says the target, the learner repeats it, and the gloss
+#                   says what it means.
+#   cue_response -- the tutor says the cue, the learner answers, and the expected
+#                   response is the right answer. This is the checkable one.
+#
+# Mirrored by a constraint in schema.sql; a test pins the two together so they cannot
+# drift apart, the same way OUTCOMES is pinned.
+DRILL_KINDS: tuple[str, ...] = ("repetition", "cue_response")
+
+# Where a lesson's content came from. "written_for_this_app" is original material and
+# cites no page; "converted_from_course" came out of a published course and cites its
+# module, unit and page, so a suspect line can be checked against the source. Mirrored
+# by a constraint in schema.sql and pinned by a test, as DRILL_KINDS is.
+LESSON_ORIGINS: tuple[str, ...] = ("written_for_this_app", "converted_from_course")
+
 
 @dataclass(frozen=True)
 class LearnerProfile:
@@ -47,6 +64,94 @@ class Lesson:
     position: int
     title: str
     objective: str
+
+
+@dataclass(frozen=True)
+class LessonSource:
+    """Where a lesson's content came from, precisely enough to go and check it.
+
+    A lesson written for this app cites a course and nothing else, because it has no
+    page to cite. One converted from a published course carries all four, so a line
+    somebody doubts can be found on the page it was read off -- which is the whole
+    reason this record exists, given that the sources are scans and the conversion is
+    fallible. `origin` says which of the two a caller is holding; the fields that do
+    not apply are None rather than an invented zero.
+    """
+
+    lesson_id: str
+    origin: str
+    course: str
+    module: str | None
+    unit: str | None
+    page: int | None
+
+
+@dataclass(frozen=True)
+class DialogueTurn:
+    """One turn of a lesson's dialogue: who speaks, when, and what they say.
+
+    `speaker` is a label out of the source material and never a learner -- a dialogue
+    is the same for every household.
+    """
+
+    position: int
+    speaker: str
+    text: str
+
+
+@dataclass(frozen=True)
+class UsageNote:
+    """One numbered note on the dialogue, in English.
+
+    The number is the source's own, which is what somebody checking against the page
+    needs; it is also the order.
+    """
+
+    number: int
+    text: str
+
+
+@dataclass(frozen=True)
+class Drill:
+    """One drill, of one kind, at one place in the lesson.
+
+    Which fields carry a value follows from `kind`, and the database refuses any other
+    combination:
+
+    * a repetition drill fills `target_text` and `english_gloss` -- the term to say and
+      what it means, kept apart because the tutor does different things with them;
+    * a cue-response drill fills `cue` and `expected_response` -- what the learner
+      hears and the answer that is right, which is what makes this kind checkable
+      rather than only sayable.
+    """
+
+    position: int
+    kind: str
+    target_text: str | None
+    english_gloss: str | None
+    cue: str | None
+    expected_response: str | None
+
+
+@dataclass(frozen=True)
+class LessonContent:
+    """Everything a lesson is made of, gathered in one value.
+
+    Composed rather than fetched piece by piece, for the same reason LanguageProgress
+    is: a hosted backend answers this with one request, and the robot's link is not
+    free.
+
+    Every part is optional and empty is a real answer. The seeded catalog carries no
+    content at all yet, so a lesson with nothing but a title reads back as this value
+    with empty tuples -- not as an error, and not as a missing lesson.
+    """
+
+    lesson: Lesson
+    source: LessonSource | None
+    dialogue_title: str | None
+    turns: tuple[DialogueTurn, ...]
+    notes: tuple[UsageNote, ...]
+    drills: tuple[Drill, ...]
 
 
 @dataclass(frozen=True)

@@ -69,6 +69,88 @@ level; **never commit any of them.**
 | `title` | TEXT | no | Short name for the lesson. |
 | `objective` | TEXT | no | What the learner should be able to do afterwards, in plain language. |
 
+### The lesson-content tables — what a lesson is made of
+
+Five tables hold the material a lesson is actually taught from. All of it is **optional**:
+the thirty seeded lessons carry none of it yet, and a lesson with nothing in them reads
+back as empty rather than as an error, because the corpus is converted a unit at a time.
+
+None of it is personal data. These rows are identical in every household, nothing in them
+may name a learner, and they all cascade from `lessons` rather than from `learners` — so
+deleting a person is still the single statement at the top of this document.
+
+They are **tables rather than columns on `lessons`** for a reason that is easy to trip
+over: a new column cannot reach a robot that already has a database (see
+[Versioning and re-seeding](#versioning-and-re-seeding)). A new table can.
+
+> **Content is material to teach, not instructions to follow.** Whatever a caller does
+> with turns, notes and drill text, it must reach the model as material the tutor is
+> working *from* — never concatenated into the tutor's own instructions. A lesson line
+> that reads like an instruction is still a lesson line, and obeying it would let
+> whoever wrote or mis-transcribed a unit steer a robot in somebody's house. Nothing in
+> the schema can enforce this: a check for instruction-shaped text is a list of the
+> phrasings somebody happened to think of. The control belongs at the point of use, and
+> `get_lesson_content` carries the same note for whoever calls it.
+
+#### `lesson_sources` — where the lesson came from
+
+One row per lesson, and every seeded lesson has one. This is what makes a later
+correction auditable, answers a rights question without re-deriving it, and lets somebody
+check a suspect line against the page it was read off — which matters because the source
+material is forty-year-old scans whose OCR loses accents.
+
+| Column | Type | Null? | Meaning |
+|---|---|---|---|
+| `lesson_id` | TEXT | no | Primary key and the lesson it describes. Cascades on delete. |
+| `origin` | TEXT | no | `written_for_this_app` or `converted_from_course`. Constrained, not free text. |
+| `course` | TEXT | no | What this lesson is part of — a published course, or this app's own catalog. |
+| `module` | TEXT | **yes** | Module within the course. Required of a converted lesson, absent otherwise. |
+| `unit` | TEXT | **yes** | Unit within the module. Same rule. |
+| `page` | INTEGER | **yes** | Page in the source. Same rule. |
+
+A second CHECK ties the last three to `origin`: a converted lesson carries **all** of
+module, unit and page, and an app-written lesson carries **none** of them. A citation is
+all four parts or it is not a citation — half of one reads like a check that was done.
+
+#### `lesson_dialogues` and `lesson_dialogue_turns` — the conversation
+
+| Column | Type | Null? | Meaning |
+|---|---|---|---|
+| `lesson_id` | TEXT | no | Primary key on `lesson_dialogues`; part of it on the turns. Cascades. |
+| `title` | TEXT | no | On `lesson_dialogues`: the dialogue's own title, in the target language. |
+| `position` | INTEGER | no | On the turns: order within the dialogue, starting at 1. Unique per lesson. |
+| `speaker` | TEXT | no | Who says this turn — a label from the source, never a learner. |
+| `text` | TEXT | no | What they say. |
+
+#### `lesson_notes` — numbered usage and grammar notes
+
+| Column | Type | Null? | Meaning |
+|---|---|---|---|
+| `lesson_id` | TEXT | no | Which lesson. Cascades on delete. |
+| `number` | INTEGER | no | The source's own numbering, which is also the order. Unique per lesson. |
+| `text` | TEXT | no | The note, in English. |
+
+#### `lesson_drills` — the exercises, each carrying its type
+
+| Column | Type | Null? | Meaning |
+|---|---|---|---|
+| `lesson_id` | TEXT | no | Which lesson. Cascades on delete. |
+| `position` | INTEGER | no | Order within the lesson, starting at 1. Unique per lesson. |
+| `kind` | TEXT | no | `repetition` or `cue_response`. Constrained, not free text. |
+| `target_text` | TEXT | **yes** | Repetition only: the term the learner repeats. |
+| `english_gloss` | TEXT | **yes** | Repetition only: what it means. A separate field, never joined to the term. |
+| `cue` | TEXT | **yes** | Cue-response only: what the learner hears. |
+| `expected_response` | TEXT | **yes** | Cue-response only: the right answer. |
+
+The two kinds are the two that are runnable as speech. A cue-response drill is the
+checkable one — it has a right answer — and that is why `expected_response` exists.
+
+As with `lesson_sources`, a CHECK makes each kind's shape the only shape it can take: a
+repetition drill fills the first pair and leaves the second empty, a cue-response drill
+does the reverse, and a half-filled drill of either kind is refused. Both CHECKs are
+allow-lists, so a kind added to one without a shape clause in the other can store no rows
+at all — which is the direction to fail in.
+
 ### `lesson_results` — an append-only log of attempts
 
 One row per attempt, **not** one row per learner-and-lesson. Retries and partial
@@ -103,13 +185,23 @@ person's row is gone. See [Versioning and re-seeding](#versioning-and-re-seeding
 ## How the tables relate
 
 ```
-languages ──1:N──> lessons ──1:N──> lesson_results <──N:1── learners
-   code              id                lesson_id            id
-                     language_code     learner_id
+                    ┌──1:1──> lesson_sources
+                    ├──1:1──> lesson_dialogues
+languages ──1:N──> lessons ──1:N──> lesson_dialogue_turns
+   code              id     ├──1:N──> lesson_notes
+                     ▲      └──1:N──> lesson_drills
+                     │
+                     └──1:N──> lesson_results <──N:1── learners
+                                 lesson_id             id
+                                 learner_id
 ```
 
 Every foreign key is `ON DELETE CASCADE`. Deleting a learner removes their results;
-retiring a language removes its lessons and their results.
+retiring a language removes its lessons, their content and their results.
+
+**Every content table hangs off `lessons`, and nothing hangs off `learners` except
+`lesson_results`.** That is what keeps deleting a household a single statement: the five
+content tables were never that household's to delete.
 
 > **Foreign keys only work because the code turns them on.** SQLite ignores foreign key
 > constraints unless a connection issues `PRAGMA foreign_keys = ON`, and it is a silent
@@ -227,6 +319,18 @@ like the sample learner practised at install time.
   proves a catalog expansion reaches a robot whose database was seeded before they
   existed — see `SEED_VERSION` below.
 
+### Provenance (30 rows, one per lesson)
+
+Every seeded lesson gets a `lesson_sources` row with `origin = 'written_for_this_app'`
+and `course = SEED_LESSON_COURSE`, and no module, unit or page — this material was
+written for this app and has no page to cite. The rows are *derived* from `SEED_LESSONS`
+rather than typed out beside it, so adding a lesson gives it provenance automatically and
+the two lists cannot disagree about which lessons exist.
+
+Converted course material will carry `origin = 'converted_from_course'` and all four
+parts. Ingesting it is separate work; nothing in the shipped seed is converted yet, and a
+test asserts that so it stays a visible decision.
+
 ## Versioning and re-seeding
 
 Three markers, and they are not read at the same time. The first two are gates,
@@ -247,8 +351,9 @@ would add a lookup to every start for a value only the re-seed uses.
 
 Re-seeding is safe because the two kinds of row are treated differently:
 
-- **App-owned reference data** (`languages`, `lessons`) is *converged* on a version
-  bump, so a corrected lesson title reaches installations that already seeded.
+- **App-owned reference data** (`languages`, `lessons`, `lesson_sources`) is *converged*
+  on a version bump, so a corrected lesson title — or a corrected page reference —
+  reaches installations that already seeded.
 - **Learner-owned rows** (`learners`, `lesson_results`) are never overwritten. A
   household may have renamed the sample learner or practised against it.
 
@@ -305,8 +410,32 @@ permissive direction here, and it applies to every branch that degrades, not onl
 boolean one.
 
 To ship a catalog change: edit the `SEED_*` constants in `store.py` and bump
-`SEED_VERSION`. To change the schema: edit `schema.sql`, bump `SCHEMA_VERSION`, and add
-a migration branch for the older version.
+`SEED_VERSION`. A test pins a fingerprint of every `SEED_*` tuple to the version that
+shipped it, so a catalog edit without a bump fails rather than silently reaching no
+installed robot.
+
+**To change the schema: edit `schema.sql` and bump `SCHEMA_VERSION`.** There is no
+migration-branch mechanism and never has been; the previous sentence here described one
+that does not exist. What actually happens is that `_apply_schema` re-runs the whole
+script whenever the database's own `user_version` is behind, and every statement in it
+is `CREATE ... IF NOT EXISTS` — so re-running it is a no-op for what is already there.
+
+That mechanism has a sharp edge worth stating plainly:
+
+- **A new table reaches an installed robot.** `CREATE TABLE IF NOT EXISTS` creates it.
+- **A new column on an existing table does not.** `CREATE TABLE IF NOT EXISTS` is a
+  no-op against a table that exists, whatever columns the statement names, so the column
+  appears on fresh installs only and nothing reports a problem. `ALTER` is not an option
+  either: a test restricts this file to `PRAGMA`, `CREATE TABLE` and `CREATE INDEX`.
+  Model new data as a new table, as the lesson-content tables do.
+- **A new table that needs seed rows needs `SEED_VERSION` to move as well**, because the
+  two gates are read independently — the schema gate creating the table does not make
+  the seed gate write into it.
+
+**The filename does not move with the schema version.** `learners.v1.sqlite3` holding
+`user_version = 2` is correct, not a bug: the filename changes only for a schema that
+*cannot* be migrated, because a new file abandons every learner's progress. Adding
+tables is the migratable case.
 
 ## When things go wrong
 
@@ -325,6 +454,7 @@ Everything above describes the data. This is how the application reaches it.
 from reachy_language_tutor.learners import (
     get_language_catalog,
     get_lesson,
+    get_lesson_content,
     get_profile,
     get_practised_languages,
     get_progress,
@@ -343,6 +473,7 @@ are SQLite's business, and a hosted backend would have no equivalent.
 | `get_practised_languages(learner_id, *, instance_path=None)` | `tuple[PractisedLanguage, ...]` | `()` = nothing practised, **or** every attempt was `skipped`, **or** the store is unreadable, **or** the learner id was refused |
 | `get_language_catalog(*, instance_path=None)` | `tuple[CatalogLanguage, ...]` | `()` = the store is unreadable, **or** the catalog holds no rows — both mean a caller must not say which languages are taught |
 | `get_lesson(lesson_id, *, instance_path=None)` | `Lesson \| None` | `None` = no such lesson, **or** the store is unreadable, **or** the id was refused. Carries `language_code`, so a caller holding a lesson id finds its language in one read |
+| `get_lesson_content(lesson_id, *, instance_path=None)` | `LessonContent \| None` | `None` = no such lesson, **or** the store is unreadable, **or** the id was refused. A lesson that exists but has not been converted yet is **not** `None` — it comes back with empty tuples, which is a different answer and the one most lessons give today |
 | `get_progress(learner_id, language_code, *, instance_path=None)` | `LanguageProgress \| None` | `None` = that language is not taught, **or** the store is unreadable, **or** either argument was refused |
 | `record_result(learner_id, lesson_id, outcome, *, score=None, recorded_at=None, instance_path=None)` | `RecordResultOutcome` | never raises; see the reason codes below |
 | `store_is_available(instance_path=None)` | `bool` | `False` = the store could not be read, **or** `instance_path` itself was refused. It binds no caller value into SQL, so it is **not** a test of whether a *learner id or language code* was refused |
@@ -409,6 +540,13 @@ no language and answers `True` for an empty catalog. The `get_progress` tool
 (`tools/get_progress.py`) resolves this way, which is also what lets it accept a spoken language
 name — `"Spanish"` is not a catalog code, and passing it straight down returns a silent `None`
 that reads as "not taught".
+
+**Lesson content has the same shape of distinction, and it will matter more over time.**
+`get_lesson_content` answers `None` for a lesson that does not exist and for a store it
+cannot read — but a lesson that exists and has simply not been converted yet comes back
+populated, with its title and objective and three empty tuples. That is the state every
+seeded lesson is in today and most will stay in for a while, so "nothing to teach from
+yet" must never be reported as "no such lesson".
 
 An **unknown learner** gets a populated fresh start rather than an error — the lesson
 catalog is not personal data, so there is nothing to withhold. Recording a result is

@@ -12,12 +12,36 @@ from untaught_language import UNTAUGHT_CODE
 from reachy_language_tutor.learners import store
 
 
+def _tables(instance_path: Path) -> tuple[str, ...]:
+    """Every table the schema actually created, asked of the database itself.
+
+    Read from the database rather than listed here, because a hand-kept list is how a
+    new table goes uncounted: the four names this helper used to carry were written
+    when there were four tables, and five more arrived without it changing colour.
+    """
+    connection = store.connect(instance_path)
+    try:
+        rows = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+        return tuple(str(row["name"]) for row in rows)
+    finally:
+        connection.close()
+
+
 def _counts(instance_path: Path) -> dict[str, int]:
+    """Row counts for every table in the database, keyed by table name.
+
+    schema_meta is excluded: it is bookkeeping about the seed rather than seeded data,
+    so counting it would make every caller's expectation move whenever a new key is
+    recorded. Everything else is counted, so a new table cannot be seeded silently.
+    """
     connection = store.connect(instance_path)
     try:
         return {
             table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("languages", "lessons", "learners", "lesson_results")
+            for table in _tables(instance_path)
+            if table != "schema_meta"
         }
     finally:
         connection.close()
@@ -290,8 +314,15 @@ def test_seed_row_counts(tmp_path: Path) -> None:
     assert _counts(tmp_path) == {
         "languages": len(store.SEED_LANGUAGES),
         "lessons": len(store.SEED_LESSONS),
+        "lesson_sources": len(store.SEED_LESSON_SOURCES),
         "learners": 1,
         "lesson_results": 3,
+        # The content tables ship empty on purpose: the catalog is converted a unit at
+        # a time, and a lesson with nothing in it has to keep working meanwhile.
+        "lesson_dialogues": 0,
+        "lesson_dialogue_turns": 0,
+        "lesson_notes": 0,
+        "lesson_drills": 0,
     }
 
 
@@ -426,9 +457,13 @@ def test_empty_catalog_still_produces_usable_database(
     monkeypatch.setattr(store, "SEED_LESSONS", ())
     monkeypatch.setattr(store, "SEED_LEARNERS", ())
     monkeypatch.setattr(store, "SEED_RESULTS", ())
+    # Without this the sources upsert runs thirty rows against an empty lessons table,
+    # the foreign key refuses them, and ensure_learner_database reports the store
+    # unusable -- blaming the store for what is really an inconsistent seed.
+    monkeypatch.setattr(store, "SEED_LESSON_SOURCES", ())
 
     assert store.ensure_learner_database(tmp_path).ready is True
-    assert _counts(tmp_path) == {"languages": 0, "lessons": 0, "learners": 0, "lesson_results": 0}
+    assert set(_counts(tmp_path).values()) == {0}, "no seed content means no rows anywhere"
 
     connection = store.connect(tmp_path)
     try:
@@ -839,19 +874,99 @@ def test_existing_progress_survives_a_catalog_expansion(tmp_path: Path) -> None:
 
 # Every catalog that has ever shipped, keyed by the seed version that shipped it.
 #
+# Entries 1 and 2 were computed over SEED_LANGUAGES and SEED_LESSONS alone, which was
+# every seed tuple that existed when they shipped. From entry 3 the fingerprint covers
+# every SEED_* tuple the store declares -- see _catalog_fingerprint below. The older
+# lines are NOT recomputed and must not be: each records what a robot in somebody's
+# home actually received, and only the newest line is ever checked against the code.
+#
 # APPEND ONLY. Never edit an existing entry: each line is a record of what a robot in
 # somebody's home actually received, and rewriting one makes this file lie about the
 # installed base. To change the catalog, bump SEED_VERSION and add a line.
 SHIPPED_CATALOGS = {
     1: "a739c1c9aed1de9888de223e3f4f31eb0800c965eb54d1d8271794751b62f389",  # Spanish, French
     2: "c6efbb187caf89a96c03c744fb5d2b9bd6baf63ab6e0cfe629c0fe72209913c8",  # + German, Italian, Portuguese
+    3: "71d42df41af603be5d9471571273c40bdb91168fc6b4b111951e87358c7651fb",  # + a provenance row for every lesson
 }
 
 
+# The only SEED_* names that are not seeded content, and why each is out.
+#
+# SEED_VERSION is the version this fingerprint is KEYED by. Folding it in would give
+# every bump a unique hash no matter what the catalog did, which would satisfy the
+# uniqueness assertion below automatically and quietly retire the thing that makes a
+# version un-reusable. SEED_VERSION_KEY is the name of a schema_meta row, not content.
+NOT_SEED_CONTENT = frozenset({"SEED_VERSION", "SEED_VERSION_KEY"})
+
+
 def _catalog_fingerprint() -> str:
+    """Hash every seed tuple the store declares, found rather than listed.
+
+    Naming SEED_LANGUAGES and SEED_LESSONS is what this used to do, and it is the
+    shape that goes stale: SEED_LESSON_SOURCES arrived and the fingerprint covering
+    "the seeded catalog" did not cover it, so thirty new rows could have shipped
+    without this guard changing colour. Anything the store calls a seed constant is
+    part of what a robot receives, whatever its type, including the next one nobody
+    has written yet.
+
+    Sorted by name so the hash depends on the seed data and not on declaration order.
+
+    What is EXCLUDED is named one constant at a time, and nothing else is. Filtering by
+    type instead -- "every SEED_* that is a tuple" -- was the first version of this and
+    it fails open: SEED_LESSON_COURSE is a str, is genuinely part of what ships, and
+    was covered only by accident because SEED_LESSON_SOURCES happens to embed it. The
+    next non-tuple seed constant would have had no such accident. A name has to be
+    written into NOT_SEED_CONTENT to leave the hash, which is the direction that fails
+    loudly.
+    """
     import hashlib
 
-    return hashlib.sha256((repr(store.SEED_LANGUAGES) + repr(store.SEED_LESSONS)).encode()).hexdigest()
+    seeds = sorted(
+        (name, repr(value))
+        for name, value in vars(store).items()
+        # The leading underscore is stripped first, so a PRIVATE seed constant is
+        # covered too. _SEED_EPOCH_MS is one: it is the timestamp written into the
+        # sample learner's rows, and it was previously covered only because
+        # SEED_LEARNERS happens to embed its value -- the same by-accident coverage
+        # this function's own docstring rejects one paragraph above.
+        if name.lstrip("_").startswith("SEED_") and name.lstrip("_") not in NOT_SEED_CONTENT
+    )
+    return hashlib.sha256(repr(seeds).encode()).hexdigest()
+
+
+def test_a_seed_constant_that_is_not_a_tuple_is_still_fingerprinted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard shown failing, on the exact case the earlier filter let through.
+
+    This fingerprint used to admit only tuples, which meant a seed constant of any
+    other type -- a course name, a default, a mapping -- shipped without the pin ever
+    noticing. Planting one is the only way to show the inversion works: the existing
+    non-tuple constant, SEED_LESSON_COURSE, is embedded in SEED_LESSON_SOURCES, so it
+    would move the hash either way and proves nothing on its own.
+    """
+    before = _catalog_fingerprint()
+
+    monkeypatch.setattr(store, "SEED_A_LATER_IDEA", {"language": "ja"}, raising=False)
+
+    assert _catalog_fingerprint() != before, "a new seed constant escaped the fingerprint"
+
+
+def test_the_fingerprint_still_ignores_the_version_it_is_keyed_by(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one exclusion that has to hold, or the uniqueness assertion means nothing.
+
+    If SEED_VERSION were hashed, every bump would produce a different fingerprint on
+    its own, so "two versions must not ship an identical catalog" would be satisfied by
+    the bump rather than by the catalog -- and a version could be bumped with no change
+    at all, which is precisely what that assertion exists to catch.
+    """
+    before = _catalog_fingerprint()
+
+    monkeypatch.setattr(store, "SEED_VERSION", store.SEED_VERSION + 1)
+
+    assert _catalog_fingerprint() == before
 
 
 def test_changing_the_seeded_catalog_requires_bumping_seed_version() -> None:
