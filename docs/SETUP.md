@@ -332,6 +332,121 @@ Only one app may drive the robot at a time. Quitting the other one is usually th
 
 ---
 
+### The dashboard camera says "Timed out waiting for WebRTC stream from ws://localhost:8443"
+
+Diagnosed in D22 on 2026-09-12, and **the honest summary is that the fault was located but not
+explained.** What follows separates what was measured from what was inferred, because an
+earlier draft of this entry stated a mechanism nobody had measured and the next person would
+have inherited it as fact.
+
+**What was measured**, all read-only, all against the daemon that was failing (PID 4545,
+started 07:43, `--desktop-app-daemon --mockup-sim`):
+
+1. **The camera IPC socket delivers nothing.** The daemon publishes captured frames to a unix
+   socket at `/tmp/reachymini_camera_socket` (`CAMERA_SOCKET_PATH` in `daemon/utils.py`, fed by
+   `media/media_server.py`). Attaching a `unixfdsrc` consumer gave `state: paused` and
+   **0 frames in 6 seconds**, with no error and no warning on the bus. Command below.
+2. **The signalling server accepts TCP and then says nothing.** Two clients — `websockets` and a
+   hand-rolled socket doing the HTTP upgrade — both connected to `ws://localhost:8443` and
+   received **zero bytes**, then timed out.
+3. **The same daemon was answering on 8443 at its own boot.** Its log shows eight WebSocket
+   connections between `11:43:50` and `11:44:05.189` UTC, each completing and registering —
+   seven as `[Listener]` and one as **`[Producer]` at 11:43:54.679**. So something registered as
+   a producer that morning, and the server was replying then, which it is not now. Note the
+   limit of that: the log shows a producer *registering*, not a single video frame flowing. It
+   is evidence the process was answering, not proof the camera was ever delivering today.
+4. **macOS still sees the camera.** `system_profiler SPCameraDataType` lists `USB Camera
+   VID:1133 PID:2085` — the only video device on this machine, which has no built-in FaceTime
+   camera — and GStreamer's device monitor enumerates it with full caps. Enumerating is not
+   delivering.
+5. **Corroboration, with a caveat that matters.** `autovideosrc ! videoconvert ! fakesink` driven
+   to PLAYING in the daemon's own interpreter returns `GST_STATE_CHANGE_ASYNC`, stuck at PAUSED
+   with PLAYING pending, silently. Treat this as weak: it opens the camera itself and runs under
+   the *terminal's* macOS camera (TCC) identity, not the daemon's, so a terminal-side permission
+   denial would produce the same stall for a reason that says nothing about the daemon. It was
+   not ruled out — `TCC.db` is unreadable under SIP.
+
+**What that establishes, and what it does not.** Two independent things in one process are both
+stalled and both silent: frame delivery on the IPC socket, and the signalling server's replies.
+Measurement 1 is the load-bearing one, because a socket consumer reads frames the daemon has
+already published rather than opening the device — so it is not confounded by the daemon holding
+the camera exclusively, nor by the prober's own camera permission. What is **not** established is
+why, or whether the two stalls share a cause. In particular, do **not** read the zero-byte 8443
+result as "there is no producer to announce": that server sends its `Welcome` on connect
+regardless of producers, and the log records the Central Relay confirming exactly that for the
+11:43:50 connection — "Local WebRTC connection verified (welcome received)" — four seconds
+before any peer registered as a producer. (That confirmation appears for the 11:43:50 peer
+only; the 11:43:53 one shows a registration but no logged welcome, so do not count it.) A
+connection receiving nothing at all is therefore a stall in the signalling server itself, not a
+consequence of having no video.
+
+The SDK runs that server on a single GLib mainloop thread (`ThreadId(01)` throughout the log),
+which is a plausible way for one wedged component to take the other down — but that is a
+**hypothesis nobody measured**, recorded here so the next person can test it rather than believe
+it. Likewise unmeasured: whether the IPC branch's own failure modes (`media_server.py`'s
+`unixfdsink` handling) could account for measurement 1 without capture being at fault.
+
+**Nothing in this repository is on either path.** The failing components are the desktop app's
+managed daemon and its GStreamer stack; the app under development here was not even running.
+
+**The decisive test — read-only, six seconds, and development-Mac only.** Ask the socket for
+frames rather than guessing from the dashboard. Do **not** carry this habit onto a deployed
+robot: the same socket on a Wireless unit carries live household video, and the distance between
+this frame counter and a recorder is one token (`fakesink dump=True`, or a `filesink` in place
+of it). Here it counts buffers and reads no pixels.
+
+```bash
+DV="$HOME/Library/Application Support/com.pollen-robotics.reachy-mini/.venv/bin/python3"
+"$DV" - <<'PY'
+import gi; gi.require_version("Gst", "1.0")
+from gi.repository import Gst, GLib
+Gst.init(None)
+p = Gst.Pipeline.new("probe")
+src = Gst.ElementFactory.make("unixfdsrc"); src.set_property("socket-path", "/tmp/reachymini_camera_socket")
+sink = Gst.ElementFactory.make("fakesink"); sink.set_property("sync", False); sink.set_property("signal-handoffs", True)
+n = {"f": 0}; sink.connect("handoff", lambda *a: n.__setitem__("f", n["f"] + 1))
+for e in (src, sink): p.add(e)
+src.link(sink); p.set_state(Gst.State.PLAYING)
+print("state:", p.get_state(8 * Gst.SECOND)[1].value_nick)
+end = GLib.get_monotonic_time() + 6_000_000
+while GLib.get_monotonic_time() < end: GLib.MainContext.default().iteration(False)
+print("frames in 6s:", n["f"]); p.set_state(Gst.State.NULL)
+PY
+```
+
+Frames arriving means delivery is healthy and the problem is further along. Zero frames with
+`state: paused` and a silent bus is what it said on 2026-09-12.
+
+**What to try, in order. None of these was verified to fix it** — the cause sits below anything
+this repository owns, and restarting a daemon out from under someone using it was out of scope.
+
+1. Quit and reopen Reachy Mini Control, since the process was healthy at its own boot and
+   degraded in place.
+2. Check System Settings → Privacy & Security → Camera for Reachy Mini Control. A denial there
+   is a candidate consistent with a silent never-delivering session; it was not confirmed, and
+   the 24-hour system log showed no denial line (which is weak evidence — a headless process can
+   hang rather than log).
+3. Unplug and replug the webcam. It is the only video device on this machine, so a USB camera in
+   a bad state leaves the daemon with nothing to capture.
+
+**Negative results, recorded so nobody re-checks them.**
+
+- **An agent session did not cause this.** The one time an agent touched port 8443 it was a
+  read-only WebSocket probe against daemon PID 6670. That process no longer exists: the daemon
+  that failed is PID 4545, started fresh the next morning, and its own log shows it handshaking
+  correctly — including registering a `[Producer]` — before degrading. No SDK file was modified.
+- **`--mockup-sim` is supposed to have a camera.** It maps to `SimulationMode.MOCKUP`, which
+  builds an `autovideosrc` capture chain; `daemon/daemon.py` says mockup-sim "behaves exactly
+  like a real robot for apps (they open webcam directly)". "The simulation has no camera" is true
+  of standalone `no_media` SDK scripts and not of this path.
+- **No version drift between the two interpreters that were compared.** GStreamer core is 1.28.7
+  in both the daemon venv and `reachy_mini_env`, so an earlier note about a 1.28.3 / 1.28.7
+  discrepancy did not reproduce, and the venv symlinks predate the session that was suspected.
+  Narrower than "not a version change": `apps_venv` was never compared, and the SDK version rests
+  on a dist-info folder name with no earlier snapshot to diff against.
+- **Port 8443 is not closed and nothing is refusing the connection.** It is listening on PID 4545
+  and the TCP handshake completes; the silence is afterwards.
+
 ## Creating a new app from the template (rarely needed)
 
 You should not need this — the app already exists. It matters only if you scaffold a second
