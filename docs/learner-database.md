@@ -5,6 +5,10 @@ reference for what the database holds and why; the schema itself is
 `reachy_language_tutor/src/reachy_language_tutor/learners/schema.sql` and the code that
 applies it is `store.py` beside it.
 
+The path a spoken lesson takes through these tables -- who the learner is, how the next
+lesson is chosen, and what happens to the result -- is `docs/lesson-flow.md`, which also
+records what was observed when that flow was run by voice.
+
 **The database is the source of truth for progress.** The language model teaches and
 chats; it never decides what counts as completed. Anything the tutor says about what a
 learner has finished comes from here.
