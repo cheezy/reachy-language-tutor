@@ -22,13 +22,36 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 ) STRICT;
 
 -- One row per person who practises on this robot.
--- Deliberately minimal: no email, no faceprint, no locale. docs/plan.md says only
--- names, emails and learning progress leave the home, and that a learner must be able
--- to delete their data. Nothing on the robot needs an email, so this schema stores
--- none -- and deletion is one DELETE, because everything else cascades from here.
+-- Deliberately minimal: no email, no locale, and no face data of any kind. docs/plan.md
+-- says only names, emails and learning progress leave the home, and that a learner must
+-- be able to delete their data. Nothing on the robot needs an email, so this schema
+-- stores none -- and deletion is one DELETE, because everything else cascades from here,
+-- the faceprints table below included.
+--
+-- display_name carries a byte bound as well as the non-empty test, and the reason is
+-- the NUL mechanism the faceprints table below documents at length: length() and
+-- trim() stop at the first NUL, so 'A' + NUL + '/Users/secret/kid-face.jpg' + 5000
+-- more characters satisfies length(trim(...)) > 0 as a one-character name and is
+-- stored whole. Measured on this table, which is why the bound is here.
+--
+-- What it closes and what it does not, stated rather than implied. The byte bound
+-- refuses the unbounded case; a SHORT hidden path still fits under 200 bytes and is
+-- still accepted. The ASCII-only rule that closes it completely on embedding_model
+-- would be wrong here, because this column holds a person's name -- accents,
+-- non-Latin scripts, apostrophes and combining marks are all real names, and all were
+-- verified to still pass.
+--
+-- The durable guard therefore belongs in the writer, not here, and does not exist yet
+-- because no writer does: the only INSERT today is the app-owned seed, and the store
+-- publishes no create-learner function. Enrolment (W28) is what adds one, and it is
+-- where a name a person supplies must be validated in Python. Note a schema-side rule
+-- added later reaches fresh installs ONLY -- CREATE TABLE IF NOT EXISTS is a no-op
+-- against an existing table -- so the writer is the only place a rule can reach a
+-- robot that already has a database.
 CREATE TABLE IF NOT EXISTS learners (
   id           TEXT PRIMARY KEY,
-  display_name TEXT NOT NULL CHECK (length(trim(display_name)) > 0),
+  display_name TEXT NOT NULL CHECK (length(trim(display_name)) > 0
+                                    AND length(CAST(display_name AS BLOB)) BETWEEN 1 AND 200),
   created_at   INTEGER NOT NULL
 ) STRICT;
 
@@ -215,4 +238,86 @@ CREATE TABLE IF NOT EXISTS lesson_drills (
        AND expected_response IS NOT NULL AND length(trim(expected_response)) > 0
        AND target_text IS NULL AND english_gloss IS NULL)
   )
+) STRICT;
+
+-- A person's faceprint: numeric face data, and never an image or a path to one.
+--
+-- docs/plan.md promises faceprints are numeric face data, never photos, and that they
+-- stay on the device. This table is where that promise is kept or quietly broken, so
+-- the column list is the whole of it: an id, the model that produced the numbers, how
+-- many numbers there are, the numbers, and when. No image, no crop, no thumbnail, and
+-- no path to a file on disk -- a path column is how "we only store numbers" becomes
+-- untrue without anybody editing the sentence.
+--
+-- What this does NOT claim: that a face cannot be reconstructed from these numbers.
+-- The published template-inversion work says an approximate face image often can be
+-- recovered from an embedding given the model, so a faceprint is biometric data to be
+-- guarded, not a one-way hash to be relaxed about. Saying otherwise here would be the
+-- sentence a later reader leans on when deciding whether one may leave the device. A test reads PRAGMA table_info and
+-- pins the permitted columns as an allow-list, so a later column fails it whatever it
+-- is called.
+--
+-- One row per learner, keyed on the person. Several faceprints per person would match
+-- better across angles, and it is deliberately not what this does:
+--   * erasure (the promise a household can act on) is then exactly one row, and
+--     "did it work" is a count of 0 or 1 rather than a set somebody has to reason about;
+--   * the learner-scoping guard in store.py refuses both spellings of an upsert --
+--     measured, not assumed: INSERT OR REPLACE is refused because "only a plain INSERT
+--     INTO is scoped by the column it writes first", and ON CONFLICT because it "can
+--     rewrite a row this statement did not create" -- so replacing a faceprint is a
+--     DELETE and an INSERT in one transaction either way. With one row per learner that
+--     has a single deterministic meaning: the new one replaces the old.
+-- If W26 ever needs several angles, it arrives as a NEW TABLE, because CREATE TABLE IF
+-- NOT EXISTS is a no-op against an existing table and ALTER is outside the allow-list a
+-- test pins this file to. That is the same escape hatch lesson_dialogues took.
+--
+-- The vector is little-endian IEEE-754 binary32 -- struct.pack("<{n}f") -- so its byte
+-- length is exactly dimension * 4, which is what the CHECK below tests. Byte order is
+-- pinned in three places on purpose: the "<" in store.py, a test asserting [1.0] stores
+-- b"\x00\x00\x80?" rather than b"?\x80\x00\x00", and that CHECK. The bound on dimension
+-- keeps the blob small; it is a bound, not a proof of what the bytes mean, and the
+-- column allow-list and the floats-only writer are what actually carry that.
+--
+-- embedding_model is stored WITH the vector because a faceprint computed by one model
+-- is meaningless to another. Without it a model upgrade silently compares incomparable
+-- numbers and matches the wrong member of a household.
+--
+-- Its character set is an allow-list -- letters, digits, dot, underscore, hyphen --
+-- and that is the clause that finishes the no-paths promise.
+--
+-- The byte-length clause in front of it is what makes that allow-list mean anything,
+-- and it is not decoration. SQLite's length(), trim() and GLOB are NUL-terminated on
+-- TEXT: measured here, 'arc' + a NUL + '/Users/secret/kid-face.jpg' + 5000 more
+-- characters is reported by length() as 3, passes BETWEEN 1 AND 128, and passes the
+-- GLOB as containing no forbidden character -- and the whole 5030-character value,
+-- path intact, was stored and read back. One byte stepped over all three clauses.
+-- length(CAST(x AS BLOB)) counts real bytes, so requiring it to equal length(x) says
+-- positively what is permitted: exactly this many single-byte ASCII characters, with
+-- nothing hiding behind a terminator. This is the D19 shape -- a guard that did not
+-- mean the same thing as the rule it restated -- and the Python copy of the rule had
+-- been refusing the same value all along, which is what made it invisible. It is the only
+-- caller-supplied TEXT in this table, and 128 characters is ample room for
+-- "/Users/someone/child.jpg", so without this the promise rested on nobody choosing to
+-- write one. Naming the permitted characters refuses every spelling of a path at once,
+-- where a rule listing "/" and "~" and ".." would be as complete as the last person to
+-- think about it.
+--
+-- The cost, stated rather than discovered later: a HuggingFace-style id with a slash
+-- ("deepinsight/arcface") is refused too. That is the intended reading -- an identifier
+-- here is a NAME, not a location, and the slash is exactly what makes it a location.
+--
+-- Each IS NOT NULL beside a trim() is load-bearing, for the reason lesson_sources gives
+-- above and measured again here: NULL satisfies a bare CHECK. NOT NULL is declared as
+-- well and fires first, so these clauses are the belt to that brace -- and a test that
+-- means to exercise the CHECK has to strip the NOT NULL, or it names the wrong
+-- constraint and passes for the wrong reason.
+CREATE TABLE IF NOT EXISTS faceprints (
+  learner_id      TEXT    PRIMARY KEY REFERENCES learners(id) ON DELETE CASCADE,
+  embedding_model TEXT    NOT NULL CHECK (embedding_model IS NOT NULL
+                                          AND length(CAST(embedding_model AS BLOB)) = length(embedding_model)
+                                          AND length(trim(embedding_model)) BETWEEN 1 AND 128
+                                          AND embedding_model NOT GLOB '*[^A-Za-z0-9._-]*'),
+  dimension       INTEGER NOT NULL CHECK (dimension IS NOT NULL AND dimension BETWEEN 1 AND 1024),
+  vector          BLOB    NOT NULL CHECK (vector IS NOT NULL AND length(vector) = dimension * 4),
+  created_at      INTEGER NOT NULL
 ) STRICT;

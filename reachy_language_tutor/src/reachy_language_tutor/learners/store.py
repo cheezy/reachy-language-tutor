@@ -7,9 +7,18 @@ here that is not scoped to one learner, and a test AST-scans this module's own s
 for an inline query that skipped the guard. A query written elsewhere is caught by
 review, not by a check, so do not read this paragraph as a safety net.
 
-**The interface** is get_profile, get_practised_languages, get_progress, record_result
-and store_is_available, plus the types in models.py. A hosted backend implements exactly these, and callers do not change.
-Import them from the package (`reachy_language_tutor.learners`), never from here.
+**The interface** is get_profile, get_practised_languages, get_progress, get_lesson,
+get_lesson_content, get_language_catalog, record_result and store_is_available, plus the
+types in models.py. A hosted backend implements exactly these, and callers do not
+change. Import them from the package (`reachy_language_tutor.learners`), never from
+here. (This paragraph had fallen three functions behind the package before faceprints
+were added; the package's `__all__` is the list a test actually checks.)
+
+**Device-local, and not part of what a hosted backend implements**: get_faceprint,
+save_faceprint and delete_faceprint, with Faceprint and SaveFaceprintOutcome. They are
+here rather than in the list above because docs/plan.md says faceprints stay on the
+robot -- a hosted backend must have no equivalent, and adding one would move face data
+off the device.
 
 **SQLite implementation detail**, which a hosted backend has no analogue for and
 simply drops: connect, ensure_learner_database, EnsureResult, the SEED_* constants,
@@ -26,17 +35,21 @@ import re
 import json
 import math
 import time
+import string
+import struct
 import logging
 import sqlite3
 import threading
 from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
+from collections.abc import Sequence
 
 from reachy_language_tutor.learners.models import (
     OUTCOMES,
     Drill,
     Lesson,
+    Faceprint,
     UsageNote,
     DialogueTurn,
     LessonSource,
@@ -47,6 +60,7 @@ from reachy_language_tutor.learners.models import (
     LanguageProgress,
     PractisedLanguage,
     RecordResultOutcome,
+    SaveFaceprintOutcome,
 )
 
 
@@ -56,7 +70,8 @@ logger = logging.getLogger(__name__)
 # any database below this number, and every statement there is IF NOT EXISTS, so the
 # bump is what carries a new TABLE out to a robot that already has a database. It
 # cannot carry a new COLUMN on an existing table -- see the note in schema.sql.
-SCHEMA_VERSION = 2
+# Version 2 added the lesson-content tables; version 3 added faceprints.
+SCHEMA_VERSION = 3
 # Bumped when the seed data changes -- including the converted lessons in
 # converted_lessons.json, whose bytes are part of the fingerprint a test pins to this
 # number. Version 3 gave every seeded lesson a provenance row; version 4 replaced the
@@ -827,6 +842,33 @@ _SQLITE_INT_MAX = 2**63 - 1
 # values, so absorbing it would turn a genuine bug there into a silent absence.
 _READER_ABSORBS = (sqlite3.Error, OSError, ValueError, OverflowError, RuntimeError)
 
+# What a faceprint reader must absorb on top of the above, and it is not a refinement.
+# struct.error subclasses Exception DIRECTLY -- its mro is (error, Exception,
+# BaseException, object), measured, not assumed -- so it is in neither sqlite3.Error
+# nor ValueError and _READER_ABSORBS does not catch it. A stored row whose blob length
+# disagrees with its dimension would therefore raise straight through a reader that
+# promises never to raise. The schema's own CHECK should mean that row cannot exist;
+# this is the belt to that brace, because "cannot happen" is not a thing to stake a
+# conversation turn on.
+_FACEPRINT_ABSORBS = (*_READER_ABSORBS, struct.error)
+
+# One float32 per element, little-endian. Pinned here, in the "<" of the format string
+# below, and again by the length CHECK in schema.sql -- three places, because a silent
+# change of byte order turns every stored faceprint into a different person's numbers
+# while every test that only round-trips through this module keeps passing.
+_VECTOR_BYTES_PER_ELEMENT = 4
+_VECTOR_FORMAT_PREFIX = "<"
+
+# The bounds a faceprint must fit. They are mirrored by CHECK constraints in schema.sql
+# and a test parses that file and asserts the two agree, so neither can drift.
+_MAX_VECTOR_DIMENSION = 1024
+_MAX_MODEL_NAME = 128
+
+# The characters an embedding model's name may contain. An allow-list, mirrored by a
+# GLOB in schema.sql and pinned against it by a test: this is the clause that stops the
+# only caller-supplied TEXT column in the faceprints table holding a filesystem path.
+_MODEL_NAME_CHARACTERS = frozenset(string.ascii_letters + string.digits + "._-")
+
 
 def _log_safe(exc: BaseException) -> object:
     r"""Render an exception for a log line without letting it quote the argument.
@@ -965,13 +1007,93 @@ def _cannot_name_a_lesson(value: object) -> str | None:
     return None
 
 
-# The two tables that hold anything about a person, and the column in each that says
+def _cannot_be_an_embedding_model(value: object) -> str | None:
+    """Say why this value could never name an embedding model, or None if it might.
+
+    The same class the sibling guards close, applied to the one column whose value a
+    caller invents rather than looks up: a value the database would ACCEPT but that
+    cannot mean anything later. A blank name binds cleanly and makes every faceprint
+    it labels uncomparable.
+
+    Unlike its siblings this one ends in an allow-list of permitted characters, which
+    is what stops the only caller-supplied TEXT column in the faceprints table holding
+    a filesystem path -- and which subsumes their UTF-8 test, since every permitted
+    character is ASCII, so a lone surrogate is refused by the character rule.
+
+    Each reason names a shape, never the value -- this string reaches a log line.
+    """
+    if not isinstance(value, str):
+        return f"{type(value).__name__} is not a string"
+    if not value.strip():
+        return "blank"
+    if len(value) > _MAX_MODEL_NAME:
+        return f"longer than {_MAX_MODEL_NAME} characters"
+    if not set(value) <= _MODEL_NAME_CHARACTERS:
+        # Named as the permitted set, never as the offending character: that character
+        # is part of the value, and this string reaches a log line.
+        #
+        # This also subsumes the UTF-8 test its sibling guards carry. Every permitted
+        # character is ASCII and therefore encodable, so a lone surrogate is refused
+        # here rather than by a later encode() -- and a second arm for it would be
+        # unreachable code asserting a path this function does not have.
+        return "not made only of letters, digits, dot, underscore and hyphen"
+    return None
+
+
+def _pack_vector(values: object) -> bytes | None:
+    """Pack a face vector into little-endian float32 bytes, or None if it cannot be.
+
+    An allow-list, not a list of bad inputs: the permitted shape is a non-empty
+    sequence of at most _MAX_VECTOR_DIMENSION real numbers that struct can represent
+    as float32, and anything else is refused. str and bytes are excluded before the
+    length test because both are sequences and neither is a vector.
+
+    A numpy ndarray is NOT a Sequence and is refused, which the first face-embedding
+    caller will meet immediately -- every such library returns one. That is deliberate
+    rather than an oversight: numpy is not a declared dependency of this package and
+    the store layer should not acquire one, so the conversion belongs at the call site
+    (`vector.tolist()`). It fails with a reason code rather than silently, which is the
+    direction to fail in.
+
+    bool is excluded explicitly, and it is the one refusal that is not obvious.
+    struct.pack("<f", True) does not raise -- it silently packs 1.0 (measured) -- so a
+    vector of flags would be stored as a face rather than refused.
+
+    struct itself is the arbiter of what float32 can hold, rather than a range invented
+    here: it raises struct.error for a value of the wrong type and OverflowError for one
+    too large, and those two are the whole refusal. NaN and infinity pack cleanly and
+    are accepted; they are meaningless as a faceprint but they are not this function's
+    to judge, and a matcher comparing them will find no match, which is the safe
+    direction.
+    """
+    if isinstance(values, (str, bytes, bytearray)) or not isinstance(values, Sequence):
+        return None
+    if not 1 <= len(values) <= _MAX_VECTOR_DIMENSION:
+        return None
+    if any(isinstance(value, bool) for value in values):
+        return None
+    try:
+        return struct.pack(f"{_VECTOR_FORMAT_PREFIX}{len(values)}f", *values)
+    except (struct.error, OverflowError):
+        return None
+
+
+# The three tables that hold anything about a person, and the column in each that says
 # which person. Everything else in this schema -- languages, lessons, schema_meta --
 # is shared reference data that no filter has to constrain.
 #
+# faceprints joined this set in the same change that created it, which is the only
+# order that is safe: _learner_scoped RAISES on a statement naming a personal table it
+# has not been told about, so a table added here late is a table whose statements were
+# unscoped for as long as it took somebody to notice.
+#
 # This is the rule's own copy, and it lives here because this module is where the rule
 # lives. The AST guard in the tests reuses this function rather than restating it.
-_PERSONAL_TABLES: dict[str, str] = {"learners": "id", "lesson_results": "learner_id"}
+_PERSONAL_TABLES: dict[str, str] = {
+    "learners": "id",
+    "lesson_results": "learner_id",
+    "faceprints": "learner_id",
+}
 
 # The columns that say which learner a row belongs to. Writing one re-attributes the
 # row, which no amount of filtering on the way in can make safe.
@@ -1595,6 +1717,22 @@ _LESSON_DRILLS_SQL = (
 # the cheapest catalog row is enough and there is nothing here to scope.
 _STORE_READABLE_SQL = "SELECT 1 FROM languages LIMIT 1"
 
+# The faceprint statements. Three, and there is no fourth: replacing a faceprint is the
+# DELETE and the INSERT below run in one transaction, because _learner_scoped refuses
+# both spellings of an upsert. Measured against the guard rather than assumed --
+# INSERT OR REPLACE is refused because "only a plain INSERT INTO is scoped by the column
+# it writes first", and ON CONFLICT because it "can rewrite a row this statement did not
+# create". Reaching for either one is how a writer ends up unscoped.
+_FACEPRINT_SQL = _learner_scoped(
+    "SELECT learner_id, embedding_model, dimension, vector, created_at FROM faceprints WHERE faceprints.learner_id = ?"
+)
+# learner_id first, which is not cosmetic: the guard scopes a write by the column it
+# writes first, and any other order is refused.
+_INSERT_FACEPRINT_SQL = _learner_scoped(
+    "INSERT INTO faceprints (learner_id, embedding_model, dimension, vector, created_at) VALUES (?, ?, ?, ?, ?)"
+)
+_DELETE_FACEPRINT_SQL = _learner_scoped("DELETE FROM faceprints WHERE faceprints.learner_id = ?")
+
 _LEARNER_SCOPED_SQL: tuple[str, ...] = (
     # NEXT_LESSON_SQL is scoped too ("r.learner_id = ?"), so it is registered rather
     # than exempted -- an exemption would be a precedent for skipping the next one.
@@ -1605,6 +1743,9 @@ _LEARNER_SCOPED_SQL: tuple[str, ...] = (
     _ATTEMPTS_SQL,
     _INSERT_ATTEMPT_SQL,
     _PRACTISED_LANGUAGES_SQL,
+    _FACEPRINT_SQL,
+    _INSERT_FACEPRINT_SQL,
+    _DELETE_FACEPRINT_SQL,
 )
 
 
@@ -1613,6 +1754,26 @@ def _profile_from_row(row: sqlite3.Row) -> LearnerProfile:
     return LearnerProfile(
         id=str(row["id"]),
         display_name=str(row["display_name"]),
+        created_at=int(row["created_at"]),
+    )
+
+
+def _faceprint_from_row(row: sqlite3.Row) -> Faceprint:
+    """Build a faceprint from one database row, unpacking the vector back to floats.
+
+    The unpack mirrors _pack_vector exactly -- same byte order, same width -- and the
+    dimension comes from the row rather than from the blob's length, so a row whose two
+    disagree raises struct.error here instead of returning a quietly truncated face.
+    The schema's length CHECK should make that impossible; _FACEPRINT_ABSORBS is what
+    stops it ending a conversation turn if it ever is not.
+    """
+    dimension = int(row["dimension"])
+    blob = bytes(row["vector"])
+    return Faceprint(
+        learner_id=str(row["learner_id"]),
+        embedding_model=str(row["embedding_model"]),
+        dimension=dimension,
+        vector=struct.unpack(f"{_VECTOR_FORMAT_PREFIX}{dimension}f", blob),
         created_at=int(row["created_at"]),
     )
 
@@ -2126,12 +2287,16 @@ def record_result(
         with connection:
             connection.execute(_INSERT_ATTEMPT_SQL, (learner_id, lesson_id, outcome, score, when))
     except (sqlite3.IntegrityError, OverflowError) as exc:
+        # Routed through _log_safe like every sibling arm, which is a consistency fix
+        # rather than a measured leak: SQLite names the constraint, never the bound
+        # value, so nothing escapes today. An inconsistent sibling is how the no-PII
+        # rule recurs, and this module is where that rule lives.
         # The schema's own constraints, as a backstop to the checks above. OverflowError
         # joins them because it is the one refusal that comes from the driver rather
         # than the database and is in neither sqlite3.Error nor ValueError: the check
         # above should mean it never fires, and if it ever does, a reason code is still
         # better than an exception ending the turn. Neither message carries the value.
-        logger.warning("The learner database refused an attempt: %s", exc)
+        logger.warning("The learner database refused an attempt: %s", _log_safe(exc))
         return RecordResultOutcome(recorded=False, reason="rejected_by_database")
     except _READER_ABSORBS as exc:
         logger.warning("Could not record a lesson attempt: %s", _log_safe(exc))
@@ -2150,3 +2315,149 @@ def record_result(
             recorded_at=when,
         ),
     )
+
+
+def get_faceprint(learner_id: str, *, instance_path: str | Path | None = None) -> Faceprint | None:
+    """Return this learner's faceprint, or None when it cannot be produced.
+
+    None means they have none -- unless the store is unreadable, in which case a
+    warning is logged and this also returns None. Call store_is_available when the
+    difference matters, exactly as with get_profile: "nobody has enrolled" and "the
+    robot cannot read its database" must not be said to a person the same way.
+    """
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not read a learner id: %s", refusal)
+        return None
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        row: sqlite3.Row | None = connection.execute(_FACEPRINT_SQL, (learner_id,)).fetchone()
+        return None if row is None else _faceprint_from_row(row)
+    except _FACEPRINT_ABSORBS as exc:
+        # Never the learner id and never the vector: both are personal data and this is
+        # a log line. _log_safe is what keeps the exception from quoting either.
+        logger.warning("Could not read a faceprint: %s", _log_safe(exc))
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def save_faceprint(
+    learner_id: str,
+    embedding_model: str,
+    vector: Sequence[float],
+    *,
+    instance_path: str | Path | None = None,
+) -> SaveFaceprintOutcome:
+    """Store this learner's faceprint, replacing any they already have.
+
+    Never raises, for the reason record_result does not: this is called from a tool
+    layer driven by a model, and a bad value must come back as a reason code rather
+    than end the conversation turn.
+
+    One faceprint per learner, so a second one replaces the first. There is no caller
+    -supplied clock: created_at is stamped here, because a timestamp a caller chooses
+    is a field a caller can get wrong on biometric data, and nothing needs it.
+    """
+    refusal = _cannot_be_an_embedding_model(embedding_model)
+    if refusal is not None:
+        logger.warning("Could not store a faceprint: the embedding model was %s", refusal)
+        return SaveFaceprintOutcome(saved=False, reason="invalid_model")
+
+    blob = _pack_vector(vector)
+    if blob is None:
+        # The shape only: a vector is personal data, so neither its values nor its
+        # length go anywhere near this line.
+        logger.warning("Could not store a faceprint: the vector was not a packable face vector")
+        return SaveFaceprintOutcome(saved=False, reason="invalid_vector")
+    dimension = len(blob) // _VECTOR_BYTES_PER_ELEMENT
+
+    when = utc_now_ms()
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        try:
+            exists = connection.execute(_LEARNER_EXISTS_SQL, (learner_id,)).fetchone()
+        except UnicodeEncodeError as exc:
+            # The same arm record_result carries, for the same reason: a lone surrogate
+            # is a str the driver cannot bind and it names no learner, so unknown_learner
+            # is the honest code and storage_unavailable would say the robot is broken.
+            logger.warning("Could not store a faceprint: %s", _log_safe(exc))
+            return SaveFaceprintOutcome(saved=False, reason="unknown_learner")
+        if exists is None:
+            return SaveFaceprintOutcome(saved=False, reason="unknown_learner")
+
+        # DELETE then INSERT, in one transaction, because the guard refuses both
+        # spellings of an upsert -- see the note beside the statements themselves. The
+        # transaction is what makes "replace" atomic: without it a failed insert would
+        # leave the learner with no faceprint at all, which is worse than the old one.
+        with connection:
+            connection.execute(_DELETE_FACEPRINT_SQL, (learner_id,))
+            connection.execute(_INSERT_FACEPRINT_SQL, (learner_id, embedding_model, dimension, blob, when))
+    except (sqlite3.IntegrityError, OverflowError) as exc:
+        # The schema's constraints as a backstop to the checks above, and the one
+        # refusal that can still arrive from a race: a learner deleted between the
+        # existence check and the insert fails the foreign key here.
+        logger.warning("The learner database refused a faceprint: %s", _log_safe(exc))
+        return SaveFaceprintOutcome(saved=False, reason="rejected_by_database")
+    except _FACEPRINT_ABSORBS as exc:
+        logger.warning("Could not store a faceprint: %s", _log_safe(exc))
+        return SaveFaceprintOutcome(saved=False, reason="storage_unavailable")
+    finally:
+        if connection is not None:
+            connection.close()
+
+    return SaveFaceprintOutcome(
+        saved=True,
+        faceprint=Faceprint(
+            learner_id=learner_id,
+            embedding_model=embedding_model,
+            dimension=dimension,
+            # Unpacked from the bytes actually stored, not echoed back from the argument.
+            # float32 cannot hold every float the caller may pass, so echoing would
+            # report values this database does not contain.
+            vector=struct.unpack(f"{_VECTOR_FORMAT_PREFIX}{dimension}f", blob),
+            created_at=when,
+        ),
+    )
+
+
+def delete_faceprint(learner_id: str, *, instance_path: str | Path | None = None) -> int | None:
+    """Remove this learner's faceprint, returning how many rows went, or None.
+
+    A count, never a name: 0 means they had none, 1 means the row is gone, and None
+    means the store could not be read and nothing can be promised either way. That
+    distinction is the whole point -- erasure is a promise this app makes to a
+    household, and "I could not tell" must never be reported as "it is gone".
+
+    Exactly what 1 promises, because the difference matters for biometric data: the
+    ROW is removed and no reader can reach it again. The BYTES are not scrubbed from
+    the file. connect() does not set PRAGMA secure_delete, so SQLite returns the freed
+    page to its freelist without zeroing it -- measured: after this returned 1 and a
+    wal_checkpoint(TRUNCATE), the packed vector was still recoverable from the
+    database file. That is normal for a row delete and it is less than "the numbers no
+    longer exist anywhere", which is what a household asking to be forgotten means.
+
+    A learner id that could never name anybody is answered with 0 rather than a
+    refusal, because that is the truthful answer: no such row existed to remove.
+    """
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not read a learner id: %s", refusal)
+        return 0
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        with connection:
+            cursor = connection.execute(_DELETE_FACEPRINT_SQL, (learner_id,))
+        return int(cursor.rowcount)
+    except _FACEPRINT_ABSORBS as exc:
+        logger.warning("Could not delete a faceprint: %s", _log_safe(exc))
+        return None
+    finally:
+        if connection is not None:
+            connection.close()

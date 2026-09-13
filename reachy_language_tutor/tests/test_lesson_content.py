@@ -352,7 +352,7 @@ def test_nothing_in_the_content_tables_can_name_a_learner(instance: Path) -> Non
 
     # And the rule the store enforces agrees: none of these is a personal table, so a
     # statement reading one needs no learner filter and must not be given one.
-    assert set(store._PERSONAL_TABLES) == {"learners", "lesson_results"}
+    assert set(store._PERSONAL_TABLES) == {"learners", "lesson_results", "faceprints"}
 
 
 # ------------------------------------------------------------------- the reader
@@ -817,8 +817,9 @@ def test_the_schema_version_moved_with_the_schema() -> None:
     # table is how a structural check starts reporting on its own documentation.
     tables = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", re.sub(r"--[^\n]*", " ", schema))
 
-    assert store.SCHEMA_VERSION == 2, "version 2 is the one that added lesson content"
+    assert store.SCHEMA_VERSION == 3, "version 2 added lesson content; version 3 added faceprints"
     assert sorted(tables) == [
+        "faceprints",
         "languages",
         "learners",
         "lesson_dialogue_turns",

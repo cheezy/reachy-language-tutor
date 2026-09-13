@@ -28,6 +28,20 @@ RECORD_REASONS: tuple[str, ...] = (
     "storage_unavailable",
 )
 
+# Why a faceprint was not stored. Same shape and same purpose as RECORD_REASONS above,
+# and deliberately a separate vocabulary: the two writers refuse for different reasons,
+# and one list covering both would let a caller switch on a code its writer can never
+# return. A test walks every published vocabulary against the reasons its writer can
+# actually produce, so a code added here without a writer -- or a writer returning one
+# that is not here -- fails rather than reaching a household.
+FACEPRINT_REASONS: tuple[str, ...] = (
+    "unknown_learner",
+    "invalid_model",
+    "invalid_vector",
+    "rejected_by_database",
+    "storage_unavailable",
+)
+
 # The only kinds of drill a lesson may carry, and what each one is for:
 #
 #   repetition   -- the tutor says the target, the learner repeats it, and the gloss
@@ -222,3 +236,40 @@ class RecordResultOutcome:
     recorded: bool
     reason: str | None = None
     attempt: LessonAttempt | None = None
+
+
+@dataclass(frozen=True)
+class Faceprint:
+    """One person's face, as numbers and nothing else.
+
+    Numeric face data only: no image, no crop, no thumbnail, and no path to a file on
+    disk. docs/plan.md makes that promise to the households this runs in, and the shape
+    of this type is part of how it is kept -- there is no field here that could carry a
+    picture, and the store has no entry point that accepts bytes.
+
+    The vector means nothing without the model that produced it. Numbers from one
+    embedding model are not comparable with numbers from another, so `embedding_model`
+    travels with them and a reader that ignores it will happily match the wrong person.
+    `dimension` is how many numbers there are, and it always equals len(vector).
+    """
+
+    learner_id: str
+    embedding_model: str
+    dimension: int
+    vector: tuple[float, ...]
+    created_at: int
+
+
+@dataclass(frozen=True)
+class SaveFaceprintOutcome:
+    """What happened when a faceprint was stored.
+
+    Returned rather than raised, for the reason RecordResultOutcome gives: a storage
+    failure needs somewhere to land that already exists when this moves behind the
+    network. `reason` is one of FACEPRINT_REASONS when `saved` is False, and None when
+    it is True.
+    """
+
+    saved: bool
+    reason: str | None = None
+    faceprint: Faceprint | None = None

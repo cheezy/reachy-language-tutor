@@ -8,6 +8,8 @@ verification is scoped to the application package, not to the test suite.
 
 import re
 import ast
+import string
+import struct
 import inspect
 import logging
 import sqlite3
@@ -539,10 +541,25 @@ def test_record_result_never_raises_whatever_the_timestamp(instance: Path) -> No
         assert outcome.reason in learners.RECORD_REASONS, recorded_at
 
 
-def test_every_reason_the_store_can_return_is_in_the_published_vocabulary() -> None:
+# Every outcome type the store can return, paired with the vocabulary that publishes
+# its reason codes. A LIST, because there is more than one writer now: the guards below
+# were written when RecordResultOutcome was the only one, and SaveFaceprintOutcome
+# joined the set without them noticing -- which is this repository's most repeated
+# defect, a rule applied to one member while its sibling kept the bug. Adding a writer
+# means adding a line here, and both guards widen with it.
+_PUBLISHED_VOCABULARIES = [
+    ("RecordResultOutcome", learners.RECORD_REASONS),
+    ("SaveFaceprintOutcome", learners.FACEPRINT_REASONS),
+]
+
+
+@pytest.mark.parametrize(("outcome_type", "vocabulary"), _PUBLISHED_VOCABULARIES)
+def test_every_reason_the_store_can_return_is_in_the_published_vocabulary(
+    outcome_type: str, vocabulary: tuple[str, ...]
+) -> None:
     """A code a caller cannot anticipate is not an interface.
 
-    RECORD_REASONS is what a caller switches on. A reason returned from the module but
+    The vocabulary is what a caller switches on. A reason returned from the module but
     missing from it would reach the tutor as an unknown string, and the branch that
     turns codes into speech would have nothing to say.
     """
@@ -554,7 +571,7 @@ def test_every_reason_the_store_can_return_is_in_the_published_vocabulary() -> N
         if not isinstance(node, ast.Call):
             continue
         name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
-        if name != "RecordResultOutcome":
+        if name != outcome_type:
             continue
         given = [keyword.value for keyword in node.keywords if keyword.arg == "reason"]
         # A positional reason, or one that is not a literal, is a code this scan cannot
@@ -568,30 +585,54 @@ def test_every_reason_the_store_can_return_is_in_the_published_vocabulary() -> N
             else:
                 unreadable.append(f"line {node.lineno}: reason is {type(value).__name__}, not a literal")
 
-    assert returned, "the scan found no reason codes at all, so it is proving nothing"
+    assert returned, f"the scan found no {outcome_type} reason codes at all, so it is proving nothing"
     assert not unreadable, unreadable
-    assert returned <= set(learners.RECORD_REASONS), sorted(returned - set(learners.RECORD_REASONS))
+    assert returned <= set(vocabulary), sorted(returned - set(vocabulary))
 
 
-def test_every_published_reason_is_documented() -> None:
+@pytest.mark.parametrize(("outcome_type", "vocabulary"), _PUBLISHED_VOCABULARIES)
+def test_every_published_reason_is_documented(outcome_type: str, vocabulary: tuple[str, ...]) -> None:
     """The other half of the same contract, and the half a reader depends on.
 
-    docs/learner-database.md's table is where a code stops being a bare string and
-    starts meaning something. Adding a code to RECORD_REASONS without a row there
+    docs/learner-database.md's reason tables are where a code stops being a bare string
+    and starts meaning something. Adding a code to a vocabulary without a row there
     leaves a caller able to switch on it and unable to find out what it means.
+
+    EVERY such table is scanned, not the first one. Slicing at the first heading was
+    what let the faceprint vocabulary go undocumented-but-unnoticed: its table exists,
+    and a scan that stopped at record_result's table would never have reached it.
     """
     doc = (Path(__file__).resolve().parents[2] / "docs" / "learner-database.md").read_text(encoding="utf-8")
 
-    # The reason table only. Scanning the whole file would count the schema tables too,
+    # Reason tables only. Scanning the whole file would count the schema tables too,
     # and those carry rows named `outcome`, `score` and `learner_id` -- so a future
     # reason code sharing a column name would read as documented by a row that says
     # nothing about reason codes.
-    heading = doc.index("| `reason` | Cause |")
-    table = doc[heading : doc.index("\n\n", heading)]
-    documented = set(re.findall(r"^\| `([a-z_]+)` \|", table, re.MULTILINE))
+    heading = "| `reason` | Cause |"
+    starts = [i for i in range(len(doc)) if doc.startswith(heading, i)]
+    assert len(starts) >= len(_PUBLISHED_VOCABULARIES), (
+        f"found {len(starts)} reason table(s) for {len(_PUBLISHED_VOCABULARIES)} published "
+        "vocabularies; each one needs its own documented table under this heading"
+    )
 
-    assert "outcome" not in documented, "the slice leaked into a schema table"
-    assert set(learners.RECORD_REASONS) <= documented, sorted(set(learners.RECORD_REASONS) - documented)
+    tables = [
+        set(re.findall(r"^\| `([a-z_]+)` \|", doc[start : doc.index("\n\n", start)], re.MULTILINE))
+        for start in starts
+    ]
+
+    assert all("outcome" not in table for table in tables), "a slice leaked into a schema table"
+
+    # ONE table must document the whole vocabulary -- not the union of all of them.
+    # The union was vacuous for exactly the codes that matter most: unknown_learner,
+    # rejected_by_database and storage_unavailable appear in BOTH vocabularies, so
+    # three of the five faceprint codes could be deleted from the faceprint table and
+    # still be "documented" by record_result's. Measured: deleting the
+    # unknown_learner row from the faceprint table left the union form green.
+    missing_from_every_table = [sorted(set(vocabulary) - table) for table in tables]
+    assert any(not missing for missing in missing_from_every_table), (
+        f"no single reason table documents all of {outcome_type}'s codes; "
+        f"closest tables are missing {sorted(missing_from_every_table, key=len)[:2]}"
+    )
 
 
 def test_store_is_available_separates_absence_from_breakage(tmp_path: Path, instance: Path) -> None:
@@ -667,9 +708,12 @@ def test_concurrent_access_is_safe(instance: Path) -> None:
 # ------------------------------------------------------------- structural guards
 
 
-# The two tables that hold anything about a person. Everything else in this schema --
+# The three tables that hold anything about a person. Everything else in this schema --
 # languages, lessons, schema_meta -- is shared reference data.
-_PERSONAL_TABLES = ("learners", "lesson_results")
+#
+# This list is the test's own copy on purpose -- it must not import store's, or the
+# guard would agree with whatever the module says rather than checking it.
+_PERSONAL_TABLES = ("learners", "lesson_results", "faceprints")
 
 
 def _personal(sql: str) -> bool:
@@ -690,6 +734,16 @@ def _personal(sql: str) -> bool:
     return any(re.search(rf"\b{table}\b", sql, re.IGNORECASE) for table in _PERSONAL_TABLES)
 
 
+# The verbs that can introduce a statement touching personal data. An allow-list of
+# what a statement may BE, rather than the two spellings that happened to exist: the
+# filter here used to read "SELECT" or "INSERT", so a named DELETE or UPDATE constant
+# naming a personal table was invisible to this guard and could sit unregistered
+# forever. _DELETE_FACEPRINT_SQL was the first such constant in the module and was
+# measured escaping it, which is what prompted widening the set rather than adding the
+# one verb that had just been needed.
+_STATEMENT_VERBS = ("SELECT", "INSERT", "UPDATE", "DELETE", "REPLACE")
+
+
 def test_every_module_level_query_touching_personal_data_is_scoped() -> None:
     """A named statement touching personal data cannot quietly skip the scoping guard.
 
@@ -699,7 +753,7 @@ def test_every_module_level_query_touching_personal_data_is_scoped() -> None:
     for name, value in vars(store).items():
         if not isinstance(value, str) or not name.isupper() and not name.startswith("_"):
             continue
-        if not isinstance(value, str) or "SELECT" not in value and "INSERT" not in value:
+        if not isinstance(value, str) or not any(verb in value for verb in _STATEMENT_VERBS):
             continue
         if _personal(value):
             assert value in store._LEARNER_SCOPED_SQL, f"{name} touches personal data unscoped"
@@ -756,7 +810,7 @@ def test_every_registered_statement_is_still_accepted() -> None:
     during store's import. Saying it again here is what makes the failure name the
     statement instead of arriving as a collection error against every test in the file.
     """
-    assert len(store._LEARNER_SCOPED_SQL) == 7
+    assert len(store._LEARNER_SCOPED_SQL) == 10
 
     for sql in store._LEARNER_SCOPED_SQL:
         assert store._learner_scoped(sql) == sql
@@ -2877,6 +2931,12 @@ def test_package_exports_only_the_interface() -> None:
         "get_progress",
         "record_result",
         "store_is_available",
+        "FACEPRINT_REASONS",
+        "Faceprint",
+        "SaveFaceprintOutcome",
+        "get_faceprint",
+        "save_faceprint",
+        "delete_faceprint",
     }
     for leaked in ("connect", "NEXT_LESSON_SQL", "ensure_learner_database", "SEED_LESSONS"):
         assert leaked not in learners.__all__
@@ -3657,3 +3717,404 @@ def test_a_newly_added_language_starts_from_lesson_one(instance: Path, language_
     )
     assert progress.next_lesson is not None
     assert progress.next_lesson.position == 1, "and the one offered is the first"
+
+
+# ------------------------------------------------------------------- faceprints
+
+
+def _faceprint_rows(instance_path: Path, learner_id: str) -> list[tuple[object, ...]]:
+    """Read the faceprint rows for one learner with raw SQL, bypassing the store."""
+    connection = store.connect(instance_path)
+    try:
+        return [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT learner_id, embedding_model, dimension, vector FROM faceprints WHERE learner_id = ?",
+                (learner_id,),
+            )
+        ]
+    finally:
+        connection.close()
+
+
+def test_a_faceprint_round_trips_byte_identically(instance: Path) -> None:
+    """Written, read back, same numbers and the same bytes underneath them.
+
+    The values are float32-exact on purpose. 0.1 is not, so asserting on it would test
+    the rounding rather than the round trip, and would fail for a reason that has
+    nothing to do with storage.
+    """
+    _add_learner(instance, "someone")
+    values = (0.5, -0.25, 1.0)
+
+    outcome = store.save_faceprint("someone", "arcface-r100", values, instance_path=instance)
+    assert outcome.saved is True and outcome.reason is None
+
+    read = store.get_faceprint("someone", instance_path=instance)
+    assert read is not None
+    assert read.vector == values
+    assert read.dimension == 3
+    assert read.embedding_model == "arcface-r100"
+    assert read.learner_id == "someone"
+
+    # And the bytes themselves, not just the floats they decode to.
+    rows = _faceprint_rows(instance, "someone")
+    assert len(rows) == 1
+    assert bytes(rows[0][3]) == struct.pack("<3f", *values)
+
+
+def test_the_vector_is_little_endian_float32_and_says_so_in_bytes(instance: Path) -> None:
+    r"""Pin the byte order where a change to it is visible.
+
+    Storing 1.0 as b"?\x80\x00\x00" instead would be big-endian, and every faceprint
+    already on a robot would silently decode as different numbers -- a different person.
+    A round-trip test through this module alone cannot see that, because it would
+    unpack with whatever it packed with. This one names the bytes.
+    """
+    _add_learner(instance, "someone")
+    store.save_faceprint("someone", "m", [1.0], instance_path=instance)
+
+    stored = bytes(_faceprint_rows(instance, "someone")[0][3])
+    assert stored == b"\x00\x00\x80?", "little-endian float32"
+    assert stored != b"?\x80\x00\x00", "big-endian would be this"
+    assert len(stored) == 1 * store._VECTOR_BYTES_PER_ELEMENT
+
+
+def test_a_second_faceprint_replaces_the_first(instance: Path) -> None:
+    """One row per learner, and the newer one wins.
+
+    Fails as an IntegrityError if the DELETE is dropped from the transaction, and as a
+    count of 2 if the table ever stops keying on the learner.
+    """
+    _add_learner(instance, "someone")
+    store.save_faceprint("someone", "old-model", [1.0, 2.0], instance_path=instance)
+    store.save_faceprint("someone", "new-model", [3.0, 4.0, 5.0], instance_path=instance)
+
+    rows = _faceprint_rows(instance, "someone")
+    assert len(rows) == 1, "a learner has one faceprint"
+
+    read = store.get_faceprint("someone", instance_path=instance)
+    assert read is not None
+    assert read.embedding_model == "new-model"
+    assert read.vector == (3.0, 4.0, 5.0)
+    assert read.dimension == 3
+
+
+def test_a_learner_with_no_faceprint_reads_as_none_and_says_nothing(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A genuine absence is not a failure, so it must not log like one."""
+    _add_learner(instance, "someone")
+
+    with caplog.at_level(logging.WARNING):
+        assert store.get_faceprint("someone", instance_path=instance) is None
+
+    assert caplog.text == "", "nobody enrolled yet is not a problem to report"
+
+
+def test_an_unknown_learner_cannot_have_a_faceprint(instance: Path) -> None:
+    """Reported, and nothing written -- the check that must not appear to succeed."""
+    outcome = store.save_faceprint("nobody-here", "m", [1.0], instance_path=instance)
+
+    assert outcome.saved is False
+    assert outcome.reason == "unknown_learner"
+    assert outcome.faceprint is None
+    assert _faceprint_rows(instance, "nobody-here") == []
+
+
+@pytest.mark.parametrize(
+    ("label", "vector"),
+    [
+        ("empty", []),
+        ("a string element", ["x"]),
+        ("a None element", [None]),
+        ("too large for float32", [1e39]),
+        ("booleans", [True, False]),
+        ("a bare string", "abc"),
+        ("bytes", b"abcd"),
+        ("not a sequence", 1.0),
+        ("longer than the bound", [0.0] * (store._MAX_VECTOR_DIMENSION + 1)),
+    ],
+)
+def test_a_vector_the_store_cannot_pack_is_refused(instance: Path, label: str, vector: object) -> None:
+    """Refused as a caller error, and nothing written.
+
+    `booleans` is the one that regresses silently: struct.pack("<f", True) does not
+    raise, it packs 1.0, so without the explicit exclusion a vector of flags would be
+    stored as a face and this test would be the only thing that noticed.
+    """
+    _add_learner(instance, "someone")
+
+    outcome = store.save_faceprint("someone", "m", vector, instance_path=instance)  # type: ignore[arg-type]
+
+    assert outcome.saved is False, label
+    assert outcome.reason == "invalid_vector", label
+    assert _faceprint_rows(instance, "someone") == [], label
+
+
+@pytest.mark.parametrize(
+    ("label", "model"),
+    [
+        ("empty", ""),
+        ("only whitespace", "   "),
+        ("longer than the bound", "m" * (store._MAX_MODEL_NAME + 1)),
+        ("a lone surrogate", "\ud800"),  # refused by the character allow-list, not by an encode test
+        ("not a string", 7),
+        ("None", None),
+        # The spellings this column's character allow-list exists to refuse. It is the
+        # only caller-supplied TEXT in the table and 128 characters is ample room for a
+        # path, so "no column can hold a path to an image" rests on these failing.
+        ("an absolute path", "/Users/someone/child.jpg"),
+        ("a home-relative path", "~/Pictures/child.png"),
+        ("a relative path", "faces/child.jpeg"),
+        ("traversal", "../../etc/passwd"),
+        ("a windows path", "C:\\Users\\someone\\face.bmp"),
+        ("a file URL", "file:///tmp/face.png"),
+        ("a space", "model name"),
+    ],
+)
+def test_a_model_name_that_cannot_be_stored_is_refused(instance: Path, label: str, model: object) -> None:
+    """invalid_model, never storage_unavailable: the caller sent nonsense.
+
+    The lone surrogate is the one that used to be mislabelled by its sibling writers --
+    it fails at bind time, so without this guard it would be reported as a broken robot.
+    """
+    _add_learner(instance, "someone")
+
+    outcome = store.save_faceprint("someone", model, [1.0], instance_path=instance)  # type: ignore[arg-type]
+
+    assert outcome.saved is False, label
+    assert outcome.reason == "invalid_model", label
+    assert _faceprint_rows(instance, "someone") == [], label
+
+
+def test_a_statement_touching_the_faceprint_table_outside_the_scoped_path_raises() -> None:
+    """The guard sees the new table, and refuses for the reason it names.
+
+    Asserting the phrase rather than "something raised": a refusal for some other
+    reason -- an unparsable statement, say -- would be this test passing over a table
+    the guard cannot actually see.
+    """
+    with pytest.raises(ValueError, match="nothing constrains faceprints to one learner"):
+        store._learner_scoped("SELECT learner_id, vector FROM faceprints")
+
+
+def test_the_faceprint_statements_are_all_registered_as_scoped() -> None:
+    """Every statement naming the new table goes through the scoped path."""
+    for sql in (store._FACEPRINT_SQL, store._INSERT_FACEPRINT_SQL, store._DELETE_FACEPRINT_SQL):
+        assert _personal(sql) is True
+        assert sql in store._LEARNER_SCOPED_SQL
+
+
+def test_deleting_a_faceprint_counts_rather_than_names(instance: Path) -> None:
+    """0, 1 and None are three different answers and must stay that way.
+
+    Erasure is a promise to a household, so "I could not tell" (None) must never be
+    reported as "it is gone" (1).
+    """
+    _add_learner(instance, "someone")
+
+    assert store.delete_faceprint("someone", instance_path=instance) == 0, "had none"
+
+    store.save_faceprint("someone", "m", [1.0], instance_path=instance)
+    assert store.delete_faceprint("someone", instance_path=instance) == 1, "and now it is gone"
+    assert store.get_faceprint("someone", instance_path=instance) is None
+    assert _faceprint_rows(instance, "someone") == []
+
+    # A value that could never name anybody removed nothing, which is the truth.
+    assert store.delete_faceprint("", instance_path=instance) == 0
+
+
+@pytest.mark.parametrize(
+    ("label", "call", "expected"),
+    [
+        ("get", lambda path: store.get_faceprint("someone", instance_path=path), None),
+        ("save", lambda path: store.save_faceprint("someone", "m", [1.0], instance_path=path).reason,
+         "storage_unavailable"),
+        ("delete", lambda path: store.delete_faceprint("someone", instance_path=path), None),
+    ],
+)
+def test_an_unreadable_store_answers_rather_than_raising(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, label: str, call: object, expected: object
+) -> None:
+    """Every one of the three, because a reader that raises ends the conversation turn."""
+    broken = tmp_path / "nonexistent"
+
+    with caplog.at_level(logging.WARNING):
+        assert call(broken) == expected, label  # type: ignore[operator]
+
+    assert caplog.text != "", f"{label}: breakage is reported"
+
+
+def test_no_faceprint_log_line_carries_a_learner_id_a_model_or_a_vector(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A faceprint and a learner id are personal data; a log file is not the place.
+
+    Walks every failure path these three functions have, and asserts the id, the model
+    name and the packed bytes are all absent from what was logged.
+    """
+    _add_learner(instance, "secret-person")
+    secret_model = "a-very-distinctive-model-name"
+    broken = instance / "nonexistent"
+
+    with caplog.at_level(logging.WARNING):
+        store.save_faceprint("secret-person", secret_model, ["not-a-number"], instance_path=instance)
+        store.save_faceprint("secret-person", "\ud800", [1.0], instance_path=instance)
+        store.save_faceprint("secret-person", secret_model, [1.0], instance_path=broken)
+        store.get_faceprint("secret-person", instance_path=broken)
+        store.delete_faceprint("secret-person", instance_path=broken)
+        store.get_faceprint("\ud800", instance_path=instance)
+        # The one arm that logs a raw exception rather than _log_safe(exc). It is
+        # reached only by the race below, so without this call the sink the no-PII
+        # claim is weakest at is the one sink this test never visits.
+        _, raced_in_walk = _save_into_a_deleted_learner(instance, "secret-person", secret_model)
+
+    # Asserted, not assumed: if the harness hook ever stops firing, this walk would
+    # quietly stop visiting that sink while still passing. The flag is what stops the
+    # coverage being real today and unpinned tomorrow.
+    assert raced_in_walk is True, "the walk did not reach the database-refusal log sink"
+    assert caplog.text != "", "these are failures and they were reported"
+    assert "secret-person" not in caplog.text
+    assert secret_model not in caplog.text
+    assert "\ud800" not in caplog.text
+    assert repr(struct.pack("<f", 1.0)) not in caplog.text
+
+
+def test_the_faceprint_bounds_in_python_and_in_the_schema_say_the_same_thing() -> None:
+    """Two copies of a bound is how a guard and its database drift apart.
+
+    store.py refuses a vector longer than _MAX_VECTOR_DIMENSION; the schema refuses a
+    row whose dimension exceeds its own bound. If those two numbers ever disagree, one
+    of them is unreachable -- either a vector the store accepts and the database
+    refuses, or a CHECK nothing can ever trip.
+    """
+    schema = (Path(store.__file__).resolve().parent / "schema.sql").read_text(encoding="utf-8")
+
+    dimension = re.search(r"dimension BETWEEN 1 AND (\d+)", schema)
+    model = re.search(r"length\(trim\(embedding_model\)\) BETWEEN 1 AND (\d+)", schema)
+    width = re.search(r"length\(vector\) = dimension \* (\d+)", schema)
+
+    assert dimension is not None and model is not None and width is not None, "the CHECKs moved"
+    assert int(dimension.group(1)) == store._MAX_VECTOR_DIMENSION
+    assert int(model.group(1)) == store._MAX_MODEL_NAME
+    assert int(width.group(1)) == store._VECTOR_BYTES_PER_ELEMENT
+
+    # And the character allow-list, which is the half that carries the no-paths promise.
+    # The GLOB names the permitted characters; the Python set must name the same ones,
+    # or one of the two lets through a spelling the other refuses.
+    glob = re.search(r"embedding_model NOT GLOB '\*\[\^([^\]]+)\]\*'", schema)
+    assert glob is not None, "the model-name allow-list moved"
+
+    # The clause that makes that allow-list mean anything. Without it SQLite's
+    # NUL-terminated length()/trim()/GLOB let a 5030-character path through as a
+    # 3-character name -- measured, and pinned by its own test in the schema suite.
+    assert "length(CAST(embedding_model AS BLOB)) = length(embedding_model)" in schema, (
+        "the byte-length clause is gone; the character allow-list is NUL-steppable without it"
+    )
+    assert glob.group(1) == "A-Za-z0-9._-"
+    assert store._MODEL_NAME_CHARACTERS == frozenset(
+        string.ascii_letters + string.digits + "._-"
+    ), "the two copies of the permitted set must say the same thing"
+
+
+class _RacingConnection:
+    """A connection that deletes the learner the moment its existence has been checked.
+
+    This is the "learner row deleted concurrently" edge case, made deterministic. A
+    real race needs two connections and a scheduler that cooperates; this reproduces
+    the same interleaving exactly -- existence answered yes, row gone, insert attempted
+    -- by deleting on the same connection, inside the same transaction the insert will
+    run in, so the foreign key sees it immediately.
+    """
+
+    def __init__(self, real: sqlite3.Connection, learner_id: str) -> None:
+        self._real = real
+        self._learner_id = learner_id
+        self._raced = False
+
+    def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+        cursor = self._real.execute(sql, parameters)  # type: ignore[arg-type]
+        if sql == store._LEARNER_EXISTS_SQL and not self._raced:
+            self._raced = True
+            self._real.execute("DELETE FROM learners WHERE id = ?", (self._learner_id,))
+        return cursor
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self._real.__enter__()
+
+    def __exit__(self, *exc_info: object) -> object:
+        return self._real.__exit__(*exc_info)  # type: ignore[arg-type]
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._real, name)
+
+
+def _save_into_a_deleted_learner(instance_path: Path, learner_id: str, model: str = "m") -> tuple[object, bool]:
+    """Run save_faceprint against a learner deleted between the check and the insert.
+
+    Returns the outcome and whether the interleaving actually happened, because a
+    harness whose hook silently never fired would make the test using it assert the
+    right thing about the wrong run.
+    """
+    real_connect = store.connect
+    raced: list[_RacingConnection] = []
+
+    def racing_connect(path: object = None) -> object:
+        connection = _RacingConnection(real_connect(path), learner_id)  # type: ignore[arg-type]
+        raced.append(connection)
+        return connection
+
+    store.connect = racing_connect  # type: ignore[assignment]
+    try:
+        outcome = store.save_faceprint(learner_id, model, [1.0], instance_path=instance_path)
+    finally:
+        store.connect = real_connect  # type: ignore[assignment]
+    return outcome, any(connection._raced for connection in raced)
+
+
+def test_a_learner_deleted_between_the_check_and_the_insert_is_refused_not_raised(instance: Path) -> None:
+    """The edge case the testing strategy names, and the arm that had no test.
+
+    save_faceprint checks the learner exists and then inserts. Between those two the
+    row can go, and the foreign key refuses the insert. Both the code comment and
+    docs/learner-database.md state that this comes back as rejected_by_database -- a
+    specific behavioural claim, so it is executed here rather than asserted on trust.
+
+    The important half is that it does not RAISE: this is called from a tool layer
+    driven by a model, and an exception here ends the conversation turn.
+    """
+    _add_learner(instance, "racy")
+
+    outcome, raced = _save_into_a_deleted_learner(instance, "racy")
+
+    assert raced is True, "the harness never reached the interleaving it exists to create"
+    assert outcome.saved is False  # type: ignore[union-attr]
+    assert outcome.reason == "rejected_by_database", "the foreign key refused it"  # type: ignore[union-attr]
+    assert outcome.faceprint is None  # type: ignore[union-attr]
+    assert _faceprint_rows(instance, "racy") == [], "and nothing was written"
+
+
+def test_the_refused_race_leaves_the_database_exactly_as_it_was(instance: Path) -> None:
+    """The other half, and a property worth having on purpose rather than by luck.
+
+    The insert and the harness's delete run in one transaction, so when the foreign key
+    refuses the insert the rollback takes the delete with it: the learner is still
+    there afterwards and has no faceprint. A refused save leaves no damage.
+
+    Written this way after the first attempt asserted the learner was GONE and failed
+    -- the deletion really happens, and the rollback really undoes it. Asserting the
+    side effect rather than the interleaving is what made that test wrong; `raced` is
+    what pins the interleaving now.
+    """
+    _add_learner(instance, "racy")
+
+    outcome, raced = _save_into_a_deleted_learner(instance, "racy")
+    assert raced is True and outcome.saved is False  # type: ignore[union-attr]
+
+    connection = store.connect(instance)
+    try:
+        assert connection.execute("SELECT 1 FROM learners WHERE id = ?", ("racy",)).fetchone() is not None
+    finally:
+        connection.close()
+    assert _faceprint_rows(instance, "racy") == []

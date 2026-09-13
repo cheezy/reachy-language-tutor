@@ -11,11 +11,20 @@ learner has finished comes from here.
 
 ## What it deliberately does not store
 
-No faceprints, no locale, no audio, no transcripts — and no email address. `docs/plan.md`
-says "Only names, emails, and learning progress leave the home", with faceprints staying
-on the device; this schema deliberately goes further and stores no email at all, because
+No locale, no audio, no transcripts — and no email address. `docs/plan.md` says "Only
+names, emails, and learning progress leave the home", with faceprints staying on the
+device; this schema deliberately goes further and stores no email at all, because
 nothing on the robot needs one. Account-level identity is a hosted-backend concern for a
-later milestone. What is left is a display name, a lesson catalog, and results.
+later milestone.
+
+**And no image of anybody, in any form.** The `faceprints` table below holds numeric
+face data and nothing else: no photo, no crop, no thumbnail, and no path to a file on
+disk. A path column is how "we only store numbers" stops being true without anyone
+editing the sentence, so the permitted columns are pinned as an allow-list by a test
+that reads the table's own schema — a later column fails it whatever it is called.
+
+What is left is a display name, a lesson catalog, results, and one faceprint per person
+who has enrolled.
 
 Deleting a learner is a single statement, because everything else cascades from it:
 
@@ -51,6 +60,44 @@ level; **never commit any of them.**
 | `id` | TEXT | no | Primary key. A stable string assigned by the application, not a database counter — face recognition will supply this later, and the app sets it, never the conversation. |
 | `display_name` | TEXT | no | What Reachy calls this person out loud. Must not be blank or whitespace. |
 | `created_at` | INTEGER | no | When the profile was created, epoch milliseconds. |
+
+### `faceprints` — one row per enrolled person, as numbers only
+
+| Column | Type | Notes |
+|---|---|---|
+| `learner_id` | `TEXT` | Primary key, `REFERENCES learners(id) ON DELETE CASCADE` |
+| `embedding_model` | `TEXT` | Which model produced the numbers. 1–128 characters, and only letters, digits, dot, underscore and hyphen |
+| `dimension` | `INTEGER` | How many numbers, 1–1024 |
+| `vector` | `BLOB` | `dimension` little-endian IEEE-754 float32 values, so exactly `dimension * 4` bytes |
+| `created_at` | `INTEGER` | Stamped by the store, never by a caller |
+
+**One faceprint per person**, keyed on the person, so erasure is exactly one row and
+"did it work" is a count of 0 or 1. Several angles would match better and would arrive
+as a *new table* if they are ever wanted — a `CREATE TABLE IF NOT EXISTS` with extra
+columns is a no-op against a table that already exists, so a column added later reaches
+fresh installs only.
+
+**`embedding_model` travels with the vector because it has to.** Numbers from one model
+mean nothing to another, and without this column a model upgrade silently compares
+incomparable vectors and matches the wrong member of a household.
+
+**The model name's character set is an allow-list, and that is what finishes the
+no-paths promise.** `embedding_model` is the only caller-supplied `TEXT` in this table
+and 128 characters is ample room for `/Users/someone/child.jpg`, so the column list
+alone would leave "no column can hold a path to an image" resting on nobody choosing to
+write one. Naming the permitted characters refuses every spelling of a path at once —
+absolute, home-relative, traversal, Windows, `file://` — where a rule listing `/` and
+`~` and `..` would only ever be as complete as the last person to think about it.
+
+The cost, stated rather than discovered later: a HuggingFace-style id with a slash
+(`deepinsight/arcface`) is refused too. That is the intended reading — an identifier
+here is a **name**, not a location, and the slash is exactly what makes it a location.
+
+**Byte order is pinned in three places** — the `"<"` in `store.py`, a test asserting
+`[1.0]` stores `b"\x00\x00\x80?"` and not `b"?\x80\x00\x00"`, and the
+`length(vector) = dimension * 4` CHECK. A silent change of byte order would turn every
+stored faceprint into a different person's numbers while any test that only round-trips
+through one module kept passing.
 
 ### `languages` — what the tutor can teach
 
@@ -191,17 +238,18 @@ languages ──1:N──> lessons ──1:N──> lesson_dialogue_turns
    code              id     ├──1:N──> lesson_notes
                      ▲      └──1:N──> lesson_drills
                      │
-                     └──1:N──> lesson_results <──N:1── learners
-                                 lesson_id             id
+                     └──1:N──> lesson_results <──N:1── learners ──1:1──> faceprints
+                                 lesson_id             id                  learner_id
                                  learner_id
 ```
 
 Every foreign key is `ON DELETE CASCADE`. Deleting a learner removes their results;
 retiring a language removes its lessons, their content and their results.
 
-**Every content table hangs off `lessons`, and nothing hangs off `learners` except
-`lesson_results`.** That is what keeps deleting a household a single statement: the five
-content tables were never that household's to delete.
+**Every content table hangs off `lessons`, and the only things hanging off `learners`
+are `lesson_results` and `faceprints`.** That is what keeps deleting a household a single
+statement: the five content tables were never that household's to delete, and the two
+that were both cascade.
 
 > **Foreign keys only work because the code turns them on.** SQLite ignores foreign key
 > constraints unless a connection issues `PRAGMA foreign_keys = ON`, and it is a silent
@@ -384,8 +432,10 @@ Re-seeding is safe because the two kinds of row are treated differently:
 - **App-owned reference data** (`languages`, `lessons`, `lesson_sources`) is *converged*
   on a version bump, so a corrected lesson title — or a corrected page reference —
   reaches installations that already seeded.
-- **Learner-owned rows** (`learners`, `lesson_results`) are never overwritten. A
-  household may have renamed the sample learner or practised against it.
+- **Learner-owned rows** (`learners`, `lesson_results`, `faceprints`) are never
+  overwritten. A household may have renamed the sample learner or practised against it —
+  and nothing seeds a faceprint at all, because a shipped faceprint would be fabricated
+  biometric data for a person who does not exist.
 
 **A deleted learner is never resurrected**, including across seed-version bumps. Two
 mechanisms are needed for that, and the second is the subtle one:
@@ -482,6 +532,8 @@ Everything above describes the data. This is how the application reaches it.
 
 ```python
 from reachy_language_tutor.learners import (
+    delete_faceprint,
+    get_faceprint,
     get_language_catalog,
     get_lesson,
     get_lesson_content,
@@ -489,6 +541,7 @@ from reachy_language_tutor.learners import (
     get_practised_languages,
     get_progress,
     record_result,
+    save_faceprint,
     store_is_available,
 )
 ```
@@ -507,6 +560,9 @@ are SQLite's business, and a hosted backend would have no equivalent.
 | `get_progress(learner_id, language_code, *, instance_path=None)` | `LanguageProgress \| None` | `None` = that language is not taught, **or** the store is unreadable, **or** either argument was refused |
 | `record_result(learner_id, lesson_id, outcome, *, score=None, recorded_at=None, instance_path=None)` | `RecordResultOutcome` | never raises; see the reason codes below |
 | `store_is_available(instance_path=None)` | `bool` | `False` = the store could not be read, **or** `instance_path` itself was refused. It binds no caller value into SQL, so it is **not** a test of whether a *learner id or language code* was refused |
+| `get_faceprint(learner_id, *, instance_path=None)` | `Faceprint \| None` | `None` = this learner has no faceprint, **or** the store is unreadable, **or** the learner id was refused |
+| `save_faceprint(learner_id, embedding_model, vector, *, instance_path=None)` | `SaveFaceprintOutcome` | never raises; see the faceprint reason codes below. Replaces any faceprint the learner already has |
+| `delete_faceprint(learner_id, *, instance_path=None)` | `int \| None` | a **count**, not a name: `0` = they had none (including a learner id that could never name anybody), `1` = the **row** is gone and no reader can reach it (the bytes are a separate question — see below), `None` = the store could not be read and nothing can be promised either way |
 
 Those "or"s are why the next section exists: only the log tells them apart — and not
 even the log separates a learner who has practised nothing from one who has only ever
@@ -582,6 +638,48 @@ An **unknown learner** gets a populated fresh start rather than an error — the
 catalog is not personal data, so there is nothing to withhold. Recording a result is
 where an unknown learner is caught and reported, because that is the operation that
 must not silently appear to succeed.
+
+### Erasure is a count, never a name
+
+`delete_faceprint` returns how many rows went, and the three answers are deliberately
+different things. Erasure is a promise this app makes to a household, so **"I could not
+tell" must never be reported as "it is gone"** — that is what `None` is for, and why the
+function does not simply return a `bool`.
+
+A learner id that could never name anybody is answered `0` rather than refused, because
+`0` is the truthful answer: no such row existed to remove.
+
+**What `1` does and does not promise.** The row is removed and no reader can reach it
+again. The **bytes are not scrubbed from the file.** `connect()` sets no
+`PRAGMA secure_delete`, so SQLite returns the freed page to its freelist without zeroing
+it — measured: after `delete_faceprint` returned `1` and a `wal_checkpoint(TRUNCATE)`
+ran, the packed vector was still recoverable from `learners.v1.sqlite3`. The same is
+true of the `ON DELETE CASCADE` path, and the test that proves that cascade asks the
+table and the reader, which is a different claim from asking the file.
+
+That is ordinary for a row delete in any database, and it is stated here because a
+household asking to be forgotten means the larger thing. Two connection-wide changes
+would close it — `PRAGMA secure_delete = ON` and an owner-only file mode, both in
+`connect()` — and both are recorded as follow-up work rather than made here, because
+they change behaviour for every table rather than for faceprints.
+
+**The database file is currently created world-readable (0644).** That mattered less
+when this file held display names and lesson results; a faceprint is biometric data, and
+an approximate face can be reconstructed from an embedding given the model. Anyone with
+local filesystem access, an unencrypted backup, or the SD card out of a Reachy Wireless
+can read faceprints without going through the learner-scoping guard at all.
+
+### Faceprint reason codes
+
+`save_faceprint` never raises. When `saved` is `False`, `reason` is one of:
+
+| `reason` | Cause |
+|---|---|
+| `unknown_learner` | No such learner. Nothing is written. |
+| `invalid_model` | The embedding model name was not a non-empty string of at most 128 characters, made only of letters, digits, dot, underscore and hyphen, that encodes as UTF-8. Anything path-shaped lands here. Refused before the bind, so it is reported as the caller error it is. |
+| `invalid_vector` | The vector was not a non-empty sequence of at most 1024 numbers that `struct` can represent as float32. A sequence of `bool` lands here too, deliberately: `struct.pack("<f", True)` does not raise — it silently packs `1.0` — so without an explicit exclusion a vector of flags would be stored as a face. |
+| `rejected_by_database` | A constraint refused the row — a backstop behind the checks above, and the one that can still fire from a race: a learner deleted between the existence check and the insert fails the foreign key. |
+| `storage_unavailable` | The store could not be read or written. |
 
 ### Recording a result
 

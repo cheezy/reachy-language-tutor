@@ -330,6 +330,10 @@ def test_seed_row_counts(tmp_path: Path) -> None:
         "lesson_sources": _seeded_lesson_count(),
         "learners": 1,
         "lesson_results": 3,
+        # Nothing seeds a faceprint, and nothing ever should: a shipped faceprint would
+        # be fabricated biometric data for a person who does not exist. Enrolment is the
+        # only way a row gets in here, which is what W28 is for.
+        "faceprints": 0,
         # Content ships only for the converted lessons. The rest of the catalog has
         # none yet and has to keep working meanwhile, which is why these are counted
         # from the file rather than pinned to a number somebody would have to update.
@@ -1032,3 +1036,301 @@ def test_changing_the_seeded_catalog_requires_bumping_seed_version() -> None:
     assert len(set(SHIPPED_CATALOGS.values())) == len(SHIPPED_CATALOGS), (
         "two seed versions ship an identical catalog, so one of them changed nothing"
     )
+
+
+# ------------------------------------------------------------------- faceprints
+
+
+# Every column the faceprints table is permitted to have, as (name, declared type,
+# notnull, part-of-primary-key). An ALLOW-LIST, not a list of forbidden names: a
+# deny-list of "image", "crop", "thumbnail", "path" is only ever as complete as the
+# imagination of whoever last edited it, and the column that breaks the promise will
+# be called something nobody thought of. This says what the table may BE, so anything
+# else -- a new column, a widened type, a dropped NOT NULL -- fails.
+_PERMITTED_FACEPRINT_COLUMNS = {
+    # notnull is 1 on the primary key because the table is STRICT -- SQLite makes a
+    # STRICT table's PRIMARY KEY implicitly NOT NULL, which an ordinary table does not.
+    # Measured from PRAGMA table_info rather than read off the CREATE statement.
+    ("learner_id", "TEXT", 1, 1),
+    ("embedding_model", "TEXT", 1, 0),
+    ("dimension", "INTEGER", 1, 0),
+    ("vector", "BLOB", 1, 0),
+    ("created_at", "INTEGER", 1, 0),
+}
+
+
+def _faceprint_columns(instance_path: Path) -> set[tuple[str, str, int, int]]:
+    """Read the faceprint table's real shape from the database rather than the file."""
+    connection = store.connect(instance_path)
+    try:
+        return {
+            (str(row["name"]), str(row["type"]), int(row["notnull"]), int(row["pk"]))
+            for row in connection.execute("PRAGMA table_info(faceprints)")
+        }
+    finally:
+        connection.close()
+
+
+def test_no_faceprint_column_can_hold_an_image_a_crop_or_a_path_to_one(tmp_path: Path) -> None:
+    """The privacy promise, checked against the table rather than against a sentence.
+
+    docs/plan.md says faceprints are numeric face data and never photos. The way that
+    stops being true is not somebody storing a JPEG in the vector column -- it is a
+    later `image_path` or `last_seen_crop` column arriving because it was convenient,
+    and the sentence in the doc never being reread.
+
+    So this pins the whole shape. Adding any column fails it, whatever it is called.
+    """
+    store.ensure_learner_database(tmp_path)
+
+    assert _faceprint_columns(tmp_path) == _PERMITTED_FACEPRINT_COLUMNS
+
+    # And the one column that holds bytes at all is bounded to exactly the size its
+    # own dimension says, so it cannot quietly become a place to put a file.
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p', 'P', 0)")
+        with pytest.raises(sqlite3.IntegrityError, match="length\\(vector\\) = dimension"):
+            connection.execute(
+                "INSERT INTO faceprints VALUES ('p', 'm', 1, ?, 0)",
+                (b"\x00" * 4096,),
+            )
+
+        # The other half, and the one the column list alone does not answer:
+        # embedding_model is the only caller-supplied TEXT here and has room for a
+        # path, so the database itself must refuse one. Asserted through raw SQL rather
+        # than through save_faceprint, because the Python guard is a separate copy of
+        # this rule and a test that only exercised it would pass with the CHECK gone.
+        for path_like in (
+            "/Users/someone/child.jpg",
+            "~/Pictures/child.png",
+            "faces/child.jpeg",
+            "../../etc/passwd",
+            "file:///tmp/face.png",
+            # The one that stepped over every other clause. SQLite's length(), trim()
+            # and GLOB stop at the first NUL, so before the byte-length clause this
+            # value measured as 3 characters, passed the 1..128 bound, passed the
+            # character allow-list, and stored the path in full.
+            "arc\x00/Users/secret/kid-face.jpg" + "X" * 5000,
+        ):
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+                connection.execute(
+                    "INSERT INTO faceprints VALUES ('p', ?, 1, ?, 0)",
+                    (path_like, b"\x00" * 4),
+                )
+    finally:
+        connection.close()
+
+
+def test_a_faceprint_check_that_trims_also_refuses_null(tmp_path: Path) -> None:
+    """The CHECK, exercised where it can actually be reached.
+
+    This is the trap W23 measured and this table inherits. NULL satisfies a bare CHECK
+    -- length(trim(NULL)) is NULL, not 0 -- so `CHECK (length(trim(x)) > 0)` accepts a
+    NULL happily, and only the paired `x IS NOT NULL` refuses it.
+
+    The columns are ALSO declared NOT NULL, and NOT NULL fires first: inserting NULL
+    into the real table raises "NOT NULL constraint failed", which is a different
+    constraint. A test that stopped there would pass with the IS NOT NULL deleted.
+    So the CHECK is rebuilt here with the NOT NULL stripped, which is the only way to
+    put the clause under test on its own.
+    """
+    schema = (Path(store.__file__).resolve().parent / "schema.sql").read_text(encoding="utf-8")
+    faceprints = schema.split("CREATE TABLE IF NOT EXISTS faceprints", 1)[1].split(") STRICT;", 1)[0]
+
+    assert "embedding_model IS NOT NULL" in faceprints, "the paired IS NOT NULL is what this is about"
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        # The same clause, minus the NOT NULL that would otherwise answer first.
+        connection.execute(
+            "CREATE TABLE probe (embedding_model TEXT "
+            "CHECK (embedding_model IS NOT NULL AND length(trim(embedding_model)) BETWEEN 1 AND 128)) STRICT"
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+            connection.execute("INSERT INTO probe (embedding_model) VALUES (NULL)")
+
+        # And the proof that the pairing is load-bearing: without IS NOT NULL, the
+        # same NULL is accepted. If this ever starts raising, the trap is gone and the
+        # test above is no longer testing anything.
+        connection.execute(
+            "CREATE TABLE naive (embedding_model TEXT "
+            "CHECK (length(trim(embedding_model)) BETWEEN 1 AND 128)) STRICT"
+        )
+        connection.execute("INSERT INTO naive (embedding_model) VALUES (NULL)")
+        assert connection.execute("SELECT COUNT(*) FROM naive").fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+def test_a_vector_whose_length_disagrees_with_its_dimension_is_refused(tmp_path: Path) -> None:
+    """Prove dimension is not a hint: the database enforces it against the blob's length."""
+    store.ensure_learner_database(tmp_path)
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p', 'P', 0)")
+        with pytest.raises(sqlite3.IntegrityError, match="length\\(vector\\) = dimension"):
+            connection.execute("INSERT INTO faceprints VALUES ('p', 'm', 4, ?, 0)", (b"\x00" * 12,))
+        # STRICT refuses the other way in as well.
+        with pytest.raises(sqlite3.IntegrityError, match="cannot store TEXT value in BLOB column"):
+            connection.execute("INSERT INTO faceprints VALUES ('p', 'm', 3, 'not-bytes', 0)")
+    finally:
+        connection.close()
+
+
+def test_deleting_a_learner_leaves_no_faceprint_row_behind(tmp_path: Path) -> None:
+    """Erasure, proved by deleting a learner rather than by trusting the CASCADE clause.
+
+    ON DELETE CASCADE is only enforced when the connection turns foreign keys on, so
+    the clause being present in schema.sql proves nothing on its own. This deletes
+    through store.connect(), which is the only way the app opens the database, and
+    then asks both the raw table and the reader.
+    """
+    store.ensure_learner_database(tmp_path)
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p', 'P', 0)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert store.save_faceprint("p", "m", [1.0, 2.0], instance_path=tmp_path).saved is True
+    assert _counts(tmp_path)["faceprints"] == 1
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("DELETE FROM learners WHERE id = ?", ("p",))
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert _counts(tmp_path)["faceprints"] == 0, "the faceprint went with the person"
+    assert store.get_faceprint("p", instance_path=tmp_path) is None
+
+
+def _downgrade_to_schema_2(instance_path: Path) -> None:
+    """Put a database back the way it looked before this change, and check it took."""
+    connection = store.connect(instance_path)
+    try:
+        connection.execute("DROP TABLE faceprints")
+        connection.execute("PRAGMA user_version = 2")
+        connection.commit()
+    finally:
+        connection.close()
+    assert "faceprints" not in _tables(instance_path), "the fixture must really remove it"
+
+
+def test_the_faceprint_table_reaches_a_database_that_predates_it(tmp_path: Path) -> None:
+    """The upgrade a robot in a house actually takes, executed rather than reasoned about.
+
+    A new table reaches an installed robot only because SCHEMA_VERSION moved and
+    _apply_schema re-runs the whole script below it. Without the bump this database
+    would stay at version 2 forever and the table would reach fresh installs only --
+    silently, which is the whole reason this test exists.
+
+    Downgrading like this is not something a real robot does; it is how the "already
+    installed" state is reached on a laptop. The faceprints it drops are the fixture's,
+    not anybody's.
+    """
+    store.ensure_learner_database(tmp_path)
+    _downgrade_to_schema_2(tmp_path)
+
+    result = store.ensure_learner_database(tmp_path)
+
+    assert result.ready is True
+    assert result.schema_applied is True, "the bump is what re-ran the script"
+    assert "faceprints" in _tables(tmp_path)
+
+    connection = store.connect(tmp_path)
+    try:
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == store.SCHEMA_VERSION
+    finally:
+        connection.close()
+
+    # The learner's existing history survived the upgrade, and the new table works.
+    assert _counts(tmp_path)["lesson_results"] == 3
+    assert store.save_faceprint("sample-learner", "m", [1.0], instance_path=tmp_path).saved is True
+
+
+def test_a_nul_byte_cannot_step_over_the_model_name_rules(tmp_path: Path) -> None:
+    """The measured bypass, pinned so it cannot come back.
+
+    SQLite's length(), trim() and GLOB are NUL-terminated on a TEXT value. Measured:
+    "arc" + NUL + "/Users/secret/kid-face.jpg" + 5000 characters is reported by
+    length() as 3, satisfies BETWEEN 1 AND 128, and satisfies the character allow-list
+    as containing nothing forbidden -- and the whole value was stored and read back
+    with the path intact. One byte defeated all three clauses at once.
+
+    length(CAST(x AS BLOB)) counts bytes rather than NUL-terminated characters, so
+    requiring it to equal length(x) admits exactly the single-byte ASCII this column
+    permits and nothing hiding behind a terminator.
+
+    This is asserted against the DATABASE, not through save_faceprint: the Python
+    guard refused this value all along, which is precisely why the hole was invisible.
+    Two copies of one rule that do not mean the same thing is D19's defect shape.
+    """
+    store.ensure_learner_database(tmp_path)
+    hidden = "arc\x00/Users/secret/kid-face.jpg" + "X" * 5000
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p', 'P', 0)")
+
+        # What SQLite's own functions think, so the test names the mechanism it pins.
+        assert connection.execute("SELECT length(?)", (hidden,)).fetchone()[0] == 3
+        assert connection.execute("SELECT ? NOT GLOB '*[^A-Za-z0-9._-]*'", (hidden,)).fetchone()[0] == 1
+
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+            connection.execute("INSERT INTO faceprints VALUES ('p', ?, 1, ?, 0)", (hidden, b"\x00" * 4))
+
+        # A bare NUL, and a name that is valid ASCII but multi-byte, both refused.
+        for value in ("a\x00b", "arcfac\u00e9"):
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+                connection.execute("INSERT INTO faceprints VALUES ('p', ?, 1, ?, 0)", (value, b"\x00" * 4))
+
+        # And a real model name still goes in.
+        connection.execute("INSERT INTO faceprints VALUES ('p', 'arcface-r100', 1, ?, 0)", (b"\x00" * 4,))
+    finally:
+        connection.close()
+
+
+def test_a_name_cannot_hide_unbounded_content_behind_a_nul(tmp_path: Path) -> None:
+    """The sibling of the faceprint NUL rule, swept as far as this column can be.
+
+    learners.display_name had the same bare length(trim(...)) > 0 clause, and the same
+    NUL trick worked on it: "A" + NUL + a path + 5000 characters was stored whole while
+    measuring as a one-character name. Latent rather than live -- the only writer today
+    is the app-owned seed INSERT and the store publishes no create-learner function --
+    but it is the same mechanism, and this repository's rule is to fix the class.
+
+    What this pins is deliberately narrower than the faceprint rule, and the difference
+    is the point: embedding_model may be ASCII-only because it is an identifier, while
+    this column holds a person's NAME. Accents, non-Latin scripts, apostrophes and
+    combining marks are real names and must keep working, so the bound is on bytes
+    rather than on characters -- which refuses the unbounded case and still admits a
+    SHORT hidden path. The complete guard belongs in the enrolment writer (W28), where
+    it can also reach a robot that already has a database; a schema rule added later
+    cannot, because CREATE TABLE IF NOT EXISTS is a no-op against an existing table.
+    """
+    store.ensure_learner_database(tmp_path)
+    connection = store.connect(tmp_path)
+    try:
+        hidden = "A\x00/Users/secret/kid-face.jpg" + "X" * 5000
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+            connection.execute(
+                "INSERT INTO learners (id, display_name, created_at) VALUES ('x', ?, 0)", (hidden,)
+            )
+
+        # Every one of these is a real name and must still be accepted. If this half
+        # ever goes red, the guard has been tightened into something that refuses
+        # people rather than payloads.
+        for index, name in enumerate(("Ana", "José García", "Zoë O'Brien-Smith", "大翔")):
+            connection.execute(
+                "INSERT INTO learners (id, display_name, created_at) VALUES (?, ?, 0)",
+                (f"real{index}", name),
+            )
+        assert connection.execute("SELECT COUNT(*) FROM learners").fetchone()[0] == 5
+    finally:
+        connection.close()
