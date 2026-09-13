@@ -689,13 +689,33 @@ self-clearing whatever its size. `test_placeholders_shifting_up_by_one_survive_t
 pins it and fails with the exact IntegrityError when the sort is removed. Step 7 of
 docs/converting-a-course.md now states the corrected rule.
 
-### What W36 still owes
+### What W36 still owes, enumerated so the next pass does not rediscover it
 
 The other five shortlisted Cycles (2, 5, 14, 25, 38) are screened, read and approved
-but not curated. Cycle 10's draft needs re-applying. And landing any Spanish lesson
-means updating roughly twenty tests that hardcode Spanish's six lessons and its first
-lesson — legitimate work, correctly not rushed, and now safe to do because the seeder
-will survive the renumber.
+but not curated. Cycle 10's draft above needs re-applying.
+
+**Landing any Spanish lesson costs about twenty test updates, and they were run and
+enumerated rather than estimated.** With the lesson and the renumber applied, the suite
+gives 20 failures. Every one is a control behaving correctly:
+
+- **`APPROVED_UNITS` refuses the new course** until somebody adds it — the deliberate
+  act W41 built it for. Adding `"FSI Spanish Familiarization and Short-Term Training":
+  frozenset({"10"})` clears 2 of the 20.
+- **The Italian digest pin moves**, because `_shipped_text` reads every converted course
+  and there is now more shipped text. It needs scoping to Italian rather than updating.
+- **The Italian curation log check fails**, because the Spanish lesson has no record in
+  *that* log. It needs scoping per course.
+- **The remaining ~13 are one behavioural change**: the seeded sample learner's next
+  Spanish lesson moves from `es-03-numbers` to the converted lesson, because a lesson
+  they have never attempted now sits at position 1. That is the RIGHT behaviour — it is
+  what happens to a real learner when content is added ahead of them — but several of
+  those tests are identity-and-isolation tests (`get_progress_never_returns_another_
+  learners_rows`, the partial-does-not-advance rule), and rewriting what they assert is
+  not work to do at speed. Rewriting a security-adjacent assertion until it passes is
+  the exact failure this project's rules are written against.
+
+None of it is blocked. It is a known, bounded piece of careful work, and the seeder now
+survives the renumber that makes it necessary.
 
 ## Conventions applied to every unit
 
