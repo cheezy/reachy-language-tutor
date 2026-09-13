@@ -483,7 +483,10 @@ def test_empty_catalog_still_produces_usable_database(
     monkeypatch.setattr(store, "SEED_LESSON_SOURCES", ())
     # The converted lessons come from a file rather than a constant, so emptying the
     # constants is not enough: their foreign key would look for lessons nobody seeded.
-    monkeypatch.setattr(store, "_converted_lessons", tuple)
+    # Patched at the FILE seam rather than at _converted_lessons, so the empty case goes
+    # through the real shape guard and the real parser -- patching the reader would step
+    # over both and leave "no converted lessons" untested against the code that runs.
+    monkeypatch.setattr(store, "_converted_lessons_json", lambda: json.dumps({"courses": []}))
 
     assert store.ensure_learner_database(tmp_path).ready is True
     assert set(_counts(tmp_path).values()) == {0}, "no seed content means no rows anywhere"
@@ -911,6 +914,7 @@ SHIPPED_CATALOGS = {
     2: "c6efbb187caf89a96c03c744fb5d2b9bd6baf63ab6e0cfe629c0fe72209913c8",  # + German, Italian, Portuguese
     3: "71d42df41af603be5d9471571273c40bdb91168fc6b4b111951e87358c7651fb",  # + a provenance row for every lesson
     4: "1ae76c0c18e1843da97f71a42d0da66df41c39073e5bef06ffe6b2b36ab57b4f",  # + six Italian lessons converted from FSI Italian FAST
+    5: "b76b35d14afd2c32237b82dd6469c877195019c06702b72bbe3b3574b4194158",  # those lessons regrouped under a courses list; no content changed
 }
 
 

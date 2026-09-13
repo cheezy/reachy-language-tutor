@@ -44,7 +44,7 @@ Check, and do not skip this because it feels like a formality:
 - `pdfinfo` names the **Foreign Service Institute** as author, not a reseller;
 - it is **not encrypted** and carries **no JavaScript**.
 
-Record the **SHA-256** in the course block of `converted_lessons.json`. It is what lets
+Record the **SHA-256** in that course's entry in `converted_lessons.json`. It is what lets
 somebody later confirm they are looking at the same file you were.
 
 ## Step 2: settle the rights, for this course, in writing
@@ -158,6 +158,33 @@ Two more cases you will meet, both from the first conversion:
 
 ## Step 6: write it into `converted_lessons.json`
 
+The file holds a **list of courses**, each owning its own lessons. A course carries the
+facts that are true of it and of nothing else — its name, the language it teaches, the
+rights position settled in Step 2, and the SHA-256 of the scan it was read from:
+
+```json
+{
+  "_about": ["prose about the file, not about any course"],
+  "courses": [
+    {
+      "name": "FSI Italian FAST, Volume 1",
+      "language_code": "it",
+      "rights": "…what Step 2 actually established, in full…",
+      "source_sha256": "8c2182b7…",
+      "lessons": [ /* one object per lesson, in catalog order */ ]
+    }
+  ]
+}
+```
+
+Add a course by appending an entry, never by editing one that is already there. Rights
+and `source_sha256` stay **inside** each course: hoisting either to a file-level field
+would assert a rights position for a course nobody checked.
+
+The loader accepts that shape and nothing else, so a half-migrated file — `courses`
+added, `lessons` left behind at the top level — is refused rather than silently seeding
+the part it understands.
+
 One object per lesson, in catalog order:
 
 ```json
@@ -201,8 +228,9 @@ Three things move together, and leaving one behind is silent:
 2. **`SHIPPED_CATALOGS`** in `tests/test_learner_schema.py` — add a line, never edit one.
    The fingerprint covers `converted_lessons.json` byte for byte, so any edit to a lesson
    moves it.
-3. **Positions.** They must be contiguous per language. Converted units take 1..n, and
-   anything already in that language moves up behind them.
+3. **Positions.** They must be contiguous per language — across *every* course that
+   names that language, not within one course. Converted units take 1..n, and anything
+   already in that language moves up behind them.
 
 **Renumbering is only safe upward, and this is the sharp edge of the whole step.**
 `UNIQUE (language_code, position)` means two lessons cannot share a place, and the seed

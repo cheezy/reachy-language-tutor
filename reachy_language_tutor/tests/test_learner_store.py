@@ -3684,12 +3684,19 @@ def _seeded_positions_for(language_code: str) -> list[int]:
     """The positions the seed writes for one language, from both of its sources.
 
     Lessons come from SEED_LESSONS and from the converted-lesson file, so counting
-    either alone answers a different question than the one being asked.
+    either alone answers a different question than the one being asked. The converted
+    half is taken per COURSE: the file holds a list of them, each naming its own
+    language, so a lesson only counts towards the language its OWN course names.
+    Adding every course's positions to whichever language was asked for is how a second
+    course would silently make this contiguity check pass while the catalog was broken.
     """
     positions = [row[2] for row in store.SEED_LESSONS if row[1] == language_code]
-    course = store._converted_lesson_course()
-    if course["language_code"] == language_code:
-        positions += [int(lesson["position"]) for lesson in store._converted_lessons()]
+    positions += [
+        int(lesson["position"])
+        for course in store._converted_courses()
+        if course["language_code"] == language_code
+        for lesson in course["lessons"]
+    ]
     return sorted(positions)
 
 

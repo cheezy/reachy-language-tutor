@@ -439,6 +439,12 @@ notes and typed drills — and they live in
 written by `_seed_converted_lessons()` inside the same transaction as the rest of the
 seed.
 
+That file holds a **list of courses**, each owning its own lessons and carrying its own
+name, language, rights position and source SHA-256. Italian is the only course in it so
+far; the seeder walks the list and takes each lesson's language and course name from the
+course that owns it, so adding a second language is an appended entry rather than a
+change to this one.
+
 | Position | Lesson | Source unit |
 |---|---|---|
 | 1 | What time is it? | IV, printed page 83 |

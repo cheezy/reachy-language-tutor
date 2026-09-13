@@ -77,8 +77,10 @@ SCHEMA_VERSION = 3
 # Bumped when the seed data changes -- including the converted lessons in
 # converted_lessons.json, whose bytes are part of the fingerprint a test pins to this
 # number. Version 3 gave every seeded lesson a provenance row; version 4 replaced the
-# first six Italian lessons with units converted from a published course.
-SEED_VERSION = 4
+# first six Italian lessons with units converted from a published course; version 5
+# regrouped those lessons under a list of courses so a second language can be added,
+# changing no lesson content at all.
+SEED_VERSION = 5
 LEARNER_DB_FILENAME = "learners.v1.sqlite3"
 # The converted course material, beside this module and shipped as package data. Its
 # bytes are part of the seeded catalog, so the shipped-catalog fingerprint covers the
@@ -417,23 +419,153 @@ def _converted_lessons_json() -> str:
     return (Path(__file__).resolve().parent / CONVERTED_LESSONS_FILENAME).read_text(encoding="utf-8")
 
 
-def _converted_lesson_course() -> Any:
-    """Return the course block: what the converted lessons were made from."""
-    course = json.loads(_converted_lessons_json())["course"]
-    if not isinstance(course, dict):
-        raise _StoreRefusal("the converted-lesson file's 'course' is not an object")
-    return course
+# What this file may be, stated as the shape that is ACCEPTED. A list of the ways a
+# file can be wrong is only ever as complete as the last person to read one, so this
+# names the single shape that loads and refuses everything else with the same sentence.
+# Widening it -- a sixth key on a course, a second key beside 'courses' -- means editing
+# these constants, which is a deliberate act somebody can be asked about.
+_CONVERTED_FILE_KEYS = frozenset({"_about", "courses"})
+_CONVERTED_COURSE_KEYS = frozenset({"name", "language_code", "rights", "source_sha256", "lessons"})
+_CONVERTED_LESSON_KEYS = frozenset(
+    {"id", "position", "title", "objective", "source", "dialogue_title", "turns", "notes", "drills"}
+)
+_CONVERTED_SOURCE_KEYS = frozenset({"module", "unit", "page"})
+_CONVERTED_LESSON_LISTS = ("turns", "notes", "drills")
+_CONVERTED_TURN_KEYS = frozenset({"speaker", "text"})
+# 'kind' is the only one the seeder indexes; the rest it reaches for with .get, so a
+# drill may legitimately carry a subset. Naming the whole permitted set anyway is what
+# stops a misspelt 'english_glos' being silently dropped into a NULL column.
+_CONVERTED_DRILL_KEYS = frozenset({"kind", "target_text", "english_gloss", "cue", "expected_response"})
+_CONVERTED_FILE_SHAPE = (
+    "the converted-lesson file must be a JSON object whose 'courses' is a list, where every course is an "
+    "object holding exactly 'name', 'language_code', 'rights', 'source_sha256' and a 'lessons' list; an "
+    "optional '_about' may sit beside 'courses', and nothing else may"
+)
+_CONVERTED_LESSON_SHAPE = (
+    "every converted lesson must be an object holding exactly 'id', 'position', 'title', 'objective', "
+    "'dialogue_title', a 'source' of 'module', 'unit' and 'page', and lists for 'turns', 'notes' and 'drills' "
+    "-- where every turn is a 'speaker' and a 'text', every note is a string, and every drill has a 'kind'"
+)
+
+
+def _converted_courses() -> tuple[Any, ...]:
+    """Return every converted course in file order, each still owning its own lessons.
+
+    This is the function that answers "which course does this lesson belong to", and it
+    answers it structurally: you never hold a lesson without its course, because you
+    reach the lesson THROUGH the course. That is what lets a second language be added to
+    the file -- the language code and the course name are per-course facts, and anything
+    writing them must take them from the course that owns the lesson it is writing.
+
+    The shape check here is deliberately wider than this module's usual habit of
+    validating only what it indexes, and what it adds is the file's SKELETON -- which
+    keys exist -- while what a value may CONTAIN stays the STRICT tables' business. Two
+    concrete failures are why it goes as far as it does, and both were reproduced rather
+    than reasoned about:
+
+    * A missing key raises KeyError deep in the seeder, and KeyError is not in the tuple
+      ensure_learner_database absorbs, so it escapes a function documented as never
+      raising. True of a course missing 'name', and equally of a lesson missing 'source'
+      or a 'source' missing 'page' -- which is why the check descends into the lesson
+      rather than stopping at the course. Guarding the course alone was the "fix the
+      class, not the member" mistake this codebase keeps paying for.
+    * A key of the wrong TYPE can seed silently. 'notes' given as the string "abc"
+      enumerates to three per-character notes and lands three rows of content nobody
+      wrote in a lesson a child is read aloud. Requiring a list is what stops that, and
+      no CHECK constraint can, because each character is a perfectly valid note.
+
+    Requiring 'rights' and 'source_sha256', which the seed never reads, is the same
+    argument in its quietest form: without them a course seeds with no rights position
+    and no record of the file it came from.
+    """
+    parsed = json.loads(_converted_lessons_json())
+    if not isinstance(parsed, dict):
+        raise _StoreRefusal(f"{_CONVERTED_FILE_SHAPE}; this file's top level is {type(parsed).__name__}")
+    if "courses" not in parsed:
+        raise _StoreRefusal(f"{_CONVERTED_FILE_SHAPE}; this file has no 'courses'")
+    if not _CONVERTED_FILE_KEYS.issuperset(parsed):
+        # Counted rather than named. The realistic accident is a half-migrated file --
+        # 'courses' added, 'lessons' left behind at the top level -- and "this file's
+        # top level is dict" is a true sentence about the CORRECT file too, so it points
+        # at nothing. A count points at the fault; the key names stay out, because
+        # _StoreRefusal is SafeToLog and is rendered in full wherever it is logged.
+        unexpected = len(set(parsed) - _CONVERTED_FILE_KEYS)
+        raise _StoreRefusal(f"{_CONVERTED_FILE_SHAPE}; this file has {unexpected} unexpected key(s) beside it")
+
+    courses = parsed["courses"]
+    if not isinstance(courses, list):
+        raise _StoreRefusal(f"{_CONVERTED_FILE_SHAPE}; its 'courses' is {type(courses).__name__}")
+
+    for index, course in enumerate(courses):
+        if not isinstance(course, dict) or set(course) != _CONVERTED_COURSE_KEYS:
+            raise _StoreRefusal(f"{_CONVERTED_FILE_SHAPE}; course {index} is not")
+        if not isinstance(course["lessons"], list):
+            raise _StoreRefusal(f"{_CONVERTED_FILE_SHAPE}; course {index} has a 'lessons' that is not a list")
+
+        for position, lesson in enumerate(course["lessons"]):
+            _refuse_unless_lesson_shaped(lesson, index, position)
+
+    return tuple(courses)
+
+
+def _refuse_unless_lesson_shaped(lesson: Any, course_index: int, lesson_index: int) -> None:
+    """Refuse a lesson whose skeleton is not the one the seeder walks.
+
+    Split out so the nesting in _converted_courses stays readable, and it goes all the
+    way down to the leaves rather than stopping at the lesson's own keys. Stopping short
+    is what this guard was written to fix and then repeated one level lower: a turn
+    without 'speaker' raises KeyError exactly as a lesson without 'source' did.
+
+    The line it does NOT cross is CONTENT. Whether a drill is a whole one of its kind,
+    whether a string is blank, whether a kind is one the tutor can run -- all of that is
+    enforced by CHECK constraints in schema.sql, and restating it here would give the
+    two somewhere to disagree. What is checked here is only what SQLite cannot see: a
+    key that is absent before any statement runs, and a value whose type would enumerate
+    into rows nobody wrote.
+    """
+    where = f"course {course_index}, lesson {lesson_index}"
+
+    if not isinstance(lesson, dict) or set(lesson) != _CONVERTED_LESSON_KEYS:
+        raise _StoreRefusal(f"{_CONVERTED_LESSON_SHAPE}; {where} is not")
+
+    source = lesson["source"]
+    if not isinstance(source, dict) or set(source) != _CONVERTED_SOURCE_KEYS:
+        raise _StoreRefusal(f"{_CONVERTED_LESSON_SHAPE}; the 'source' of {where} is not")
+
+    for key in _CONVERTED_LESSON_LISTS:
+        if not isinstance(lesson[key], list):
+            raise _StoreRefusal(f"{_CONVERTED_LESSON_SHAPE}; the '{key}' of {where} is {type(lesson[key]).__name__}")
+
+    for index, turn in enumerate(lesson["turns"]):
+        if not isinstance(turn, dict) or set(turn) != _CONVERTED_TURN_KEYS:
+            raise _StoreRefusal(f"{_CONVERTED_LESSON_SHAPE}; turn {index} of {where} is not a speaker and a text")
+
+    for index, note in enumerate(lesson["notes"]):
+        if not isinstance(note, str):
+            raise _StoreRefusal(f"{_CONVERTED_LESSON_SHAPE}; note {index} of {where} is {type(note).__name__}")
+
+    for index, drill in enumerate(lesson["drills"]):
+        if not isinstance(drill, dict) or "kind" not in drill or not _CONVERTED_DRILL_KEYS.issuperset(drill):
+            raise _StoreRefusal(f"{_CONVERTED_LESSON_SHAPE}; drill {index} of {where} is not")
 
 
 def _converted_lessons() -> tuple[Any, ...]:
     """Return the converted lessons as plain dictionaries, in file order.
 
-    Deliberately does no validation beyond the shape it has to index. What the content
-    may CONTAIN is the database's business -- every string here lands in a STRICT table
-    behind CHECK constraints that refuse a blank line, an unknown drill kind or a
-    half-filled drill -- and duplicating those rules in Python would give the two
-    somewhere to disagree. A malformed file therefore fails the seed transaction, which
-    ensure_learner_database already reports rather than raises.
+    A FLAT view across every course, which makes it the wrong function for anything that
+    writes a language code or a course name: a lesson returned here is detached from the
+    course that owns it, and with more than one course in the file there is no longer a
+    single right answer to "which course was that". _seed_converted_lessons walks
+    _converted_courses() for exactly that reason. This view is still the right one for
+    asking what the catalog contains, which is what its callers do.
+
+    Validation is _converted_courses' business, not this function's: the single
+    statement below calls it, so every skeleton check runs before a lesson is returned
+    here. What the content may CONTAIN is the database's business -- every string lands
+    in a STRICT table behind CHECK constraints that refuse a blank line, an unknown
+    drill kind or a half-filled drill -- and duplicating those rules in Python would
+    give the two somewhere to disagree. A file that fails either check fails the seed
+    transaction, which ensure_learner_database reports rather than raises.
 
     Typed `Any` rather than `dict[str, object]` for that same reason, and it is a
     deliberate choice rather than a shrug: `object` would make every `lesson["turns"]`
@@ -442,11 +574,7 @@ def _converted_lessons() -> tuple[Any, ...]:
     already enforces -- it is to say that the shape of this file is checked by the schema
     it is loaded into.
     """
-    parsed = json.loads(_converted_lessons_json())
-    lessons = parsed["lessons"]
-    if not isinstance(lessons, list):
-        raise _StoreRefusal("the converted-lesson file's 'lessons' is not a list")
-    return tuple(lessons)
+    return tuple(lesson for course in _converted_courses() for lesson in course["lessons"])
 
 
 def _schema_sql() -> str:
@@ -777,71 +905,76 @@ def _seed_converted_lessons(connection: sqlite3.Connection) -> None:
     the extra ones behind for ever -- a drill nobody wrote, in a lesson somebody
     corrected. Deleting first is safe here in a way it would never be for learner data:
     every row involved is app-owned catalog material, identical in every household.
+
+    Every course in the file is written, and each lesson takes its language code and its
+    course name from the course that OWNS it rather than from any single global block --
+    which is what lets the file hold more than one language. All of them go in under
+    _seed's one transaction, so a malformed course late in the list rolls back the
+    courses written before it.
     """
-    course = _converted_lesson_course()
+    for course in _converted_courses():
+        for lesson in course["lessons"]:
+            lesson_id = str(lesson["id"])
+            source = lesson["source"]
 
-    for lesson in _converted_lessons():
-        lesson_id = str(lesson["id"])
-        source = lesson["source"]
-
-        connection.execute(
-            "INSERT INTO lessons (id, language_code, position, title, objective) VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET "
-            "language_code = excluded.language_code, position = excluded.position, "
-            "title = excluded.title, objective = excluded.objective",
-            (lesson_id, course["language_code"], lesson["position"], lesson["title"], lesson["objective"]),
-        )
-        connection.execute(
-            "INSERT INTO lesson_sources (lesson_id, origin, course, module, unit, page) VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(lesson_id) DO UPDATE SET "
-            "origin = excluded.origin, course = excluded.course, "
-            "module = excluded.module, unit = excluded.unit, page = excluded.page",
-            (
-                lesson_id,
-                "converted_from_course",
-                course["name"],
-                source["module"],
-                source["unit"],
-                source["page"],
-            ),
-        )
-
-        connection.execute("DELETE FROM lesson_dialogues WHERE lesson_id = ?", (lesson_id,))
-        connection.execute("DELETE FROM lesson_dialogue_turns WHERE lesson_id = ?", (lesson_id,))
-        connection.execute("DELETE FROM lesson_notes WHERE lesson_id = ?", (lesson_id,))
-        connection.execute("DELETE FROM lesson_drills WHERE lesson_id = ?", (lesson_id,))
-
-        title = lesson["dialogue_title"]
-        if title is not None:
-            connection.execute("INSERT INTO lesson_dialogues (lesson_id, title) VALUES (?, ?)", (lesson_id, title))
-        connection.executemany(
-            "INSERT INTO lesson_dialogue_turns (lesson_id, position, speaker, text) VALUES (?, ?, ?, ?)",
-            [
-                (lesson_id, position, turn["speaker"], turn["text"])
-                for position, turn in enumerate(lesson["turns"], start=1)
-            ],
-        )
-        connection.executemany(
-            "INSERT INTO lesson_notes (lesson_id, number, text) VALUES (?, ?, ?)",
-            [(lesson_id, number, note) for number, note in enumerate(lesson["notes"], start=1)],
-        )
-        connection.executemany(
-            "INSERT INTO lesson_drills "
-            "(lesson_id, position, kind, target_text, english_gloss, cue, expected_response) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
+            connection.execute(
+                "INSERT INTO lessons (id, language_code, position, title, objective) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "language_code = excluded.language_code, position = excluded.position, "
+                "title = excluded.title, objective = excluded.objective",
+                (lesson_id, course["language_code"], lesson["position"], lesson["title"], lesson["objective"]),
+            )
+            connection.execute(
+                "INSERT INTO lesson_sources (lesson_id, origin, course, module, unit, page) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(lesson_id) DO UPDATE SET "
+                "origin = excluded.origin, course = excluded.course, "
+                "module = excluded.module, unit = excluded.unit, page = excluded.page",
                 (
                     lesson_id,
-                    position,
-                    drill["kind"],
-                    drill.get("target_text"),
-                    drill.get("english_gloss"),
-                    drill.get("cue"),
-                    drill.get("expected_response"),
-                )
-                for position, drill in enumerate(lesson["drills"], start=1)
-            ],
-        )
+                    "converted_from_course",
+                    course["name"],
+                    source["module"],
+                    source["unit"],
+                    source["page"],
+                ),
+            )
+
+            connection.execute("DELETE FROM lesson_dialogues WHERE lesson_id = ?", (lesson_id,))
+            connection.execute("DELETE FROM lesson_dialogue_turns WHERE lesson_id = ?", (lesson_id,))
+            connection.execute("DELETE FROM lesson_notes WHERE lesson_id = ?", (lesson_id,))
+            connection.execute("DELETE FROM lesson_drills WHERE lesson_id = ?", (lesson_id,))
+
+            title = lesson["dialogue_title"]
+            if title is not None:
+                connection.execute("INSERT INTO lesson_dialogues (lesson_id, title) VALUES (?, ?)", (lesson_id, title))
+            connection.executemany(
+                "INSERT INTO lesson_dialogue_turns (lesson_id, position, speaker, text) VALUES (?, ?, ?, ?)",
+                [
+                    (lesson_id, position, turn["speaker"], turn["text"])
+                    for position, turn in enumerate(lesson["turns"], start=1)
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO lesson_notes (lesson_id, number, text) VALUES (?, ?, ?)",
+                [(lesson_id, number, note) for number, note in enumerate(lesson["notes"], start=1)],
+            )
+            connection.executemany(
+                "INSERT INTO lesson_drills "
+                "(lesson_id, position, kind, target_text, english_gloss, cue, expected_response) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        lesson_id,
+                        position,
+                        drill["kind"],
+                        drill.get("target_text"),
+                        drill.get("english_gloss"),
+                        drill.get("cue"),
+                        drill.get("expected_response"),
+                    )
+                    for position, drill in enumerate(lesson["drills"], start=1)
+                ],
+            )
 
 
 def ensure_learner_database(instance_path: str | Path | None = None) -> EnsureResult:
@@ -868,7 +1001,16 @@ def ensure_learner_database(instance_path: str | Path | None = None) -> EnsureRe
             connection = connect(instance_path, create=True)
             schema_applied = _apply_schema(connection)
             seeded = _seed(connection)
-    except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, ValueError, TypeError, OverflowError, RuntimeError) as exc:
+        # OverflowError for the reason _READER_ABSORBS names it: sqlite3 raises it while
+        # BINDING an int outside _SQLITE_INT_MIN.._SQLITE_INT_MAX, before the database
+        # sees the statement, and it subclasses ArithmeticError, so it is in none of the
+        # others. The readers absorbed it and this function did not -- the same
+        # unswept-sibling shape as D10 and D14 -- so a seed file carrying a huge int in
+        # any bound leaf raised straight out of a function whose docstring says it never
+        # does. Measured with a 583-mutation sweep over the shipped file: 19 escapes, all
+        # OverflowError, and none once it is named here.
+        #
         # The path is absent from the format string AND from the exception: it can name
         # a person's home directory, and _restrict_permissions states that rule for this
         # module. Both halves are needed and an earlier version of this comment claimed

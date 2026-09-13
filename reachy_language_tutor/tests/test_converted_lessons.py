@@ -23,6 +23,7 @@ docs/converting-a-course.md and docs/curation-log-italian-fast.md.
 
 import re
 import json
+import hashlib
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -32,11 +33,20 @@ from reachy_language_tutor.learners import store
 from reachy_language_tutor.learners.models import DRILL_KINDS
 
 
-# The units a person read and approved for conversion, by the roman numeral the course
-# itself uses. Six of eighteen in Volume 1: the rest were set in an embassy, at a
-# border, or at a currency desk, or leant on an official in uniform, and the curation
-# log says which and why. Shipping a seventh means adding it here first.
-APPROVED_UNITS = frozenset({"IV", "VI", "IX", "XIII", "XV", "XVII"})
+# The units a person read and approved for conversion, keyed by the COURSE they were
+# read in and then by the roman numeral that course itself uses. Six of eighteen in
+# Italian FAST Volume 1: the rest were set in an embassy, at a border, or at a currency
+# desk, or leant on an official in uniform, and the curation log says which and why.
+# Shipping a seventh means adding it here first.
+#
+# Keyed by course, not by numeral alone, because a numeral stopped identifying a unit
+# the moment the file could hold more than one course: every FSI volume has a Unit IV,
+# and a flat set would have let a second course's Unit IV inherit the approval a person
+# granted to Italian's. A course absent from this mapping has approved nothing, which is
+# the safe default and the one that needs no maintaining.
+APPROVED_UNITS = {
+    "FSI Italian FAST, Volume 1": frozenset({"IV", "VI", "IX", "XIII", "XV", "XVII"}),
+}
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 CURATION_LOG = DOCS / "curation-log-italian-fast.md"
@@ -52,6 +62,21 @@ def instance(tmp_path: Path) -> Path:
 
 def _converted_ids() -> list[str]:
     return [str(lesson["id"]) for lesson in store._converted_lessons()]
+
+
+def _rows_per_table(instance_path: Path) -> tuple[int, int, int]:
+    """How many turns, notes and drills the converted lessons actually seeded."""
+    connection = store.connect(instance_path)
+    try:
+        return tuple(  # type: ignore[return-value]
+            connection.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE lesson_id IN "
+                "(SELECT lesson_id FROM lesson_sources WHERE origin = 'converted_from_course')"
+            ).fetchone()[0]
+            for table in ("lesson_dialogue_turns", "lesson_notes", "lesson_drills")
+        )
+    finally:
+        connection.close()
 
 
 def _shipped_text(instance_path: Path) -> str:
@@ -302,13 +327,23 @@ def test_every_converted_lesson_cites_a_unit_that_was_reviewed(instance: Path) -
     list, so a unit nobody reviewed cannot ship by being overlooked -- it has to be
     added here first, by someone who can be asked why.
     """
+    # Which course each lesson came from, taken from the file's own nesting rather than
+    # from one hardcoded name. That is what makes this check say "the seeded provenance
+    # names the course that OWNS this lesson" instead of "the catalog is still Italian".
+    owner = {
+        str(lesson["id"]): course["name"] for course in store._converted_courses() for lesson in course["lessons"]
+    }
+
     for lesson_id in _converted_ids():
         source = store.get_lesson_content(lesson_id, instance_path=instance).source
 
         assert source is not None
         assert source.origin == "converted_from_course"
-        assert source.unit in APPROVED_UNITS, f"{lesson_id} cites unit {source.unit}, which nobody approved"
-        assert source.course == "FSI Italian FAST, Volume 1"
+        assert source.course == owner[lesson_id], f"{lesson_id} is seeded under a course that does not own it"
+        assert source.course in APPROVED_UNITS, f"{lesson_id} comes from {source.course}, a course nobody approved"
+        assert source.unit in APPROVED_UNITS[source.course], (
+            f"{lesson_id} cites unit {source.unit} of {source.course}, which nobody approved"
+        )
         assert source.module and source.page and source.page > 0
 
 
@@ -318,9 +353,12 @@ def test_the_approved_units_are_all_used(instance: Path) -> None:
     An allow-list that slowly fills with units nobody ships any more stops being a
     record of a decision and becomes a list of permissions nobody is using.
     """
-    cited = {store.get_lesson_content(lesson_id, instance_path=instance).source.unit for lesson_id in _converted_ids()}
+    cited: dict[str, set[str]] = {}
+    for lesson_id in _converted_ids():
+        source = store.get_lesson_content(lesson_id, instance_path=instance).source
+        cited.setdefault(source.course, set()).add(source.unit)
 
-    assert cited == APPROVED_UNITS
+    assert cited == {course: set(units) for course, units in APPROVED_UNITS.items()}
 
 
 def test_the_provenance_is_enough_to_find_the_page_again(instance: Path) -> None:
@@ -418,13 +456,20 @@ def test_the_rights_position_is_recorded_rather_than_assumed(instance: Path) -> 
     log has to say what was not. An empty or breezy claim here would be the "never write
     a claim you have not verified" rule broken in the one place it costs most.
     """
-    course = store._converted_lesson_course()
+    courses = store._converted_courses()
+    assert courses, "a file with no courses has no rights position to check"
 
-    assert "Foreign Service Institute" in course["rights"]
-    assert "1992" in course["rights"]
-    assert len(course["rights"]) > 120, "a rights position needs saying, not asserting"
-    assert course["source_sha256"], "the file it was read from is identified"
-    assert len(course["source_sha256"]) == 64
+    # Every course, not just the one this repository happens to ship today: rights are
+    # settled per course, so a second course added without its own position is exactly
+    # the omission this has to catch.
+    for course in courses:
+        assert len(course["rights"]) > 120, f"{course['name']}: a rights position needs saying, not asserting"
+        assert course["source_sha256"], f"{course['name']}: the file it was read from is identified"
+        assert len(course["source_sha256"]) == 64, f"{course['name']}: a SHA-256 is 64 hex characters"
+
+    italian = next(course for course in courses if course["language_code"] == "it")
+    assert "Foreign Service Institute" in italian["rights"]
+    assert "1992" in italian["rights"]
 
 
 # -------------------------------------------------------------- alongside the rest
@@ -480,6 +525,40 @@ def test_the_italian_catalog_is_ordered_and_leads_with_the_converted_units(insta
     assert positions == list(range(1, len(positions) + 1)), "contiguous, so 'the next lesson' is unambiguous"
     leading = [lesson.id for lesson in progress.remaining[: len(converted)]]
     assert set(leading) == converted, "the converted units are the first thing a learner is offered"
+
+
+def test_the_italian_course_reads_back_exactly_as_it_shipped(instance: Path) -> None:
+    """What a learner hears in Italian, pinned so a refactor cannot quietly move it.
+
+    Captured when W40 regrouped the file into a list of courses. That change had to
+    alter the file's BYTES -- the catalog fingerprint covers them -- while changing no
+    lesson, so "unchanged" needed a witness that looks at rows rather than at the file.
+    The digest is that witness: it covers every string a learner could hear, read back
+    from the database, so a re-wrapped line, a reordered turn or a lost accent moves it.
+
+    A failure here is not a formatting nit. It means the seeded Italian content differs
+    from what was reviewed against the page images, and the right response is to find
+    out what moved, not to update the constant.
+    """
+    assert [
+        (lesson_id, content.lesson.position, content.source.module, content.source.unit, content.source.page)
+        for lesson_id in sorted(_converted_ids())
+        for content in [store.get_lesson_content(lesson_id, instance_path=instance)]
+    ] == [
+        ("it-fast-01-what-time-is-it", 1, "Volume 1", "IV", 83),
+        ("it-fast-02-room-service", 2, "Volume 1", "VI", 124),
+        ("it-fast-03-taxi-and-haircut", 3, "Volume 1", "IX", 197),
+        ("it-fast-04-shopping-for-clothes", 4, "Volume 1", "XIII", 301),
+        ("it-fast-05-eating-out", 5, "Volume 1", "XV", 352),
+        ("it-fast-06-phone-call-about-a-flat", 6, "Volume 1", "XVII", 408),
+    ]
+
+    assert _rows_per_table(instance) == (82, 42, 113), "the six units' turns, notes and drills, as curated"
+
+    digest = hashlib.sha256(_shipped_text(instance).encode("utf-8")).hexdigest()
+    assert digest == "d14f06db92fb34b2a383198309238ea65cb6736e43b7b5d3c11381b5568286af", (
+        "every spoken string of the Italian course, and one of them has changed"
+    )
 
 
 def test_the_converted_content_reaches_a_robot_that_already_has_a_database(tmp_path: Path) -> None:
