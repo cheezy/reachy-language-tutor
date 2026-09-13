@@ -3,6 +3,7 @@ from typing import Any
 
 from reachy_language_tutor.learners import get_progress, get_language_catalog
 from reachy_language_tutor.lesson_session import LessonSessionRefusedError
+from reachy_language_tutor.lesson_feedback import LessonEvent, react_to_lesson_event
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 from reachy_language_tutor.tools._language_choice import resolve_language
 
@@ -160,6 +161,11 @@ class StartLesson(Tool):
             completed_count,
             remaining_count,
         )
+        # Below the pin, and below every refusal above it: a lesson that did not start
+        # must not be nodded at. The policy is handed an event and the movement sink, and
+        # deliberately not `deps` -- deps carries the learner id, and choosing a reaction
+        # is not allowed to see who is practising.
+        react_to_lesson_event(LessonEvent.LESSON_STARTED, movement_manager=deps.movement_manager)
         return {
             "started": True,
             "language": progress.language_name,

@@ -222,6 +222,16 @@ def run(
     except Exception as e:  # never block startup on learner storage
         logger.warning("Failed to prepare the learner database: %s", e)
 
+    try:
+        from reachy_language_tutor.tools.play_emotion import warm_emotion_library
+
+        # Paid once, here. The lesson reactions ask for this library and never build it,
+        # because building it downloads a dataset and they run inside the voice loop --
+        # so this is the call that stops a session's first reactions being dropped.
+        warm_emotion_library()
+    except Exception as e:  # never block startup on movement
+        logger.warning("Failed to warm the emotion library: %s", e)
+
     logger.info(
         "Configured Hugging Face realtime backend, connection mode: %s",
         get_hf_connection_selection().mode,

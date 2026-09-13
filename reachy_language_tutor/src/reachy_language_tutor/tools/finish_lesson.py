@@ -2,6 +2,7 @@ import logging
 from typing import Any
 
 from reachy_language_tutor.learners import OUTCOMES, get_lesson, get_progress, record_result
+from reachy_language_tutor.lesson_feedback import react_to_lesson_event, event_for_recorded_result
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 
@@ -166,6 +167,21 @@ class FinishLesson(Tool):
         # Nothing wall-clock may enter this dict -- no recorded_at, no row or attempt
         # id, no attempt count, no "already recorded" flag. test_tool_identity_boundary
         # calls the tool twice with identical arguments and requires identical answers.
+        # Below `if not result.recorded: return _refused(...)`, so a refused write cannot
+        # reach a reaction -- enforced by where this sits rather than by a flag somebody
+        # has to remember to check.
+        #
+        # _standing returns an all-None dict when the read-back after the write fails, and
+        # that is NOT a finished language -- it is a fault in the robot. `language is
+        # None` is what tells the two apart, so a failed read-back is passed as "unknown"
+        # and can only produce the ordinary recorded-result reaction. Derived here rather
+        # than inside the policy because a helper taking `standing` would be handed
+        # lesson_title, which the policy is not allowed to see.
+        more_lessons_remain = None if standing["language"] is None else standing["next_lesson"] is not None
+        react_to_lesson_event(
+            event_for_recorded_result(outcome, more_lessons_remain=more_lessons_remain),
+            movement_manager=deps.movement_manager,
+        )
         return {"recorded": True, "outcome": outcome, **standing}
 
     @staticmethod

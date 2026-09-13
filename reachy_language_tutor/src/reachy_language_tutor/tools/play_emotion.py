@@ -192,6 +192,61 @@ def _keyword_intent(normalized_key: str) -> str | None:
     return None
 
 
+# The one emotion library this process uses. Module level rather than per-tool, because
+# W17's lesson_feedback needs to know whether the dataset has already been downloaded
+# WITHOUT downloading it -- a second cache would answer that question wrongly.
+_LOADED_LIBRARY: "RecordedMoves | None" = None
+
+
+def load_emotion_library() -> "RecordedMoves":
+    """Return this process's emotion library, downloading the dataset if nobody has yet."""
+    global _LOADED_LIBRARY
+    if _LOADED_LIBRARY is None:
+        # Constructing this downloads the dataset, so it must not run at import -- and it
+        # must not run anywhere a caller cannot afford to wait for a download.
+        _LOADED_LIBRARY = RecordedMoves("pollen-robotics/reachy-mini-emotions-library")
+    return _LOADED_LIBRARY
+
+
+def loaded_emotion_library() -> "RecordedMoves | None":
+    """Return the library only if something already paid to load it; never construct one.
+
+    The read-only half of the pair. A caller on a latency-sensitive path -- the lesson
+    tools, which run inside the voice loop -- asks this one, gets None on a cold process,
+    and does without rather than stalling a conversation on a download.
+    """
+    return _LOADED_LIBRARY
+
+
+def warm_emotion_library() -> bool:
+    """Load the library now, at startup, and say whether it is loaded. Never raises.
+
+    The lesson reactions in lesson_feedback ASK for the library and never build one,
+    because building it downloads a dataset and they run inside the voice loop. Without
+    this call nothing else would build it either until the model happened to play an
+    emotion, so the first reactions of every session -- starting with the lesson-start
+    nod, which is always the first -- would be silently dropped.
+
+    Startup is where that wait belongs: it costs nobody a conversation, and it is one
+    synchronous call rather than a thread, a timer or any per-frame work.
+
+    What it costs when the network is bad, stated as measured rather than as hoped. A
+    RAISED failure costs movement and nothing else -- it is caught here and the app goes
+    on. A SLOW one costs time to start: huggingface_hub bounds each request, but nothing
+    bounds the total across the dataset's files, so a degraded remote stretches startup
+    rather than failing it. That is a late robot, never a robot that will not teach: this
+    runs before the conversation exists, and a lesson cannot be waiting on it.
+    """
+    if not EMOTION_AVAILABLE:
+        return False
+    try:
+        load_emotion_library()
+    except Exception as e:
+        logger.warning("Could not load the emotion library at startup: %s", e)
+        return False
+    return True
+
+
 def resolve_emotion_name(requested_emotion: object, available_emotions: list[str]) -> str | None:
     """Resolve a compact intent, nuanced yes/no phrase, or recorded move ID."""
     if not available_emotions:
@@ -265,8 +320,9 @@ class PlayEmotion(Tool):
 
         try:
             if self._library is None:
-                # Constructing this downloads the dataset, so it must not run at import.
-                self._library = RecordedMoves("pollen-robotics/reachy-mini-emotions-library")
+                # Kept as an instance attribute as well as a module one: tests substitute
+                # a fake here, and that must keep short-circuiting before the loader.
+                self._library = load_emotion_library()
             library = self._library
             emotion_names = library.list_moves()
             if not emotion_names:
