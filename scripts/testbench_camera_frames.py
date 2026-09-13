@@ -52,9 +52,18 @@ import urllib.request
 # fast the camera is. A branch that is keeping up sits near the camera's own rate.
 _HANDLER_CEILING_FPS = 30.0
 
-# Below this, the stream is not alive: it is slack draining, or nothing at all. Chosen
-# well under any plausible healthy rate so the verdict is not a close call.
-_ALIVE_FLOOR_FPS = 3.0
+# The verdict is RELATIVE to a measured healthy baseline, not to a number picked in
+# advance. Measured on this machine, a healthy mockup-sim stream runs at 3.2-3.5 fps --
+# far below the handler's 30 fps ceiling, because the rate is set by the source and the
+# JPEG encode, not by the loop. A hardcoded floor of 3.0 would have sat 13% under that,
+# so a healthy run and a degraded one would differ by less than the noise, and the
+# verdict would flip on which sample you happened to take.
+#
+# So: pass --baseline with the healthy figure, and judge against a fraction of it. The
+# same discipline as scripts/tee_leak_proof.py, which judges against the source rate
+# rather than against zero.
+_DELIVERING_FRACTION = 0.5  # at least half the baseline is still plainly alive
+_STALLED_FRACTION = 0.1  # below a tenth is slack draining, not a camera
 
 # One complete multipart part header, as the handler writes it. Matching the whole header
 # rather than the bare "--frame" boundary, because two bytes of JPEG payload could
@@ -121,6 +130,12 @@ def main() -> int:
     parser.add_argument("--base", default="http://localhost:8042", help="testbench base URL")
     parser.add_argument("--seconds", type=float, default=8.0, help="how long to count for")
     parser.add_argument("--label", default="", help="a note for the output, e.g. 'unpatched'")
+    parser.add_argument(
+        "--baseline",
+        type=float,
+        default=0.0,
+        help="healthy fps to judge against, from a known-good run (without it, no verdict is given)",
+    )
     args = parser.parse_args()
 
     if args.label:
@@ -136,12 +151,16 @@ def main() -> int:
         print("  This says nothing about the camera. Start the testbench and run again.")
         return 2
 
-    if fps >= _ALIVE_FLOOR_FPS:
-        verdict = "DELIVERING"
-    elif frames > 0:
-        verdict = "STALLED (a few frames, then nothing -- that is slack draining, not a camera)"
-    else:
+    if frames == 0:
         verdict = "SILENT: the stream opened and delivered nothing, which is the symptom"
+    elif args.baseline <= 0:
+        verdict = f"{fps:.1f} fps, no --baseline given, so no verdict -- measure a healthy run first"
+    elif fps >= args.baseline * _DELIVERING_FRACTION:
+        verdict = f"DELIVERING ({fps / args.baseline:.0%} of the {args.baseline:.1f} fps baseline)"
+    elif fps <= args.baseline * _STALLED_FRACTION:
+        verdict = f"STALLED ({fps / args.baseline:.0%} of baseline -- slack draining, not a camera)"
+    else:
+        verdict = f"DEGRADED ({fps / args.baseline:.0%} of baseline -- neither healthy nor wedged)"
 
     print(
         f"\n  {frames} frames in {elapsed:.1f}s = {fps:.1f} fps "
