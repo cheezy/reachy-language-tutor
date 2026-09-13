@@ -427,13 +427,19 @@ this volume demonstrates that in both directions:
   dated practicality.
 - **Cycle 14 screens dirty and is shortlisted**, on a false positive.
 
-**Where the embassy actually lives in this book, and why so little survives.** It is
-not mainly in the dialogues. It is in the **substitution drill sets**: `¿El Embajador
+**Where the embassy actually lives in this book, and why so little survives.** In the
+Cycles quoted below it is not mainly in the dialogues — this is a pattern established on
+the units that were read in context, not a census of all 32. It is in the **substitution drill sets**: `¿El Embajador
 viajaba mucho?`, `El Embajador dio la cena`, `tenía visa diplomática`, `el Cónsul` as an
 alternate subject. A dialogue can have its situation replaced, which is what the method
 asks for — a drill whose substitution list is embassy staff cannot, without inventing
 replacement Spanish, which the method forbids. That is why 29 of 38 Cycles carry
 excluded material and why the yield here is a sixth rather than the expected third.
+
+Precisely: **29 Cycles screen nonzero, and 28 actually carry excluded material.** Cycle
+14 is the difference — its lone hit is the `customs` false positive, which is why it is
+on the shortlist rather than in the dropped table. The screen's number and the reading's
+number are not the same number, and this log should not use them interchangeably.
 
 ### The shortlist — six Cycles, each read
 
@@ -456,8 +462,14 @@ is stated per unit so a reviewer can judge the depth:
 **Cycle 25 — Shopping at a local market** (printed 341–354)
 : Market shopping, artesanías, and regatear — bargaining — in a short and a long version, the long one carrying subjunctive practice. Culturally rich and entirely everyday. **Read: both dialogue versions.**
 
-**Cycle 38 — Household repairs** (printed 525–540)
-: Three Spanish dialogues (plus their English facing pages and vocabulary) about a blown fuse, an electrician, and a bathroom problem. Everyday, neutral, and 'fue necesario que llamáramos' is real subjunctive. **Read: all three dialogues.**
+**Cycle 38 — Household repairs** (printed 525–542)
+: **Two** dialogues, not three — *Reparaciones caseras (A)*, where the fuses blow and an
+electrician is called, and *(B)*, a blocked bathtub and a plumber. The later
+"Dialogue No. 1 / No. 2" headings on printed 533–540 are the drill sections referring
+back to those two, which is what an earlier draft of this line miscounted; before that
+it said eight, counting vocabulary blocks and English facing pages as well. Everyday,
+neutral, and *fue necesario que llamáramos* is real subjunctive. **Read: both dialogues
+in full, and the drill sections that follow them.**
 
 **Reading depth, stated plainly.** All of the above is text-layer reading. No page image
 was read in this pass, and that is the right depth for judging a premise and the wrong
@@ -505,14 +517,19 @@ Step 4 of the method governs that and W36 owns it.
 | 35 | Getting things — at the bank | 483–494 | 1 | 11 | 0 | 4 | 16 | dropped |
 | 36 | At the office — directing the secretary | 495–510 | 0 | 5 | 0 | 7 | 12 | dropped |
 | 37 | Getting things — an emergency | 511–524 | 0 | 0 | 5 | 0 | 5 | dropped |
-| 38 | Getting things — household repairs | 525–540 | 0 | 0 | 0 | 0 | 0 | **SHORTLIST** |
+| 38 | Getting things — household repairs | 525–542 | 0 | 0 | 0 | 0 | 0 | **SHORTLIST** |
 
 **Why each dropped Cycle was dropped:**
 
 - **Cycle 1.** No dialogue at all — letter names and a procedure written to a human teacher. Drillable, but this lesson shape needs a dialogue.
 - **Cycle 3.** Airport arrival, and the densest border cycle: customs and immigration throughout, plus 29 embassy references. Excluded by decision.
 - **Cycle 4.** Hotel check-in carrying embassy and passport references; Cycle 21 covers hotels more cleanly anyway.
-- **Cycle 6.** Giving instructions at post — ten embassy references in the frame.
+- **Cycle 6.** The scene is leaving last-minute instructions for a babysitter before
+  going out: "You have been invited to attend an Embassy function this evening … you
+  give last minute instructions before you leave for the Embassy." The fill-in exercise
+  reproduces "en la Embajada" and the Embassy phone number, and the introduction adds
+  that a colleague might "lend" you a maid to sit. The instructions-to-a-sitter content
+  would convert well; the frame it is welded to would not.
 - **Cycle 7.** The telephone frame is an embassy switchboard.
 - **Cycle 8.** Directions given relative to the embassy, plus two border references.
 - **Cycle 9.** The dialogue IS an embassy switchboard: '¡Aló! Embajada Americana.' / 'Con la Sección Consular.' There is no unit here without it.
@@ -529,7 +546,12 @@ Step 4 of the method governs that and W36 owns it.
 - **Cycle 22.** Forty hits, and reading confirms them: the Ambassador's secretary, appointments with the Ambassador, the Club Militar. The clearest exclusion in the volume.
 - **Cycle 23.** '¿Hay muchos bolivianos en la Embajada?' is a drill item.
 - **Cycle 24.** 'trabajar en la Embajada / work at the Embassy' — the exact case the method names from Italian ('Sono dell'Ambasciata').
-- **Cycle 26.** Four embassy references, and Cycles 5 and 27 cover restaurants.
+- **Cycle 26.** The dining-out dialogue itself is clean — friends recommending a
+  restaurant. What is not is the grammar around it: *quedar* is taught with "¿Dónde
+  queda la Embajada Americana?" as its worked example, and the subjunctive drills run on
+  "quiero parar en la Embajada". The example and the drill are the teaching; replacing
+  them means writing the lesson rather than converting it. Cycles 5 and 27 cover
+  restaurants without that.
 - **Cycle 27.** 'mi pasaporte' as the object of a subjunctive drill.
 - **Cycle 28.** 'I would like to get a house near the Embassy' is a drill line, and 'El Embajador' is a substitution subject.
 - **Cycle 29.** 'presente el pasaporte' in a subjunctive drill.
