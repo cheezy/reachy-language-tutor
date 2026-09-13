@@ -43,6 +43,7 @@ from reachy_language_tutor.config import (
 )
 from reachy_language_tutor.prompts import get_session_voice, get_session_instructions
 from reachy_language_tutor.streaming import AdditionalOutputs, audio_to_float32
+from reachy_language_tutor.logging_safety import log_safe
 from reachy_language_tutor.startup_settings import read_startup_settings, write_startup_settings
 from reachy_language_tutor.tools.core_tools import initialize_tools
 from reachy_language_tutor.tool_space_routes import register_tool_space_methods
@@ -565,7 +566,7 @@ class LocalStream:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.debug("Active handler shutdown ignored during restart: %s", e)
+            logger.debug("Active handler shutdown ignored during restart: %s", log_safe(e))
 
     def _mark_restart_requested(self, reason: str) -> None:
         """Request a backend restart from a synchronous route handler."""
@@ -677,7 +678,7 @@ class LocalStream:
                     lines.append(f"{env_name}={value}")
             final_text = "\n".join(lines) + "\n"
             env_path.write_text(final_text, encoding="utf-8")
-            logger.info("Persisted %s to %s", ", ".join(sorted(normalized_updates)), env_path)
+            logger.info("Persisted %s to the instance .env", ", ".join(sorted(normalized_updates)))
 
             try:
                 from dotenv import load_dotenv
@@ -687,7 +688,7 @@ class LocalStream:
                 pass
             refresh_runtime_config_from_env()
         except Exception as e:
-            logger.warning("Failed to persist %s: %s", ", ".join(sorted(normalized_updates)), e)
+            logger.warning("Failed to persist %s: %s", ", ".join(sorted(normalized_updates)), log_safe(e))
 
     def _remove_persisted_env_values(self, env_names: tuple[str, ...]) -> None:
         """Remove keys from the instance `.env` without mutating the current runtime."""
@@ -713,9 +714,9 @@ class LocalStream:
             if final_text:
                 final_text += "\n"
             env_path.write_text(final_text, encoding="utf-8")
-            logger.info("Removed %s from %s", ", ".join(normalized_names), env_path)
+            logger.info("Removed %s from the instance .env", ", ".join(normalized_names))
         except Exception as e:
-            logger.warning("Failed to remove %s: %s", ", ".join(normalized_names), e)
+            logger.warning("Failed to remove %s: %s", ", ".join(normalized_names), log_safe(e))
 
     def _persist_hf_direct_connection(self, host: str, port: int) -> None:
         """Persist a direct Hugging Face websocket target."""
@@ -748,9 +749,9 @@ class LocalStream:
                 voice=normalized_voice_override,
             )
             self._remove_persisted_env_values(LEGACY_STARTUP_ENV_NAMES)
-            logger.info("Persisted startup personality settings to %s", Path(self._instance_path))
+            logger.info("Persisted startup personality settings to the instance directory")
         except Exception as e:
-            logger.warning("Failed to persist startup personality settings: %s", e)
+            logger.warning("Failed to persist startup personality settings: %s", log_safe(e))
 
     def _read_persisted_personality(self) -> Optional[str]:
         """Read the saved startup personality from instance-local UI settings."""
@@ -782,7 +783,7 @@ class LocalStream:
         try:
             return get_session_voice(default=get_default_voice())
         except Exception as exc:
-            logger.warning("Failed to resolve the current profile voice: %s", exc)
+            logger.warning("Failed to resolve the current profile voice: %s", log_safe(exc))
             return get_default_voice()
 
     async def change_voice(self, voice: str) -> str:
@@ -792,7 +793,7 @@ class LocalStream:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error("Error changing voice to %r: %s", voice, e)
+            logger.error("Error changing voice to %r: %s", voice, log_safe(e))
             return f"Failed to change voice: {e}"
 
         try:
@@ -800,7 +801,7 @@ class LocalStream:
             if isinstance(current_voice, str) and current_voice.strip():
                 self._voice_override = current_voice
         except Exception as e:
-            logger.debug("Could not sync LocalStream voice override after voice change: %s", e)
+            logger.debug("Could not sync LocalStream voice override after voice change: %s", log_safe(e))
         if self._voice_override:
             self._persist_voice_override(self._voice_override)
         return status
@@ -813,7 +814,7 @@ class LocalStream:
             existing = read_startup_settings(self._instance_path)
             write_startup_settings(self._instance_path, profile=existing.profile, voice=voice)
         except Exception as e:
-            logger.warning("Failed to persist startup voice: %s", e)
+            logger.warning("Failed to persist startup voice: %s", log_safe(e))
 
     def _init_settings_ui_if_needed(self) -> None:
         """Attach minimal settings UI to the settings app.
@@ -829,7 +830,7 @@ class LocalStream:
 
         static_dir = Path(__file__).parent / "static"
         index_file = static_dir / "index.html"
-        logger.info("Serving settings UI from %s", static_dir)
+        logger.info("Serving the settings UI from the packaged static directory")
 
         # Framework pre-registers GET / and /static; strip them so our routes aren't shadowed.
         _detach_framework_root_routes(settings_app)
@@ -1039,7 +1040,7 @@ class LocalStream:
                     self._set_backend_connection_state("disconnected", e)
                     logger.warning(
                         "Backend handler failed to initialize: %s. Retrying in %.1f seconds.",
-                        e,
+                        log_safe(e),
                         self._backend_retry_delay,
                         exc_info=logger.isEnabledFor(logging.DEBUG),
                     )
@@ -1062,7 +1063,7 @@ class LocalStream:
                 self._set_backend_connection_state("disconnected", e)
                 logger.warning(
                     "Backend failed to start: %s. Settings UI remains available; retrying in %.1f seconds.",
-                    e,
+                    log_safe(e),
                     self._backend_retry_delay,
                     exc_info=logger.isEnabledFor(logging.DEBUG),
                 )
@@ -1170,12 +1171,12 @@ class LocalStream:
         try:
             self._robot.media.stop_recording()
         except Exception as e:
-            logger.debug(f"Error stopping recording (may already be stopped): {e}")
+            logger.debug("Error stopping recording (may already be stopped): %s", log_safe(e))
 
         try:
             self._robot.media.stop_playing()
         except Exception as e:
-            logger.debug(f"Error stopping playback (may already be stopped): {e}")
+            logger.debug("Error stopping playback (may already be stopped): %s", log_safe(e))
 
         # close() runs on watcher threads, loop-owned state must change on the loop.
         loop = self._asyncio_loop

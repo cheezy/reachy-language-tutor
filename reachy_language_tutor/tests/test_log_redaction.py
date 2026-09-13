@@ -1067,3 +1067,83 @@ async def test_the_idle_reason_is_described_rather_than_quoted(
 
     assert LEARNER_NAME not in logged
     assert "Tool call: idle_do_nothing" in logged
+
+
+# --- Sink 4: an exception rendered raw, which carries the path it failed on ----------
+#
+# The subtlest of the four, because the log line looks clean. A warning that carefully
+# does not interpolate a path still prints one when the exception IS an OSError:
+# OSError.__str__ embeds its filename. Measured on a real blocked path, the learner
+# store printed "/.../alice-smith-household/instance" from a line whose format string
+# mentions no path at all, and memory.py printed the household directory twice.
+#
+# The rule is logging_safety.log_safe. These are the modules that hold it.
+
+_REDACTED_MODULES = (
+    "learners/store.py",
+    "memory.py",
+    "console.py",
+    "main.py",
+)
+
+_SAFE_RENDERERS = frozenset({"log_safe", "_log_safe", "describe_for_log", "describe_json_for_log"})
+
+
+def _source_root() -> Path:
+    return Path(__file__).resolve().parents[1] / "src" / "reachy_language_tutor"
+
+
+def _exception_bound_names(tree: ast.Module) -> set[str]:
+    """Names an `except ... as` binds, which therefore hold an exception."""
+    return {node.name for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler) and node.name}
+
+
+@pytest.mark.parametrize("module", _REDACTED_MODULES)
+def test_no_caught_exception_is_logged_without_being_rendered_safe(module: str) -> None:
+    """An exception reaching a log line goes through log_safe, in every module that holds it.
+
+    This is an allow-list over one shape rather than a search for paths: a caught
+    exception is rendered through a redactor, or it does not reach the log. Naming the
+    forbidden thing instead -- "no argument called path" -- is what missed it the first
+    time, because the offending argument was called `exc`.
+
+    Wrapping is what the fix was: 26 log lines across console.py and main.py, plus the
+    learner modules. Unwrapping any of them fails this.
+
+    NOT covered, and deliberately: the other modules in the package. They have the same
+    shape at roughly a hundred more call sites, which is a change too large to make
+    without its own review -- see the completion notes on D31. This list is the set that
+    has actually been swept, and a module joins it when it has been.
+    """
+    tree = ast.parse((_source_root() / module).read_text(encoding="utf-8"))
+    caught = _exception_bound_names(tree)
+    assert caught, f"{module} catches nothing, so this scan proves nothing"
+
+    raw: list[str] = []
+    checked = 0
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "logger"):
+            continue
+        for argument in list(node.args) + [keyword.value for keyword in node.keywords]:
+            for name in (n for n in ast.walk(argument) if isinstance(n, ast.Name)):
+                if name.id not in caught:
+                    continue
+                checked += 1
+                enclosing = [
+                    call
+                    for call in ast.walk(argument)
+                    if isinstance(call, ast.Call)
+                    and getattr(call.func, "id", getattr(call.func, "attr", "")) in _SAFE_RENDERERS
+                    and any(n is name for n in ast.walk(call))
+                ]
+                # type(exc).__name__ is a shape, not a value, and is equally fine.
+                shaped = any(
+                    isinstance(a, ast.Attribute) and a.attr == "__name__" for a in ast.walk(argument)
+                )
+                if not enclosing and not shaped:
+                    raw.append(f"{module}:{node.lineno}: `{name.id}` is logged without log_safe")
+
+    assert checked, f"no caught exception reaches a log line in {module}, so this scan proves nothing"
+    assert raw == [], raw

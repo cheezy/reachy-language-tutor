@@ -21,6 +21,7 @@ from reachy_language_tutor.utils import (
     setup_logger,
     log_connection_troubleshooting,
 )
+from reachy_language_tutor.logging_safety import log_safe
 
 
 if TYPE_CHECKING:
@@ -56,11 +57,13 @@ def _start_inactivity_timeout_thread(
                     else:
                         stream_manager.close()
                 except Exception as e:
-                    logger.error("Error while going to sleep after inactivity timeout: %s", e)
+                    logger.error("Error while going to sleep after inactivity timeout: %s", log_safe(e))
                     try:
                         stream_manager.close()
                     except Exception as close_error:
-                        logger.error("Error while closing stream manager after inactivity timeout: %s", close_error)
+                        logger.error(
+                            "Error while closing stream manager after inactivity timeout: %s", log_safe(close_error)
+                        )
                 return
             time.sleep(1.0)
 
@@ -166,7 +169,7 @@ def main() -> None:
         try:
             raise SystemExit(handle_tool_spaces_command(args))
         except Exception as exc:
-            logger.error("tool-spaces command failed: %s", exc)
+            logger.error("tool-spaces command failed: %s", log_safe(exc))
             raise SystemExit(1) from exc
     run(args)
 
@@ -206,21 +209,21 @@ def run(
             if env_path.exists():
                 load_dotenv(dotenv_path=str(env_path), override=True)
                 refresh_runtime_config_from_env()
-                logger.info("Loaded instance configuration from %s", env_path)
+                logger.info("Loaded instance configuration from the instance .env")
         except Exception as e:
-            logger.warning("Failed to load instance configuration: %s", e)
+            logger.warning("Failed to load instance configuration: %s", log_safe(e))
 
         try:
             startup_settings = load_startup_settings_into_runtime(instance_path)
         except Exception as e:
-            logger.warning("Failed to load startup settings: %s", e)
+            logger.warning("Failed to load startup settings: %s", log_safe(e))
 
     try:
         from reachy_language_tutor.learners.store import ensure_learner_database
 
         ensure_learner_database(instance_path)
     except Exception as e:  # never block startup on learner storage
-        logger.warning("Failed to prepare the learner database: %s", e)
+        logger.warning("Failed to prepare the learner database: %s", log_safe(e))
 
     try:
         from reachy_language_tutor.tools.play_emotion import warm_emotion_library
@@ -230,7 +233,7 @@ def run(
         # so this is the call that stops a session's first reactions being dropped.
         warm_emotion_library()
     except Exception as e:  # never block startup on movement
-        logger.warning("Failed to warm the emotion library: %s", e)
+        logger.warning("Failed to warm the emotion library: %s", log_safe(e))
 
     logger.info(
         "Configured Hugging Face realtime backend, connection mode: %s",
@@ -250,12 +253,12 @@ def run(
             robot = ReachyMini(**robot_kwargs)
 
         except TimeoutError as e:
-            logger.error(f"Connection timeout: Failed to connect to Reachy Mini daemon. Details: {e}")
+            logger.error("Connection timeout: Failed to connect to Reachy Mini daemon. Details: %s", log_safe(e))
             log_connection_troubleshooting(logger, args.robot_name)
             sys.exit(1)
 
         except ConnectionError as e:
-            logger.error(f"Connection failed: Unable to establish connection to Reachy Mini. Details: {e}")
+            logger.error("Connection failed: Unable to establish connection to Reachy Mini. Details: %s", log_safe(e))
             log_connection_troubleshooting(logger, args.robot_name)
             sys.exit(1)
 
@@ -341,7 +344,7 @@ def run(
             try:
                 robot.disable_wobbling()
             except Exception as e:
-                logger.debug("Error disabling wobbling before sleep: %s", e)
+                logger.debug("Error disabling wobbling before sleep: %s", log_safe(e))
 
             movement_manager.stop(reset_to_neutral=False)
 
@@ -349,7 +352,7 @@ def run(
                 robot.goto_sleep()
             except Exception as e:
                 sleep_error = f"{type(e).__name__}: {e}"
-                logger.error("Failed to move Reachy Mini to sleep pose: %s", e)
+                logger.error("Failed to move Reachy Mini to sleep pose: %s", log_safe(e))
 
             stop_current_app_requested = False
             if app_stop_event is None or not app_stop_event.is_set():
@@ -362,7 +365,7 @@ def run(
                     stream_manager.close()
                 except Exception as e:
                     local_stop_requested = False
-                    logger.error("Error while closing stream manager after go_to_sleep: %s", e)
+                    logger.error("Error while closing stream manager after go_to_sleep: %s", log_safe(e))
 
             result: dict[str, Any] = {
                 "status": "sleeping" if sleep_error is None else "stop_requested",
@@ -392,7 +395,7 @@ def run(
     try:
         app_lifecycle.initialize_tools_with_default_fallback(instance_path, logger)
     except Exception as e:
-        logger.error("Failed to initialize tools: %s", e)
+        logger.error("Failed to initialize tools: %s", log_safe(e))
         sys.exit(1)
 
     # Each async service → its own thread/loop
@@ -423,7 +426,7 @@ def run(
         try:
             stream_manager.close()
         except Exception as e:
-            logger.error(f"Error while closing stream manager: {e}")
+            logger.error("Error while closing stream manager: %s", log_safe(e))
 
     if app_stop_event:
         threading.Thread(target=poll_stop_event, daemon=True).start()
@@ -444,13 +447,13 @@ def run(
         try:
             robot.disable_wobbling()
         except Exception as e:
-            logger.debug(f"Error disabling wobbling during shutdown: {e}")
+            logger.debug("Error disabling wobbling during shutdown: %s", log_safe(e))
 
         # Ensure media is explicitly closed before disconnecting
         try:
             robot.media.close()
         except Exception as e:
-            logger.debug(f"Error closing media during shutdown: {e}")
+            logger.debug("Error closing media during shutdown: %s", log_safe(e))
 
         # prevent connection to keep alive some threads
         robot.client.disconnect()
