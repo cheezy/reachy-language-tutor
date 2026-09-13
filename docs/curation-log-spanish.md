@@ -23,7 +23,7 @@ seeded.
 
 ---
 
-## The source
+## The source (Basic — evaluated, not selected)
 
 | | |
 |---|---|
@@ -85,12 +85,20 @@ layer, reconstructed: the layer renders "Romance **Ianguages**", "**Ma.ny nember
 FSI' s staff", "Language **Iaboretory**", and this log corrects them here rather than
 printing them clean and calling them quotations.
 
-*Better than Basic:* the FAST places **one** named title-page author inside FSI by job
-title — Vicente Arbeláez, "Spanish Section Acting Head in the Department of Romance
-Languages at the Foreign Service Institute (FSI)". Basic states no individual's
-employment at all. Stephen Zappala is placed at FSI twice over: "Chairman of the
-Department of Romance Languages", and by name in the preface's explicit roster of
-"Other members of the FSI Spanish staff".
+*Better than Basic, on one rule applied to both:* the FAST places **one of its four
+title-page authors** inside FSI by job title — Vicente Arbeláez, "Spanish Section Acting
+Head in the Department of Romance Languages at the Foreign Service Institute (FSI)".
+Basic places **none of its three title-page linguists**, and they are its open question.
+
+That is the whole of the credit, and an earlier draft of this line claimed more: it said
+Basic "states no individual's employment at all", which is false and is refuted by this
+same log further down — Basic's preface names five people inside FSI's Spanish staff
+(Ulsh, Beym, Rauscher, Segreda, Montero). Both courses carry a named FSI-staff roster,
+so a roster earns neither a point over the other; the FAST's Stephen Zappala appears in
+one just as Basic's five do. (Zappala is also "Chairman of the Department of Romance
+Languages" — attached to FSI by the preceding sentence about Arbeláez rather than by its
+own words.) Scoring the same evidence as a credit for the chosen course and as nothing
+for the rejected one is how a record turns into advocacy.
 
 *Worse than Basic, and it is the same kind of question:* three of the four title-page
 authors — Lily Bean, C. Cleland Harris, Marisa Kenney-López — are covered only by the
@@ -101,7 +109,10 @@ preface gives her the title "principal consultant" and the role "field testing b
 original and the revised versions", and **does not include her in the FSI-staff roster
 it writes out by name**. An earlier draft of this section said the preface "places both
 inside FSI"; the page places Zappala inside it and leaves Paine out of the one list that
-would have settled it. Field testing is not authorship, which bounds the exposure — but
+would have settled it. The page gives her **two** roles, not one: field testing on its
+own would not be authorship, but "principal consultant" comes with no described scope of
+contribution at all, so nothing on the page bounds it. An earlier draft said the
+exposure was bounded; it is not — and
 the question is open and belongs beside Basic's.
 
 **What was checked on the FAST:**
@@ -145,7 +156,7 @@ smaller job than it sounds and it is named here so it cannot be skipped.
 The alternatives the method excludes by decision remain excluded: the three Headstarts.
 Programmatic and Secretarias were not examined.
 
-**What Basic would cost, if it is the one chosen.** (An earlier draft presented this as
+**What Basic would have cost, had it been the one chosen.** (An earlier draft presented this as
 the cost of an unavoidable choice; it is not unavoidable.)
 Italian FAST is a 1992 course built around situational dialogues. Spanish Basic is a
 1957/1961 course built around *guided imitation* and pattern drills (the text layer
