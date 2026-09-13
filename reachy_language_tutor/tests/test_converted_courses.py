@@ -653,3 +653,62 @@ def test_the_approved_unit_mapping_cannot_be_widened_by_the_module_that_imports_
         APPROVED_UNITS["FSI Spanish FAST, Volume 1"] = frozenset({"IV"})  # type: ignore[index]
 
     assert approval_refusal("FSI Spanish FAST, Volume 1", "IV") is not None, "and it really is still refused"
+
+
+def test_placeholders_shifting_up_by_one_survive_the_upgrade(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Renumbering upward is not sufficient on its own, and this is the case that proves it.
+
+    docs/converting-a-course.md says renumbering is only safe upward. That is true and
+    it is not the whole rule. UNIQUE (language_code, position) is checked per statement,
+    so a lesson moving up into a place its neighbour has not vacated yet fails even
+    though the END STATE is valid. Italian never hit it because it shifted six
+    placeholders by six and every destination was already free. A language shipping its
+    FIRST converted lesson shifts its placeholders by ONE, every destination is
+    occupied, and the seed dies.
+
+    Measured before the fix: a fresh seed passed and the UPGRADE failed with
+    IntegrityError -- the worst possible shape, because only robots that already have a
+    database would ever see it. _seed now upserts highest position first, which makes
+    the shift self-clearing.
+    """
+    three = tuple((f"de-ph-{n}", "de", n, f"Placeholder {n}", f"Objective {n}.") for n in (1, 2, 3))
+    monkeypatch.setattr(store, "SEED_LESSONS", three)
+    monkeypatch.setattr(store, "SEED_LESSON_SOURCES", ())
+    # SEED_RESULTS references the real lesson ids, which this patched catalog does not
+    # contain; without emptying them the seed fails on the foreign key instead.
+    monkeypatch.setattr(store, "SEED_RESULTS", ())
+    monkeypatch.setattr(store, "_converted_lessons_json", lambda: _file())
+    assert store.ensure_learner_database(tmp_path).ready is True
+    assert _rows(tmp_path, "SELECT id, position FROM lessons WHERE language_code='de' ORDER BY position") == [
+        ("de-ph-1", 1),
+        ("de-ph-2", 2),
+        ("de-ph-3", 3),
+    ]
+
+    # Now ship a converted lesson at position 1, which pushes every placeholder up by
+    # exactly one -- the shift Italian never had to make.
+    shifted = tuple((f"de-ph-{n}", "de", n + 1, f"Placeholder {n}", f"Objective {n}.") for n in (1, 2, 3))
+    monkeypatch.setattr(store, "SEED_LESSONS", shifted)
+    monkeypatch.setattr(
+        store,
+        "_converted_lessons_json",
+        lambda: _file(_course("Course A", "de", [_lesson("de-conv-01", 1)])),
+    )
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute(
+            "UPDATE schema_meta SET value = ? WHERE key = ?", (str(store.SEED_VERSION - 1), store.SEED_VERSION_KEY)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = store.ensure_learner_database(tmp_path)
+
+    assert result.ready is True, f"the shift-by-one upgrade must not fail: {result.error}"
+    assert _rows(tmp_path, "SELECT id, position FROM lessons WHERE language_code='de' ORDER BY position") == [
+        ("de-conv-01", 1),
+        ("de-ph-1", 2),
+        ("de-ph-2", 3),
+        ("de-ph-3", 4),
+    ]

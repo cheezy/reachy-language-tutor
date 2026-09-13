@@ -255,7 +255,22 @@ Three things move together, and leaving one behind is silent:
    names that language, not within one course. Converted units take 1..n, and anything
    already in that language moves up behind them.
 
-**Renumbering is only safe upward, and this is the sharp edge of the whole step.**
+**Renumbering is only safe upward — and upward is not sufficient on its own.** This is
+the sharp edge of the whole step, and the rule had a hole in it until W36 measured one.
+
+`UNIQUE (language_code, position)` is checked **per statement, not at commit**, so a
+lesson moving up into a place its neighbour has not vacated yet fails even though the
+end state is perfectly valid. Italian never hit this: it shifted six placeholders by
+six, so every destination was already free. **A language shipping its FIRST converted
+lesson shifts its placeholders by one, every destination is occupied, and the seed
+dies** — and it dies only on the UPGRADE path, because a fresh install has nothing to
+collide with. Measured exactly that way: fresh seed green, upgrade `IntegrityError`.
+
+`_seed` now upserts **highest position first**, which makes any upward shift
+self-clearing regardless of its size, and
+`test_placeholders_shifting_up_by_one_survive_the_upgrade` holds it. You still must not
+renumber downward.
+
 `UNIQUE (language_code, position)` means two lessons cannot share a place, and the seed
 renumbers the existing lessons before the converted ones claim 1..n. That works while the
 existing lessons are moving *up* into positions nothing holds yet. Ship **fewer** units

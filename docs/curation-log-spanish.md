@@ -566,14 +566,75 @@ Step 4 of the method governs that and W36 owns it.
 
 ### What this screening did NOT do
 
-- **The two FAST rights gaps from W34 are still open** — its verso and final leaf have
-  not been read as images, and the authorship passage is still quoted from the text
-  layer. W36 must close them before shipping a line.
+- **The two FAST rights gaps from W34 are now CLOSED — see "Closing the FAST rights
+  gaps" below.** They were open when this screening section was written.
 - **The dropped Cycles were judged on their hits read in context plus their premise**,
   not read end to end. A Cycle dropped for an embassy drill may contain convertible
   material around it; the method's answer is that six good units are enough, and
   re-opening one later is cheaper than patching one now.
 - **Nothing was curated.** No line has been taken from this volume.
+
+---
+
+## Closing the FAST rights gaps (W36, before any curation)
+
+W34 recorded two gaps and W35 named them as blocking. Both are now closed by reading
+the pages rather than the text layer.
+
+**The verso (PDF 3) is blank.** Read as an image. In Basic, that page carried the GPO
+sale line; here it carries nothing at all. No copyright notice.
+
+**The final leaf (PDF 588) is the back cover** — the names of the Spanish-speaking
+countries set in the red, white and blue of the flag. Read as an image. No notice —
+**and no GPO imprint either**, which is a real difference from Basic and one that runs
+against the chosen course: Basic's last page carries "U. S. GOVERNMENT PRINTING OFFICE :
+1961 O - 596435" and the FAST has no equivalent anywhere I have looked. That is one
+fewer piece of government-printing evidence, recorded because the comparison in "The
+decision" above should not quietly keep only the favourable differences.
+
+**The authorship passage, now read from the page image (preface p. vii, PDF 8)** rather
+than the damaged text layer:
+
+> This course was designed by Vicente Arbeláez (Colombia), Spanish Section Acting Head
+> in the Department of Romance Languages at the Foreign Service Institute (FSI). He,
+> Lily Bean (Chile), and C. Cleland Harris (Puerto Rico) prepared the original lesson
+> materials. Dr. Harris also wrote most of the cultural and language notes, with the
+> help of Marisa Kenney-López (Mexico). These were subsequently edited, and before
+> publication additional notes were provided by Stephen Zappala (U.S.), Chairman of the
+> Department of Romance Languages.
+>
+> Many members of FSI's staff contributed to this effort. Marisa Kenney-López was
+> responsible for editing and for making final revisions to the text. Leonor Paine
+> (Honduras) was principal consultant and was responsible for field testing both the
+> original and the revised versions. María del Carmen Alvarez-Ortega (Spain) and
+> Cristina Jarquín (Spain) prepared the dialogues in the final Cycle. Other members of
+> the FSI Spanish staff—especially Susana Framiñán (Argentina), José Molina (Honduras),
+> Lucía Penna (Spain), Blanca Spencer (Colombia), Agustín Vilches (Peru), and Stephen
+> Zappala—provided useful suggestions and comments.
+
+### This changes the Paine question, and in the FAST's favour
+
+W34 recorded that the preface "leaves Paine out of the FSI-staff roster it writes by
+name". Reading the paragraph whole rather than the roster sentence alone, that is too
+strong. The paragraph **opens** "Many members of FSI's staff contributed to this
+effort", then names Kenney-López, Paine, Alvarez-Ortega and Jarquín, and **closes**
+"**Other** members of the FSI Spanish staff—especially …". On the ordinary reading of
+*other*, the people already named are also members of the FSI Spanish staff — Paine
+among them.
+
+**That is an inference from a discourse marker, not a statement of employment**, and it
+is recorded as such. The title page still labels Paine and Zappala "Principal
+Consultants", which sits oddly beside it. But the honest position is now: *the preface
+reads as placing every named contributor inside FSI, by the structure of the paragraph
+rather than by an explicit statement about any of them except Arbeláez and Zappala.*
+The open question is narrower than W34 recorded it, and it is narrower in the direction
+that favours using the course — which is exactly why it is written down here rather
+than quietly absorbed.
+
+**Also on this page, and relevant to W36 rather than to rights:** "The course is not
+designed for self-study and requires the presence of a trained instructor who is a
+native speaker of Spanish." The instructor is the thing this app replaces, so every
+line written to one is a line to drop rather than translate.
 
 ## What was decided about units
 
@@ -582,6 +643,59 @@ Step 4 of the method governs that and W36 owns it.
 survive; 6 of 38 is a sixth, because this volume's exclusions bite harder than Italian
 FAST's did — 29 of the 38 carry embassy, military, uniformed or border material, which
 is what a course written for diplomats arriving at post looks like when you screen it.
+
+---
+
+## Curation (W36) — started, and stopped on a defect worth more than the lesson
+
+**Nothing was shipped into `converted_lessons.json`, and that is a deliberate outcome
+rather than an unfinished one.** Curating the first Cycle exposed a seeding defect that
+would have broken every robot that already has a database, and fixing that was worth
+more than landing one lesson.
+
+### What was curated and verified
+
+**Cycle 10, "Getting around inside"** (printed 120–121), read on the page images at
+135 dpi — both dialogues, *Buscando el consultorio del Doctor Cardona* and *Buscando la
+Óptica Alemana*. The premises are neutral (a doctor's office and an optician in an
+office building), so **no situation needed replacing and no Spanish had to be invented**
+— the cleanest possible case. Six repetition drills and three determinate cue_response
+drills were drafted from the lines, plus usage notes on ordinal floors, `doble a la
+derecha`, `pasillo`/`corredor`, and `ascensor`/`elevador` (the source gives both).
+
+That draft is not in the shipped file. It is recoverable from this log and from the
+page images, and W36 should re-apply it once the blocker below is understood.
+
+### The defect: "renumbering is only safe upward" was not the whole rule
+
+Writing that lesson means the converted Spanish lesson takes position 1 and the six
+placeholders move to 2–7. That is an **upward** renumber, which the method said was the
+safe direction. It is not sufficient:
+
+- **Fresh seed: passes.** Nothing exists to collide with.
+- **Upgrade: `UNIQUE constraint failed: lessons.language_code, lessons.position`.**
+
+`UNIQUE (language_code, position)` is checked per statement, not at commit. Upserting
+ascending, `es-01` moves 1 → 2 while `es-02` still holds 2. **Italian never hit this
+because it shifted six placeholders by six**, so every destination was already free.
+Spanish shifts six by one and every destination is occupied.
+
+The shape of the failure is the dangerous part: **a fresh install is green and only a
+robot that already has a database breaks.** Nothing in the suite would have caught it,
+because every existing upgrade test was written around Italian's shift of six.
+
+**Fixed**: `_seed` now upserts highest position first, which makes an upward shift
+self-clearing whatever its size. `test_placeholders_shifting_up_by_one_survive_the_upgrade`
+pins it and fails with the exact IntegrityError when the sort is removed. Step 7 of
+docs/converting-a-course.md now states the corrected rule.
+
+### What W36 still owes
+
+The other five shortlisted Cycles (2, 5, 14, 25, 38) are screened, read and approved
+but not curated. Cycle 10's draft needs re-applying. And landing any Spanish lesson
+means updating roughly twenty tests that hardcode Spanish's six lessons and its first
+lesson — legitimate work, correctly not rushed, and now safe to do because the seeder
+will survive the renumber.
 
 ## Conventions applied to every unit
 

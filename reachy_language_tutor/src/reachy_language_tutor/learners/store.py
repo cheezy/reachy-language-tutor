@@ -833,12 +833,28 @@ def _seed(connection: sqlite3.Connection) -> bool:
             "INSERT INTO languages (code, name) VALUES (?, ?) ON CONFLICT(code) DO UPDATE SET name = excluded.name",
             SEED_LANGUAGES,
         )
+        # HIGHEST POSITION FIRST, and this ordering is load-bearing rather than tidy.
+        # UNIQUE (language_code, position) is checked per statement, not at commit, so
+        # a lesson moving UP into a place its neighbour has not vacated yet fails --
+        # even though the end state is perfectly valid. Ascending order, es-01 moves
+        # 1 -> 2 while es-02 still holds 2, and the seed dies on a robot in a house.
+        #
+        # That is why "renumbering is only safe upward" (docs/converting-a-course.md
+        # step 7) was not the whole rule. Italian got away with an ascending upsert
+        # because it shifted six placeholders by six, so every destination was already
+        # free. Spanish shifts six by one, every destination is occupied, and the
+        # measured result was an IntegrityError on the UPGRADE path while a fresh seed
+        # passed -- the worst shape of failure, because only households see it.
+        #
+        # Descending makes the shift self-clearing: 6 -> 7 first (7 free), then 5 -> 6
+        # (just vacated), and so on down. It costs one sort and removes the dependency
+        # on the shift being larger than the block.
         connection.executemany(
             "INSERT INTO lessons (id, language_code, position, title, objective) VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET "
             "language_code = excluded.language_code, position = excluded.position, "
             "title = excluded.title, objective = excluded.objective",
-            SEED_LESSONS,
+            sorted(SEED_LESSONS, key=lambda row: row[2], reverse=True),
         )
         # Converged with the lessons themselves, in the same transaction and by the
         # same rule: a lesson whose provenance is corrected must reach the robots that
