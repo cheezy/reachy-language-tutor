@@ -1,4 +1,9 @@
-# Curation log: FSI Spanish Basic Course, Volume 1
+# Curation log: Spanish — FSI FAST (selected), FSI Basic Volume 1 (evaluated)
+
+> This log records rights positions for **two** courses. The selection is the **FAST**;
+> Basic was evaluated first, on a false premise, and its record is kept rather than
+> deleted. Where a section below says "the source" unqualified it predates the change —
+> the sections that matter have been scoped by name.
 
 What was chosen, what was checked, and what was decided, for the Spanish conversion.
 Written in the order the work happens, so the sections below the rights position are
@@ -8,13 +13,13 @@ The method is [converting-a-course.md](converting-a-course.md). The worked examp
 another language is [curation-log-italian-fast.md](curation-log-italian-fast.md); where
 this log is terse, that one has the longer version of the same argument.
 
-**Status: the source is NOT settled, and that is a change from an earlier draft of this
-log.** A rights position for *FSI Spanish Basic Course, Volume 1* is recorded below and
-stands. But a second candidate exists that this log originally and wrongly said did not
-— **the Spanish FAST** — and it has not been rights-checked. Section "The two
-candidates" states the decision that is open and what each would cost. Nothing has been
-screened, read, curated or seeded; W35 onward should not start until the source is
-chosen.
+**Status: the source is settled on the FAST; its rights work is started, not finished.**
+An earlier draft of this log chose Basic on the false ground that no Spanish FAST exists
+— it does, and the error is described below. A rights position is recorded for **both**
+courses. Basic's is the more thoroughly evidenced and is not withdrawn; it is superseded
+as a *selection*, not as a record. The FAST's is thinner and has two named gaps that W35
+must close before it screens a single unit. Nothing has been screened, read, curated or
+seeded.
 
 ---
 
@@ -57,24 +62,85 @@ Both are now corrected, and the enumeration there parses both halves of the resp
 | Bytes | 19,066,937 | 21,136,441 |
 | SHA-256 | `4838a312…983e18e9` | `cd603ff9…1e8fd050` |
 | Pages | 700 | 588 |
-| Published | 1961 (2nd printing of 1957) | not yet established from the page |
+| Published | 1961 (2nd printing of 1957) | 1983 (title page, read as an image) |
 | Author (metadata) | Foreign Service Institute | Foreign Service Institute |
 | Encrypted / JavaScript | no / no | no / no |
-| Rights position | **recorded below** | **NOT CHECKED** |
+| Rights position | **recorded below, the fuller of the two** | **recorded below, thinner, two gaps open** |
 
-**The decision is open and this task does not close it.** On the project's own stated
-criteria the FAST is the better candidate — `plan.md` §9 chose FAST over Headstart for
-Italian on situational content and measured OCR quality, and a 1980s FAST is a closer
-match to what this app runs than a 1957 pattern-drill course. But **a course may not be
-chosen before its rights are settled**, that is the whole point of this task, and the
-FAST's rights have not been checked. Choosing it means redoing Step 2 against a 588-page
-volume with the same care the section below gave Basic.
+### The decision: FAST, and why
 
-What has been established about the FAST: it is what it claims to be (content-type
-`application/pdf`, magic bytes `%PDF-1.6`, 21,136,441 bytes on disk matching
-`content-length`, `pdfinfo` naming the Foreign Service Institute as Author, not
-encrypted, no JavaScript) and its digest is recorded above. Nothing else. No copyright
-search, no page images, no preface read.
+**Take the FAST, on content fit.** The rights comparison is a trade rather than a win,
+and an earlier draft of this section called it "clearly better", which it is not.
+
+**Content fit — this is the clear part.** Its table of contents is organised by CYCLE
+around situations: "Getting started in country", "At the Hotel" (addressing the bellhop,
+placing an outside call), "At the Restaurant" (ordering a meal and tipping), "Changing
+money". That is the shape Italian FAST gave this app and the shape the lesson tables are
+built for. Basic is *guided imitation* and pattern drills designed for six hours of
+daily class under a supervising linguist — convertible, but further from what a robot in
+a house can run.
+
+**Rights — a trade, stated in both directions.** All quotations below are from the text
+layer, reconstructed: the layer renders "Romance **Ianguages**", "**Ma.ny nembers** of
+FSI' s staff", "Language **Iaboretory**", and this log corrects them here rather than
+printing them clean and calling them quotations.
+
+*Better than Basic:* the FAST places **one** named title-page author inside FSI by job
+title — Vicente Arbeláez, "Spanish Section Acting Head in the Department of Romance
+Languages at the Foreign Service Institute (FSI)". Basic states no individual's
+employment at all. Stephen Zappala is placed at FSI twice over: "Chairman of the
+Department of Romance Languages", and by name in the preface's explicit roster of
+"Other members of the FSI Spanish staff".
+
+*Worse than Basic, and it is the same kind of question:* three of the four title-page
+authors — Lily Bean, C. Cleland Harris, Marisa Kenney-López — are covered only by the
+blanket "Many members of FSI's staff contributed to this effort", which is the same
+blanket-to-individual inference the Basic section below refuses to make for its three
+linguists. And the title page names **Leonor Paine** as a Principal Consultant; the
+preface gives her the title "principal consultant" and the role "field testing both the
+original and the revised versions", and **does not include her in the FSI-staff roster
+it writes out by name**. An earlier draft of this section said the preface "places both
+inside FSI"; the page places Zappala inside it and leaves Paine out of the one list that
+would have settled it. Field testing is not authorship, which bounds the exposure — but
+the question is open and belongs beside Basic's.
+
+**What was checked on the FAST:**
+
+- **Integrity, before parsing**: content-type `application/pdf`, magic bytes `%PDF-1.6`,
+  21,136,441 bytes on disk matching `content-length`, `pdfinfo` Author "Foreign Service
+  Institute", Title "FSI Spanish Familiarization and Short-Term Training", 588 pages,
+  not encrypted, no JavaScript. SHA-256 `cd603ff9aa799acce2296c1bff1a0e36bc0816750cbad4cd7f5236881e8fd050`.
+- **Notice search, both tiers**: the method's six literals return **zero** hits, and the
+  damage-tolerant matcher returns **zero** for `copyright` (`reserved` twice, `licens`
+  and `contract` in ordinary course content). **Do not read that as a better result than
+  Basic's.** Basic's two hits were the ordinary word "reproduce", so the difference
+  carries no rights signal. More importantly the instrument is *weaker* here, measured:
+  the FAST's text layer is **49.3% crude / 47.9% refined** tilde damage against Basic's
+  38.9% / 35.6% — about a quarter worse. And its damage modes include inserted spaces
+  and inserted punctuation inside words ("Ma.ny nembers of FSI' s staff"), which is
+  exactly what this log records the matcher as missing. The confusion set behind that
+  matcher was calibrated on Basic's scan and was never re-derived for this one.
+- **The title page read as an image**: SPANISH / Familiarization and Short-Term Training
+  / the four named authors / Principal Consultants / the FSI seal / FOREIGN SERVICE
+  INSTITUTE / U.S. DEPARTMENT OF STATE / 1983. No notice.
+
+**What was NOT checked on the FAST, and it is less than Basic got:**
+
+- **Only the title page was read as an image.** 587 of 588 pages were not, and unlike
+  Basic no verso or final leaf was examined — the final leaf is a map of Spanish-speaking
+  countries, from the text layer, so the conventional back-page notice slot is not the
+  same here, but it was not looked at.
+- **The preface authorship passage was read from the TEXT LAYER, not the page image.**
+  Given what this log records about text layers, that is corroboration and not the
+  standard the Basic section was eventually held to.
+- The same open question in its milder form: "Principal Consultants" is a word that
+  invites the contractor question, and the preface answers it by placement rather than
+  by stating employment.
+
+**So: the selection is settled on FAST and the rights work on it is started, not
+finished.** W35 must close the two gaps above — verso and final leaf as images, and the
+authorship passage re-quoted from the page — before it screens a single unit. That is a
+smaller job than it sounds and it is named here so it cannot be skipped.
 
 The alternatives the method excludes by decision remain excluded: the three Headstarts.
 Programmatic and Secretarias were not examined.
@@ -134,7 +200,7 @@ say which is which.
   position quotes them and a quotation belongs to the page rather than to the OCR of it.
   Nine pages were *rendered* — the printed cover, the title page, its verso, five
   front-matter pages and the final leaf — and **five were read**: title page, verso,
-  preface 0.1, preface 0.2, final leaf. **5 read of 700; see "Not checked".**
+  preface 0.1, preface 0.2, final leaf. **6 read of 700 (page 11 as well, see below); see "Not checked".**
 - **The title page reads**: Great Seal of the United States, "FOREIGN SERVICE
   INSTITUTE", "WASHINGTON, D.C.", "1961", "DEPARTMENT OF STATE", with Robert P.
   Stockwell, J. Donald Bowen and Ismael Silva-Fuenzalida named above it.
@@ -202,19 +268,22 @@ say which is which.
   accompanying tape recordings, which are explicitly *not* available from the GPO or FSI.
   That is a third party attached to the **audio**, which this project is not ingesting.
   No tape is used here, and none should be without settling that separately.
-- **695 of the 700 pages were never read as images** (nine rendered, five read).
+- **694 of the 700 pages were never read as images** (ten rendered, six read).
 - **Whether an acknowledgements section exists was not established.** Pages 1-8 of the
   front matter were rendered and none is one; the contributor credits that would sit in
-  such a section are in the preface, quoted above. But the front matter runs past page 8
-  — 9 and 10 continue the Introduction, 11 is blank, 12 is the Table of Contents — and
-  none of those was read. The text layer returns zero for `acknowledg`, which by this
+  such a section are in the preface, quoted above. But the front matter runs past page 8:
+  9 and 10 continue the Introduction and 12 is the Table of Contents, all three
+  identified from the text layer's running heads rather than read. Page 11 yields zero
+  characters of text layer, which by this log's own argument is not evidence the page is
+  empty — so it was rendered and looked at, and it is genuinely blank. The text layer returns zero for `acknowledg`, which by this
   log's own argument is corroboration and not evidence. An earlier draft stated the
   absence as a checked fact; it is a probable absence over an unexamined range. A copyright notice set as an
   image — on a scanned insert, a stamped library leaf, a plate — would be invisible to
-  every search run here, and the five pages read were the title page, its verso, the two
-  preface pages the rights position quotes, and the final leaf. Only three of those five
-  were examined *for a notice* — the conventional locations. The unconventional ones are
-  not covered at all.
+  every search run here, and the six pages read were the title page, its verso, the two
+  preface pages the rights position quotes, the final leaf and page 11. Four of those six
+  were examined *for a notice* — the three conventional locations plus page 11, rendered
+  precisely because a blank text layer is not evidence of a blank page. The
+  unconventional locations are not covered at all.
 - **The text layer is materially damaged and no search run here is reliable against it.**
   Measured, not estimated: the confusion-modelling search survives every single-character
   deletion but still misses an inserted space, a bare `(c)`, and 229 of 315 arbitrary
@@ -233,9 +302,20 @@ say which is which.
 
 ---
 
-## What the scan will cost to read, measured
+## What each scan will cost to read, measured
 
-Recorded here because it is a property of the source and it changes the budget for W36.
+Both courses' text layers were measured with the same command. **The chosen course is
+the more damaged one**, which is the opposite of what the selection might suggest and is
+why this section names them rather than saying "the source".
+
+| | accented survived | bare `~` | crude | refined |
+|---|---|---|---|---|
+| Basic (700 pp) | 14,743 | 9,389 | 38.9% | 35.6% |
+| **FAST (588 pp)** | 6,881 | 6,704 | **49.3%** | **47.9%** |
+
+"Refined" excludes tildes with no adjacent letter, which cannot be a stripped accent.
+The section below was written about Basic and its argument applies with more force to
+the FAST.
 
 **The accent damage is worse than Italian's, and it lands somewhere worse.** Counted
 over the whole 700-page text layer: **14,743 accented characters survived and 9,389 bare
@@ -268,9 +348,11 @@ before starting — that option was not tried here.
 
 ## What was decided about units
 
-Nothing yet. W35 screens the volume. The text layer suggests on the order of 15 units
-(the title page says "UNITS 1-15"), which is the same order of magnitude as Italian
-FAST's 18, and the method's expectation is that roughly a third survive curation.
+Nothing yet — W35 screens the volume. Scale, for planning only: the **FAST** is
+organised into **Cycles** rather than units, and its contents run to 38 of them. (Basic,
+not chosen, says "UNITS 1-15" on its title page.) The method's expectation is that
+roughly a third survive curation, so budget for the screening being the larger job here
+than it was for Italian's 18.
 
 ## Conventions applied to every unit
 
@@ -293,11 +375,13 @@ offered the six title-and-objective placeholders. W38 closes this section.
 
 Two things, in this order.
 
-**The three named linguists.** The bullet under "Not checked" about whether Stockwell,
-Bowen and Silva-Fuenzalida were FSI employees or outside contractors is the one question
-this log cannot answer from the document, and it is precisely the exception the method
-exists to catch. Everything else in the rights section is a fact off a page; that one is
-open.
+**Leonor Paine, on the chosen course.** The FAST's title page names her a Principal
+Consultant; its preface gives her a title and a role and leaves her out of the
+FSI-staff roster it writes by name. That is the open contractor question on the course
+actually selected, and an earlier draft of this log closed it by inference. Beside it,
+three of the four title-page authors are covered only by a blanket "many members of
+FSI's staff". **Basic's three linguists** (Stockwell, Bowen, Silva-Fuenzalida) are the
+same question on the course not chosen, and that bullet stands as recorded.
 
 **How far the notice search actually reaches.** The headline is not "no notice exists"
 but "no notice was found by a search designed to tolerate a damaged OCR layer, plus
