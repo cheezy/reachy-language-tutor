@@ -248,7 +248,9 @@ Familiarization And Short-Term Training, so the filename is the course name spel
 between them; that decision belongs to W42 and should be recorded there.
 
 This is a listing of a mutable third-party bucket on one day. Re-run the command rather
-than trusting the table.### Licensing - free, but not uniformly, and it must be checked per course
+than trusting the table.
+
+### Licensing - free, but not uniformly, and it must be checked per course
 
 FSI and DLI materials are works of the US federal government and so carry no copyright in
 the United States (17 U.S.C. 105). The site states plainly: "These courses are in the

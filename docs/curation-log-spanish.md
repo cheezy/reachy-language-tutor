@@ -62,6 +62,8 @@ Both are now corrected, and the enumeration there parses both halves of the resp
 | Bytes | 19,066,937 | 21,136,441 |
 | SHA-256 | `4838a312…983e18e9` | `cd603ff9…1e8fd050` |
 | Pages | 700 | 588 |
+| Retrieval URL | `…/languages/Spanish/Basic/Volume%201/Fsi-SpanishBasicCourse-Volume1-StudentText.pdf` | `…/languages/Spanish/Fsi-SpanishFamiliarizationAndShort-termTraining.pdf` |
+| Fetched | 2026-09-13 | 2026-09-13 |
 | Published | 1961 (2nd printing of 1957) | 1983 (title page, read as an image) |
 | Author (metadata) | Foreign Service Institute | Foreign Service Institute |
 | Encrypted / JavaScript | no / no | no / no |
@@ -117,10 +119,16 @@ the question is open and belongs beside Basic's.
 
 **What was checked on the FAST:**
 
-- **Integrity, before parsing**: content-type `application/pdf`, magic bytes `%PDF-1.6`,
-  21,136,441 bytes on disk matching `content-length`, `pdfinfo` Author "Foreign Service
-  Institute", Title "FSI Spanish Familiarization and Short-Term Training", 588 pages,
-  not encrypted, no JavaScript. SHA-256 `cd603ff9aa799acce2296c1bff1a0e36bc0816750cbad4cd7f5236881e8fd050`.
+- **Integrity, and the ordering is the point as much as the result.** A `HEAD` was issued
+  against the CDN first and returned `content-type: application/pdf` and
+  `content-length: 21136441`; the file was then downloaded and came to 21,136,441 bytes
+  on disk, matching exactly; magic bytes `%PDF-1.6` were read from the first eight bytes;
+  `pdfinfo` reported Author "Foreign Service Institute", Title "FSI Spanish
+  Familiarization and Short-Term Training", 588 pages, not encrypted, no JavaScript.
+  **All of that ran before the first `pdftotext`**, which is the order the method
+  prescribes and the reason the check is worth anything. SHA-256
+  `cd603ff9aa799acce2296c1bff1a0e36bc0816750cbad4cd7f5236881e8fd050`. Only `pdftotext`,
+  `pdfinfo` and `pdftoppm` were ever run against it.
 - **Notice search, both tiers**: the method's six literals return **zero** hits, and the
   damage-tolerant matcher returns **zero** for `copyright` (`reserved` twice, `licens`
   and `contract` in ordinary course content). **Do not read that as a better result than
@@ -169,7 +177,11 @@ than they were in FAST, and the register is thirty years older. W35 will find ou
 
 ---
 
-## Rights: what was actually checked
+## Rights: what was actually checked — Basic (evaluated, not selected)
+
+The chosen course's rights work is in "The decision: FAST, and why" above. This section
+is the fuller of the two records and is kept because Basic was evaluated first; it is
+superseded as a selection, not withdrawn as a record.
 
 **Read this section knowing what the instrument is.** The evidence below is an
 exact-string search over an OCR text layer that this same log measures as badly damaged
@@ -243,8 +255,10 @@ say which is which.
   Course was first printed in 1957. The Foreign Service Institute School of Languages
   would have preferred to revise the text for this second printing, but the requirements
   of day to day training have forced a postponement of the task." So it announces itself
-  as an *unrevised reprint of the original* — the opposite of the repackaged edition
-  pitfall 1 warns about, which is a derivative work carrying its own copyright. No
+  as an *unrevised reprint of the original* rather than the repackaged edition pitfall 1
+  warns against. Whether any such edition would carry rights of its own is a legal
+  question this log does not answer; what is recorded here is only that this scan
+  presents itself as the original. No
   publisher, press or company name appears other than FSI and the GPO.
 
   **The text layer of that same sentence is why the searches here were widened.** It
