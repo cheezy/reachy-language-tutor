@@ -376,164 +376,182 @@ before starting — that option was not tried here.
 
 ## Screening the volume (W35)
 
-**Course screened: the FAST**, which is the selected one. Basic was not screened; if the
-selection is ever revisited, its screening is unstarted work.
+**Course screened: the FAST**, the one W34 selected. Basic was not screened; if the
+selection is ever revisited that is unstarted work.
 
 ### The page offset
 
-**PDF page = printed page + 13.** Verified at three points rather than one: PDF 14 is
-printed 1 (Cycle 1), PDF 44 is printed 31 (Cycle 4), PDF 320 is printed 307 (Cycle 22).
-Every printed page cited anywhere in this log can be found that way.
+**PDF page = printed page + 13.** Verified at three points: PDF 14 is printed 1
+(Cycle 1), PDF 44 is printed 31 (Cycle 4), PDF 320 is printed 307 (Cycle 22). Every
+printed page cited in this log can be found that way.
 
-### The vocabulary screened for, in both languages
+### The screen, published so the counts reproduce
 
-Run over every Cycle's page range, in Spanish and English together, because the book is
-bilingual on facing columns and an English-only screen reads half of it:
+The counts in the table below depend entirely on the exact patterns, so here they are
+verbatim rather than described. Run case-insensitively over each Cycle's printed page
+range, against `pdftotext -layout` output:
 
-| Family | Terms |
-|---|---|
-| military | `milit*`, `ejército`, `cuartel`, `soldado`, `almirante`, `coronel`, `sargento`, `general`, `army`, `navy`, `barracks`, `admiral`, `colonel`, `sergeant` |
-| embassy | `embajad*`, `consulad*`, `diplomát*`, `embassy`, `consulate`, `diplomat*` |
-| uniformed | `policía`, `comisar*`, `carabiner*`, `guardia civil`, `police`, `policeman`, `officer` |
-| border | `aduan*`, `frontera`, `pasaporte`, `migración`, `customs`, `border`, `passport`, `immigration` |
+```
+military   milit\w*|ej[eé]rcito\w*|cuartel\w*|soldado\w*|almirante\w*|coronel\w*|
+           sargento\w*|\barmy\b|\bnavy\b|barracks|admiral\w*|colonel\w*|sergeant\w*
+embassy    embajad\w*|consulad\w*|diplom[aá]t\w*|embassy|embassies|consulate\w*|diplomat\w*
+uniformed  polic[ií]\w*|comisar\w*|carabiner\w*|guardia civil|\bpolice\w*
+border     aduan\w*|frontera\w*|pasaporte\w*|migraci[oó]n|inmigraci[oó]n|customs|
+           border\w*|passport\w*|immigration
+```
 
-**Two of those terms generate false positives and both were caught by reading the hits
-rather than counting them.** `customs` matched Cycle 14's *"local customs"* meaning
-traditions, which is what moved that Cycle onto the shortlist; `general` and `officer`
-match ordinary prose. A count is a ranking, never a verdict.
+Spanish and English together, because the book is bilingual on facing columns and an
+English-only screen reads half of it.
+
+**Three decisions inside those patterns, each learned by getting it wrong first:**
+
+- **Stems, not whole words.** An earlier run used `pasaporte` and `migración`, which
+  miss `pasaportes` and the volume's unaccented `Inmigracion`. That undercounted
+  Cycle 36 by four and Cycle 3 by one.
+- **`general` and `officer` are NOT in the list**, though they name ranks. Both are
+  ordinary words here — "steaks are generally cooked less", "in general" — and every
+  hit either produced was a false positive. Including them made Cycle 5 look dirty.
+- **`customs` stays in, and it lies.** It matched Cycle 14's "local customs" meaning
+  traditions. That false positive is the reason Cycle 14 is on the shortlist, and it is
+  the clearest argument in this volume for reading every hit rather than counting it.
 
 ### What the screen found, and what reading found after it
 
-**9 of 38 Cycles screen clean** — 1, 2, 5, 10, 16, 21, 25, 32, 38 — and Cycle 14 joins
-them once its single hit is read. **The screen ranks; it does not clear**, and this
-volume proves it twice over:
+**Nine of 38 Cycles screen clean** — 1, 2, 5, 10, 16, 21, 25, 32, 38 — and Cycle 14
+joins them once its single hit is read. **The screen ranks; it does not clear**, and
+this volume demonstrates that in both directions:
 
-- **Cycle 32 screens zero on all four families and is dropped.** Its premise is *"in the
-  event you decide to hire a maid"*. Nothing in the vocabulary lists could ever have
-  caught that, and it is exactly the adult-diplomat-at-post premise the method says to
-  look for.
-- **Cycle 16 screens zero and is dropped** — it teaches placing operator-assisted
-  long-distance calls, a dated practicality of the same kind as the 1992 customs regime
-  the method cites from Italian.
+- **Cycle 32 screens zero on all four families and is dropped.** Its premise is "in the
+  event you decide to hire a maid". No vocabulary list could catch that.
+- **Cycle 16 screens zero and is dropped** — operator-assisted long-distance calls, a
+  dated practicality.
+- **Cycle 14 screens dirty and is shortlisted**, on a false positive.
+
+**Where the embassy actually lives in this book, and why so little survives.** It is
+not mainly in the dialogues. It is in the **substitution drill sets**: `¿El Embajador
+viajaba mucho?`, `El Embajador dio la cena`, `tenía visa diplomática`, `el Cónsul` as an
+alternate subject. A dialogue can have its situation replaced, which is what the method
+asks for — a drill whose substitution list is embassy staff cannot, without inventing
+replacement Spanish, which the method forbids. That is why 29 of 38 Cycles carry
+excluded material and why the yield here is a sixth rather than the expected third.
 
 ### The shortlist — six Cycles, each read
 
 Six, which is what Italian shipped, and the method's own line is that six good units
-beat nine patched ones. **Every one of these was read, not merely screened**; what was
-read is stated per unit so a reviewer can tell how deep the reading went.
+beat nine patched ones. **Every one was read, not merely screened**, and what was read
+is stated per unit so a reviewer can judge the depth:
 
 **Cycle 2 — Getting started in class** (printed 7–10)
-: Greeting exchanges — buenos días, ¿cómo está?, bien gracias — with the pairs already written out. The premise is a classroom and the partner is a teacher, which for once is an easy substitution rather than a hard one: the robot IS the conversation partner. Read: all four printed pages.
+: Greeting exchanges — buenos días, ¿cómo está?, bien gracias — already written out as pairs. The premise is a classroom and the partner a teacher, which is for once an easy substitution: the robot IS the conversation partner. **Read: all four printed pages.**
 
 **Cycle 5 — At the restaurant** (printed 55–68)
-: Ordering, steak doneness, attracting a waiter's attention, addressing staff as señor/señorita. One line ('Ask your teacher about this') is a teacher direction to drop, not translate. Read: the cultural notes and the ordering material across 55–68.
+: Ordering, steak doneness, attracting a waiter's attention, addressing staff as señor/señorita. One line — 'Ask your teacher about this' — is a teacher direction to drop rather than translate. **Read: the cultural notes and the ordering material across 55–68.**
 
 **Cycle 10 — Getting around inside** (printed 119–134)
-: Two clean dialogues finding an office in a building — ordinals, floors, doble a la derecha, ascensor/elevador. Neutral premise, core beginner grammar, and the closest thing in the volume to Italian's directions unit. Read: both dialogues in full.
+: Two dialogues finding an office in a building: ordinals, floors, 'doble a la derecha', ascensor/elevador. Neutral premise, core beginner grammar, and the closest thing in this volume to Italian's directions unit. **Read: both dialogues in full.**
 
 **Cycle 14 — The familiar form (tú)** (printed 175–196)
-: Six dialogues on switching from usted to tú, including a speaker asking to be corrected. Register is genuinely useful and culturally specific, and nothing in it dates. Read: the register discussion and dialogue 1.
+: Three Spanish dialogues plus vocabulary glosses. The first is two speakers agreeing to switch from usted to tú, with one asking to be corrected; **the second is explicitly 'Conversación entre un adulto y un niño'**, an adult-child exchange, which is unusually close to this app's actual situation. **Read: all three dialogues and the register discussion.**
 
 **Cycle 25 — Shopping at a local market** (printed 341–354)
-: Market shopping, artesanías, and regatear — bargaining — in both a short and a long version. Culturally rich, everyday, and the long version carries subjunctive practice. Read: both dialogue versions.
+: Market shopping, artesanías, and regatear — bargaining — in a short and a long version, the long one carrying subjunctive practice. Culturally rich and entirely everyday. **Read: both dialogue versions.**
 
 **Cycle 38 — Household repairs** (printed 525–540)
-: Eight dialogues about a blown fuse and calling an electrician. Everyday, neutral, and the subjunctive (fue necesario que llamáramos) is real grammar. Read: dialogue 1 and the premise.
+: Three Spanish dialogues (plus their English facing pages and vocabulary) about a blown fuse, an electrician, and a bathroom problem. Everyday, neutral, and 'fue necesario que llamáramos' is real subjunctive. **Read: all three dialogues.**
+
+**Reading depth, stated plainly.** All of the above is text-layer reading. No page image
+was read in this pass, and that is the right depth for judging a premise and the wrong
+depth for taking content — at 47.9% accent damage every line W36 ships needs its page.
+Step 4 of the method governs that and W36 owns it.
 
 ### Every Cycle accounted for
 
-All 38 appear below, in the shortlist or dropped with a reason. Hit counts are the
-bilingual screen above.
-
-| Cycle | Title | Printed pages | Screen hits | Outcome |
-|---|---|---|---|---|
-| 1 | Getting started — the alphabet | 1–6 | 0 | dropped |
-| 2 | Getting started in class | 7–10 | 0 | **SHORTLIST** |
-| 3 | Getting started in country (airport) | 11–30 | 43 | dropped |
-| 4 | Getting started in country — at the hotel | 31–54 | 6 | dropped |
-| 5 | Getting started in country — at the restaurant | 55–68 | 0 | **SHORTLIST** |
-| 6 | Getting started in country — giving instructions | 69–82 | 10 | dropped |
-| 7 | Telephone — managing a conversation | 83–90 | 3 | dropped |
-| 8 | Getting around outside — asking directions | 91–108 | 8 | dropped |
-| 9 | Telephone — taking a message | 109–118 | 6 | dropped |
-| 10 | Getting around inside | 119–134 | 0 | **SHORTLIST** |
-| 11 | Telephone — wrong numbers | 135–144 | 20 | dropped |
-| 12 | Getting around — public transportation | 145–164 | 1 | dropped |
-| 13 | Telephone — leaving a message | 165–174 | 5 | dropped |
-| 14 | Getting acquainted — the familiar form | 175–196 | 1 | **SHORTLIST** |
-| 15 | Meeting people | 197–222 | 12 | dropped |
-| 16 | Telephone — long distance call | 223–234 | 0 | dropped |
-| 17 | Getting acquainted — describing yourself and your family | 235–248 | 5 | dropped |
-| 18 | Telephone — calling the physician | 249–258 | 1 | dropped |
-| 19 | Getting acquainted — social courtesies | 259–274 | 13 | dropped |
-| 20 | Getting acquainted — small talk | 275–298 | 5 | dropped |
-| 21 | Telephone — reserving a hotel room | 299–306 | 0 | dropped |
-| 22 | At the office — greeting visitors | 307–314 | 40 | dropped |
-| 23 | Getting acquainted — local holidays | 315–326 | 1 | dropped |
-| 24 | Getting out — the outing | 327–340 | 2 | dropped |
-| 25 | Getting out — shopping at a local market | 341–354 | 0 | **SHORTLIST** |
-| 26 | Getting out — dining out | 355–368 | 4 | dropped |
-| 27 | Getting out — paying at a restaurant | 369–380 | 1 | dropped |
-| 28 | Getting out — sightseeing | 381–394 | 3 | dropped |
-| 29 | Getting out — sports | 395–408 | 1 | dropped |
-| 30 | Getting things — housing | 409–420 | 15 | dropped |
-| 31 | Getting things — where to go grocery shopping | 421–442 | 10 | dropped |
-| 32 | Getting things — how to pay a maid or deliveryman | 443–456 | 0 | dropped |
-| 33 | Getting things — at the gift shop | 457–470 | 5 | dropped |
-| 34 | Getting things — entertainment | 471–482 | 6 | dropped |
-| 35 | Getting things — at the bank | 483–494 | 16 | dropped |
-| 36 | At the office — directing the secretary | 495–510 | 12 | dropped |
-| 37 | Getting things — an emergency | 511–524 | 5 | dropped |
-| 38 | Getting things — household repairs | 525–540 | 0 | **SHORTLIST** |
+| Cycle | Title | Printed | mil | emb | unif | bord | Total | Outcome |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| 1 | Getting started — the alphabet | 1–6 | 0 | 0 | 0 | 0 | 0 | dropped |
+| 2 | Getting started in class | 7–10 | 0 | 0 | 0 | 0 | 0 | **SHORTLIST** |
+| 3 | Getting started in country (airport) | 11–30 | 0 | 29 | 0 | 13 | 42 | dropped |
+| 4 | In country — at the hotel | 31–54 | 0 | 2 | 0 | 4 | 6 | dropped |
+| 5 | In country — at the restaurant | 55–68 | 0 | 0 | 0 | 0 | 0 | **SHORTLIST** |
+| 6 | In country — giving instructions | 69–82 | 0 | 10 | 0 | 0 | 10 | dropped |
+| 7 | Telephone — managing a conversation | 83–90 | 0 | 3 | 0 | 0 | 3 | dropped |
+| 8 | Getting around outside — directions | 91–108 | 0 | 6 | 0 | 2 | 8 | dropped |
+| 9 | Telephone — taking a message | 109–118 | 0 | 6 | 0 | 0 | 6 | dropped |
+| 10 | Getting around inside | 119–134 | 0 | 0 | 0 | 0 | 0 | **SHORTLIST** |
+| 11 | Telephone — wrong numbers | 135–144 | 2 | 17 | 0 | 0 | 19 | dropped |
+| 12 | Getting around — public transportation | 145–164 | 1 | 0 | 0 | 0 | 1 | dropped |
+| 13 | Telephone — leaving a message | 165–174 | 0 | 5 | 0 | 0 | 5 | dropped |
+| 14 | Getting acquainted — the familiar form | 175–196 | 0 | 0 | 0 | 1 | 1 | **SHORTLIST** |
+| 15 | Meeting people | 197–222 | 0 | 11 | 0 | 0 | 11 | dropped |
+| 16 | Telephone — long distance call | 223–234 | 0 | 0 | 0 | 0 | 0 | dropped |
+| 17 | Describing yourself and your family | 235–248 | 0 | 5 | 0 | 0 | 5 | dropped |
+| 18 | Telephone — calling the physician | 249–258 | 0 | 1 | 0 | 0 | 1 | dropped |
+| 19 | Social courtesies | 259–274 | 0 | 13 | 0 | 0 | 13 | dropped |
+| 20 | Social courtesies — small talk | 275–298 | 2 | 3 | 0 | 0 | 5 | dropped |
+| 21 | Telephone — reserving a hotel room | 299–306 | 0 | 0 | 0 | 0 | 0 | dropped |
+| 22 | At the office — greeting visitors | 307–314 | 4 | 34 | 2 | 0 | 40 | dropped |
+| 23 | Local holidays | 315–326 | 0 | 1 | 0 | 0 | 1 | dropped |
+| 24 | Getting out — the outing | 327–340 | 0 | 2 | 0 | 0 | 2 | dropped |
+| 25 | Getting out — shopping at a local market | 341–354 | 0 | 0 | 0 | 0 | 0 | **SHORTLIST** |
+| 26 | Getting out — dining out | 355–368 | 0 | 4 | 0 | 0 | 4 | dropped |
+| 27 | Getting out — paying at a restaurant | 369–380 | 0 | 0 | 0 | 1 | 1 | dropped |
+| 28 | Getting out — sightseeing | 381–394 | 0 | 3 | 0 | 0 | 3 | dropped |
+| 29 | Getting out — sports | 395–408 | 0 | 0 | 0 | 1 | 1 | dropped |
+| 30 | Getting things — housing | 409–420 | 0 | 15 | 0 | 0 | 15 | dropped |
+| 31 | Getting things — grocery shopping | 421–442 | 0 | 10 | 0 | 0 | 10 | dropped |
+| 32 | Getting things — paying a maid or deliveryman | 443–456 | 0 | 0 | 0 | 0 | 0 | dropped |
+| 33 | Getting things — at the gift shop | 457–470 | 0 | 4 | 0 | 0 | 4 | dropped |
+| 34 | Getting things — entertainment | 471–482 | 0 | 6 | 0 | 0 | 6 | dropped |
+| 35 | Getting things — at the bank | 483–494 | 1 | 11 | 0 | 4 | 16 | dropped |
+| 36 | At the office — directing the secretary | 495–510 | 0 | 5 | 0 | 7 | 12 | dropped |
+| 37 | Getting things — an emergency | 511–524 | 0 | 0 | 5 | 0 | 5 | dropped |
+| 38 | Getting things — household repairs | 525–540 | 0 | 0 | 0 | 0 | 0 | **SHORTLIST** |
 
 **Why each dropped Cycle was dropped:**
 
-- **Cycle 1.** No dialogue at all — letter names and a procedure addressed to a human teacher. Drills could be salvaged, but the lesson shape here wants a dialogue.
-- **Cycle 3.** Airport arrival: 29 embassy and 13 border hits. Customs and immigration throughout. Excluded by decision.
-- **Cycle 4.** Hotel check-in with embassy and passport references. Excluded by decision; overlaps 21 anyway.
-- **Cycle 6.** 10 embassy hits — giving instructions at post.
-- **Cycle 7.** 3 embassy hits in the telephone frame.
-- **Cycle 8.** 6 embassy, 2 border — directions given relative to the embassy.
-- **Cycle 9.** 6 embassy hits.
-- **Cycle 11.** 3 military, 17 embassy — the densest telephone cycle.
-- **Cycle 12.** One hit, 'Escuela Militar' as a bus landmark. Recoverable by substituting the landmark, but the method excludes military by decision rather than by degree; held out rather than argued around.
-- **Cycle 13.** 5 embassy hits.
-- **Cycle 15.** 1 military, 11 embassy.
-- **Cycle 16.** Screens clean, and dropped on reading: the whole cycle teaches placing operator-assisted long-distance calls. A dated practicality, the same class as the method's 1992-customs-regime example.
-- **Cycle 17.** 5 embassy hits.
-- **Cycle 18.** Doctor recommended 'by friends at the Embassy'. One line, substitutable, but it is an embassy reference.
-- **Cycle 19.** 13 embassy hits.
-- **Cycle 20.** 2 military, 3 embassy.
-- **Cycle 21.** Screens clean and reads clean — a well-formed hotel-reservation phone dialogue. Held as the first reserve rather than shortlisted: booking a hotel room is an adult-travel premise, and six units already cover more useful ground.
-- **Cycle 22.** 40 hits. Read in context: the Ambassador's secretary, appointments with the Ambassador, the Club Militar. The clearest exclusion in the volume.
-- **Cycle 23.** '¿Hay muchos bolivianos en la Embajada?' in a drill.
+- **Cycle 1.** No dialogue at all — letter names and a procedure written to a human teacher. Drillable, but this lesson shape needs a dialogue.
+- **Cycle 3.** Airport arrival, and the densest border cycle: customs and immigration throughout, plus 29 embassy references. Excluded by decision.
+- **Cycle 4.** Hotel check-in carrying embassy and passport references; Cycle 21 covers hotels more cleanly anyway.
+- **Cycle 6.** Giving instructions at post — ten embassy references in the frame.
+- **Cycle 7.** The telephone frame is an embassy switchboard.
+- **Cycle 8.** Directions given relative to the embassy, plus two border references.
+- **Cycle 9.** The dialogue IS an embassy switchboard: '¡Aló! Embajada Americana.' / 'Con la Sección Consular.' There is no unit here without it.
+- **Cycle 11.** Wrong numbers at the embassy, with two military references — the densest telephone cycle.
+- **Cycle 12.** One hit, 'Escuela Militar' as a bus landmark. Substitutable, but the method excludes military by decision rather than by degree.
+- **Cycle 13.** The message to be left is for 'Mr. Mike Jones of the Political Section of the U.S. Embassy', and the fill-in exercise reproduces that address line by line.
+- **Cycle 15.** Introducing the Ambassador's new secretary to the Ambassador; 'one of the national Embassy employees' is in the scene-setting.
+- **Cycle 16.** Screens clean and dropped on reading: the whole cycle teaches placing operator-assisted long-distance calls, a dated practicality of the same kind as the 1992 customs regime the method cites from Italian.
+- **Cycle 17.** Lunch 'in the Embassy cafeteria', and the substitution drills conjugate around 'El Embajador decide'.
+- **Cycle 18.** The doctor is 'recommended to you by friends at the Embassy'.
+- **Cycle 19.** 'Your friend from the Embassy' sets the scene, and the drills run '¿Cuándo quiere ir a la Embajada?' repeatedly.
+- **Cycle 20.** The substitution sets offer 'el Embajador' and 'el Cónsul' as drill subjects, and an appointment is made 'en el club militar'.
+- **Cycle 21.** Screens clean and reads clean — a well-formed hotel-reservation phone dialogue (room, nights, price, name). Held as the first reserve rather than shortlisted: booking a hotel is an adult-travel premise, and the six above cover more useful ground for a beginner at home. If one of the six fails in curation, take this.
+- **Cycle 22.** Forty hits, and reading confirms them: the Ambassador's secretary, appointments with the Ambassador, the Club Militar. The clearest exclusion in the volume.
+- **Cycle 23.** '¿Hay muchos bolivianos en la Embajada?' is a drill item.
 - **Cycle 24.** 'trabajar en la Embajada / work at the Embassy' — the exact case the method names from Italian ('Sono dell'Ambasciata').
-- **Cycle 26.** 4 embassy hits; overlaps 5 and 27 anyway.
-- **Cycle 27.** 'mi pasaporte' as a drill object. Substitutable, but it is a passport reference and 5 covers restaurants.
-- **Cycle 28.** 3 embassy hits.
+- **Cycle 26.** Four embassy references, and Cycles 5 and 27 cover restaurants.
+- **Cycle 27.** 'mi pasaporte' as the object of a subjunctive drill.
+- **Cycle 28.** 'I would like to get a house near the Embassy' is a drill line, and 'El Embajador' is a substitution subject.
 - **Cycle 29.** 'presente el pasaporte' in a subjunctive drill.
-- **Cycle 30.** 15 embassy hits — housing at post.
-- **Cycle 31.** 10 embassy hits.
-- **Cycle 32.** Screens ZERO on all four families and is dropped on reading. The premise is 'in the event you decide to hire a maid'. This is the unit that proves the screen ranks and does not clear — hiring domestic staff is the adult-diplomat-at-post premise, and not something to teach a child.
-- **Cycle 33.** 1 military, 4 embassy.
-- **Cycle 34.** 6 embassy hits.
-- **Cycle 35.** 1 military, 11 embassy, 4 border — the bank cycle leans on official identity documents.
-- **Cycle 36.** 'Directing the secretary' at the office: 5 embassy, 7 border.
-- **Cycle 37.** Police attending a traffic accident, with an ambulance. Uniformed officials, excluded by decision — and a distressing scene for a child's lesson independently of that.
+- **Cycle 30.** Housing at post: fifteen embassy references, including finding a house relative to it.
+- **Cycle 31.** The imperfect-tense drills are built on embassy life — '¿El Embajador viajaba mucho?', '¿ustedes vivían cerca de la Embajada?', '¿Usted era diplomático/a en Venezuela?'
+- **Cycle 32.** Screens ZERO on all four families and is dropped on reading. Its premise is 'in the event you decide to hire a maid'. This is the unit that proves the screen ranks and does not clear.
+- **Cycle 33.** The preterite drills are built entirely on 'El Embajador dio la cena' and its variants.
+- **Cycle 34.** 'la fiesta de la Embajada' in a reported-speech drill, and 'tenía visa diplomática' as a drill line.
+- **Cycle 35.** The bank cycle leans on official identity documents: eleven embassy references, four border, one military.
+- **Cycle 36.** 'Directing the secretary' — the documents being collected are birth certificates and passports, seven references, with five embassy alongside.
+- **Cycle 37.** Police attending a traffic accident with an ambulance. Uniformed officials, excluded by decision — and a distressing scene for a child's lesson independently of that.
 
 ### What this screening did NOT do
 
-- **The two FAST rights gaps named in W34 are still open** — its verso and final leaf
-  have not been read as images, and the authorship passage is still quoted from the text
+- **The two FAST rights gaps from W34 are still open** — its verso and final leaf have
+  not been read as images, and the authorship passage is still quoted from the text
   layer. W36 must close them before shipping a line.
-- **Nothing was read on a page image in this pass.** All reading was of the text layer,
-  which is the right depth for *judging a premise* and the wrong depth for *taking
-  content*. Step 4 of the method governs the latter and W36 owns it — at 47.9% accent
-  damage, every shipped line needs its page.
-- **The dropped Cycles were judged on their screen hits read in context plus their
-  premise**, not read end to end. A Cycle dropped for an embassy reference might contain
-  convertible material around it; the method's answer is that six good units are enough,
-  and re-opening one is cheaper than patching.
+- **The dropped Cycles were judged on their hits read in context plus their premise**,
+  not read end to end. A Cycle dropped for an embassy drill may contain convertible
+  material around it; the method's answer is that six good units are enough, and
+  re-opening one later is cheaper than patching one now.
+- **Nothing was curated.** No line has been taken from this volume.
 
 ## What was decided about units
 
