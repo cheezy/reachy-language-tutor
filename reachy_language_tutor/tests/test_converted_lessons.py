@@ -28,25 +28,15 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from approved_units import APPROVED_UNITS, approval_refusal
 
 from reachy_language_tutor.learners import store
 from reachy_language_tutor.learners.models import DRILL_KINDS
 
 
-# The units a person read and approved for conversion, keyed by the COURSE they were
-# read in and then by the roman numeral that course itself uses. Six of eighteen in
-# Italian FAST Volume 1: the rest were set in an embassy, at a border, or at a currency
-# desk, or leant on an official in uniform, and the curation log says which and why.
-# Shipping a seventh means adding it here first.
-#
-# Keyed by course, not by numeral alone, because a numeral stopped identifying a unit
-# the moment the file could hold more than one course: every FSI volume has a Unit IV,
-# and a flat set would have let a second course's Unit IV inherit the approval a person
-# granted to Italian's. A course absent from this mapping has approved nothing, which is
-# the safe default and the one that needs no maintaining.
-APPROVED_UNITS = {
-    "FSI Italian FAST, Volume 1": frozenset({"IV", "VI", "IX", "XIII", "XV", "XVII"}),
-}
+# The control itself lives in approved_units.py, beside the function that applies it,
+# so that the list and the meaning of "approved" cannot drift apart -- see that module
+# for why it is keyed by course rather than by roman numeral alone.
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 CURATION_LOG = DOCS / "curation-log-italian-fast.md"
@@ -330,8 +320,20 @@ def test_every_converted_lesson_cites_a_unit_that_was_reviewed(instance: Path) -
     # Which course each lesson came from, taken from the file's own nesting rather than
     # from one hardcoded name. That is what makes this check say "the seeded provenance
     # names the course that OWNS this lesson" instead of "the catalog is still Italian".
+    # The WHOLE provenance each lesson declares in the file, not just its course. The
+    # unit is the second half of the approval key, so checking the course per lesson
+    # while taking the unit on trust would let a seeding fault cite an approved numeral
+    # for content that came from a unit nobody read -- and every check here would stay
+    # green. Pinned generically rather than per course, so it holds for course two.
     owner = {
-        str(lesson["id"]): course["name"] for course in store._converted_courses() for lesson in course["lessons"]
+        str(lesson["id"]): (
+            course["name"],
+            lesson["source"]["module"],
+            lesson["source"]["unit"],
+            lesson["source"]["page"],
+        )
+        for course in store._converted_courses()
+        for lesson in course["lessons"]
     }
 
     for lesson_id in _converted_ids():
@@ -339,11 +341,11 @@ def test_every_converted_lesson_cites_a_unit_that_was_reviewed(instance: Path) -
 
         assert source is not None
         assert source.origin == "converted_from_course"
-        assert source.course == owner[lesson_id], f"{lesson_id} is seeded under a course that does not own it"
-        assert source.course in APPROVED_UNITS, f"{lesson_id} comes from {source.course}, a course nobody approved"
-        assert source.unit in APPROVED_UNITS[source.course], (
-            f"{lesson_id} cites unit {source.unit} of {source.course}, which nobody approved"
+        assert (source.course, source.module, source.unit, source.page) == owner[lesson_id], (
+            f"{lesson_id} is seeded under provenance its own course block does not declare"
         )
+        refusal = approval_refusal(source.course, source.unit)
+        assert refusal is None, f"{lesson_id} may not ship: {refusal}"
         assert source.module and source.page and source.page > 0
 
 
@@ -370,9 +372,21 @@ def test_the_provenance_is_enough_to_find_the_page_again(instance: Path) -> None
     for lesson_id in _converted_ids():
         source = store.get_lesson_content(lesson_id, instance_path=instance).source
 
-        assert "FSI" in source.course and "Italian" in source.course
-        assert source.module == "Volume 1"
-        assert 1 <= source.page <= 456, "a page inside the volume this course actually has"
+        # Specific enough to find the page again, asked of EVERY course: a named
+        # course, a named module within it, and a page number that could be turned to.
+        # The Italian-only facts are checked once below rather than asserted of every
+        # course, because the cheapest way to make a hardcoded course name pass for a
+        # second course is to delete it -- which is the widening this file exists to
+        # prevent.
+        assert source.course and source.course.strip(), "provenance names the course"
+        assert source.module and source.module.strip(), "and the module within it"
+        assert source.page >= 1, "and a printed page somebody could turn to"
+
+    italian = store.get_lesson_content("it-fast-01-what-time-is-it", instance_path=instance).source
+    assert italian is not None
+    assert "FSI" in italian.course and "Italian" in italian.course
+    assert italian.module == "Volume 1"
+    assert 1 <= italian.page <= 456, "a page inside the volume this course actually has"
 
 
 def test_nothing_military_or_official_survived_the_curation(instance: Path) -> None:

@@ -24,8 +24,10 @@ reader above it would step over the code under test.
 
 import json
 from pathlib import Path
+from collections.abc import Mapping
 
 import pytest
+from approved_units import APPROVED_UNITS, approval_refusal
 
 from reachy_language_tutor.learners import store
 
@@ -524,3 +526,130 @@ def test_an_integer_too_wide_for_sqlite_is_reported_rather_than_raised(
     assert result.error is not None
     assert _rows(tmp_path, "SELECT id FROM lessons WHERE id = ?", ("de-synth-01",)) == []
     assert _rows(tmp_path, "SELECT value FROM schema_meta WHERE key = ?", (store.SEED_VERSION_KEY,)) == []
+
+
+# ------------------------------------- the approved-unit control, across courses
+
+
+def test_a_unit_approved_for_one_course_does_not_admit_the_same_numeral_in_another(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The control that decides what a child hears, run against a SECOND course.
+
+    Every FSI volume has a Unit IV. While the file held one course a bare numeral
+    identified a unit; with two it does not, and a flat allow-list would have let a
+    course nobody reviewed ship on the strength of Italian's approval.
+
+    This calls approval_refusal -- the same function the shipped catalog's forward check
+    calls -- rather than restating its logic here. That distinction is the whole value
+    of the test: an inline `course not in APPROVED_UNITS` would catch a flattening of
+    the MAPPING but not a flattening at the LOOKUP SITE, where someone tests the numeral
+    against the union of every course's units and a second course's Unit IV is admitted
+    while the mapping still looks perfectly correct.
+    """
+    payload = _file(
+        _course("FSI Spanish FAST, Volume 1", "es", [_lesson("es-synth-01", FREE_POSITION, unit="IV")]),
+    )
+    assert _seed_from(monkeypatch, tmp_path, payload).ready is True
+
+    source = store.get_lesson_content("es-synth-01", instance_path=tmp_path).source
+    assert source is not None
+    assert source.unit == "IV", "the numeral Italian had approved"
+
+    refusal = approval_refusal(source.course, source.unit)
+    assert refusal is not None, "a course nobody reviewed must approve nothing"
+    assert "nobody approved units for" in refusal
+
+    # And the numeral really is approved elsewhere, so a check that lost the course
+    # half of the key -- in the mapping or at the call site -- would have admitted it.
+    assert approval_refusal("FSI Italian FAST, Volume 1", "IV") is None
+
+
+def test_a_course_on_the_list_still_cannot_ship_a_unit_that_course_never_approved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The other half of the two-part key: a known course, an unreviewed unit.
+
+    Without this, a check that degraded to "is this course known?" would pass every
+    test above while admitting any unit at all from an approved course.
+    """
+    refusal = approval_refusal("FSI Italian FAST, Volume 1", "XXIII")
+
+    assert refusal is not None
+    assert "not on the approved list for that course" in refusal
+
+
+def test_every_approved_course_maps_to_units_rather_than_to_a_bare_membership_test() -> None:
+    """The mapping keeps its shape, so the two-part key cannot quietly collapse back.
+
+    A future edit that flattened APPROVED_UNITS to a set of numerals again would still
+    satisfy a lookup for the one course shipped today, and every existing test would go
+    on passing. This pins the shape itself rather than one lookup through it.
+    """
+    assert isinstance(APPROVED_UNITS, Mapping), "keyed by course, not a flat set of numerals"
+    assert APPROVED_UNITS, "an empty mapping would approve nothing and silently ship nothing"
+
+    for course_name, units in APPROVED_UNITS.items():
+        assert isinstance(course_name, str) and course_name.strip(), "a course is named by its own name"
+        assert isinstance(units, frozenset), f"{course_name}: units are a frozenset, so the list cannot be mutated"
+        assert units, f"{course_name}: a course listed with no approved units would be a permission nobody uses"
+
+
+def test_two_courses_may_not_share_a_name_because_approvals_are_keyed_by_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A name has to identify one course, or an approval stops meaning anything.
+
+    The approved-unit control is keyed by course NAME. A block copied from another and
+    left with the template's name therefore inherits every unit approval a person
+    granted the original -- so unreviewed material reaches a learner under a name
+    somebody vouched for, and both directions of the control pass.
+
+    Measured on the real shipped file before this guard existed: a clone of the Italian
+    course with language_code 'es' and a lesson citing unit IV seeded cleanly, and
+    approval_refusal returned None for it. That is the reason this lives in the loader
+    beside the rest of the file's allow-list rather than in a test.
+    """
+    payload = _file(
+        _course("FSI Italian FAST, Volume 1", "it", [_lesson("it-synth-01", FREE_POSITION, unit="IV")]),
+        _course("FSI Italian FAST, Volume 1", "es", [_lesson("es-synth-01", FREE_POSITION, unit="IV")]),
+    )
+
+    result = _seed_from(monkeypatch, tmp_path, payload)
+
+    assert result.ready is False
+    assert result.error is not None and "two courses share a name" in result.error
+    assert _rows(tmp_path, "SELECT id FROM lessons WHERE id LIKE '%-synth-01'") == []
+
+
+def test_two_lessons_may_not_share_an_id_across_courses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A duplicate id overwrites in silence, because the seeder upserts on it.
+
+    Unlike a position collision, which raises IntegrityError and is therefore loud, two
+    lessons with one id simply resolve to whichever was written last -- the other
+    disappears from the catalog with nothing reported anywhere.
+    """
+    payload = _file(
+        _course("Course A", "de", [_lesson("shared-id", FREE_POSITION)]),
+        _course("Course B", "pt", [_lesson("shared-id", FREE_POSITION)]),
+    )
+
+    result = _seed_from(monkeypatch, tmp_path, payload)
+
+    assert result.ready is False
+    assert result.error is not None and "two lessons share an id" in result.error
+    assert _rows(tmp_path, "SELECT id FROM lessons WHERE id = ?", ("shared-id",)) == []
+
+
+def test_the_approved_unit_mapping_cannot_be_widened_by_the_module_that_imports_it() -> None:
+    """Keying by course made the outer container mutable for the first time.
+
+    APPROVED_UNITS was a frozenset -- immutable at its only level. A dict keyed by
+    course is immutable only in its values, and this module holds the very same object
+    test_converted_lessons.py checks the shipped catalog against, so one item assignment
+    here would widen the guarantee there while every shape assertion stayed green.
+    """
+    with pytest.raises(TypeError):
+        APPROVED_UNITS["FSI Spanish FAST, Volume 1"] = frozenset({"IV"})  # type: ignore[index]
+
+    assert approval_refusal("FSI Spanish FAST, Volume 1", "IV") is not None, "and it really is still refused"

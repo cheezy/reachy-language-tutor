@@ -250,9 +250,43 @@ $HOME/dev/reachy/reachy_mini_env/bin/ruff check reachy_language_tutor/src
 ```
 
 `tests/test_converted_lessons.py` carries the checks that are about content rather than
-plumbing: the accented lines by page, the approved-unit allow-list, the screen for
-excluded vocabulary, and that lessons nobody has converted still read back cleanly beside
-the converted ones. Point its `APPROVED_UNITS` at the units you actually converted.
+plumbing: the accented lines by page, the screen for excluded vocabulary, and that
+lessons nobody has converted still read back cleanly beside the converted ones.
+
+The approved-unit allow-list itself lives in `tests/approved_units.py`, beside the
+function that applies it, so the list and the meaning of "approved" cannot drift apart.
+
+**The two screens hold Italian and English terms only.** The excluded-vocabulary screen
+and the model-directed-phrasing screen run over every course that ships, but their word
+lists do not follow you into a new language -- `policía` does not contain `police` and
+`pasaporte` does not contain `passport`. Add your language'''s terms, or they will pass
+green having inspected nothing. Step 3 makes the same point about the human screen, and
+the human screen is the control; these are the backstop behind it.
+
+Add your course to `APPROVED_UNITS`, which is keyed **by course name** and then by unit:
+
+```python
+APPROVED_UNITS = {
+    "FSI Italian FAST, Volume 1": frozenset({"IV", "VI", "IX", "XIII", "XV", "XVII"}),
+    "<your course, exactly as its `name` reads in converted_lessons.json>": frozenset({...}),
+}
+```
+
+Keyed by course because a bare numeral stopped identifying a unit once the file could
+hold more than one: every FSI volume has a Unit IV, and a flat set of numerals would let
+your Unit IV ship on the strength of somebody having read Italian's. **A course absent
+from this mapping has approved nothing and ships nothing** — that is the safe default,
+and it is why adding the entry is a deliberate act somebody can be asked about.
+
+The name must match the course block character for character; a mismatch reads as a
+course nobody approved, which is the failure you want rather than a silent pass.
+
+And it must be the new course's **own** name, not the one you copied the block from.
+A course name is what its approvals are keyed by, so a block left carrying a template's
+name inherits every unit somebody approved for that template -- unreviewed material
+reaching a learner under a name another person vouched for. The loader refuses two
+courses sharing a name for exactly that reason, and refuses two lessons sharing an id
+because the seeder upserts on it and would otherwise drop one in silence.
 
 ## What this method does not give you
 

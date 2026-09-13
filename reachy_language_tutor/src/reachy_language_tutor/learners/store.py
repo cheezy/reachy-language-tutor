@@ -505,6 +505,24 @@ def _converted_courses() -> tuple[Any, ...]:
         for position, lesson in enumerate(course["lessons"]):
             _refuse_unless_lesson_shaped(lesson, index, position)
 
+    # A course's NAME is what its lessons are seeded under and what the approved-unit
+    # control is keyed by, so two blocks sharing a name is not a tidiness problem: a
+    # course copied from another and left with the template's name inherits every unit
+    # approval a person granted the original, and unreviewed material reaches a learner
+    # under a name somebody vouched for. Measured on the real file before this check
+    # existed: a clone of the Italian block with language_code 'es' seeded cleanly and
+    # passed both directions of that control.
+    names = [course["name"] for course in courses]
+    if len(set(names)) != len(names):
+        raise _StoreRefusal(f"{_CONVERTED_FILE_SHAPE}; two courses share a name, and a name has to identify one")
+
+    # Lesson ids are the primary key the seeder upserts on, so a duplicate across two
+    # courses silently overwrites rather than colliding -- the second course's lesson
+    # wins and the first's disappears with no error anywhere.
+    lesson_ids = [str(lesson["id"]) for course in courses for lesson in course["lessons"]]
+    if len(set(lesson_ids)) != len(lesson_ids):
+        raise _StoreRefusal(f"{_CONVERTED_FILE_SHAPE}; two lessons share an id, and an id has to identify one")
+
     return tuple(courses)
 
 
