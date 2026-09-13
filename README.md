@@ -65,9 +65,17 @@ rather than aspirational, and the places they are enforced are named:
 - **No learner's name, id or transcript reaches a log.** Enforced in `learners/store.py`, in
   the `faces/` package by two structural tests, and checked one layer up after it was broken
   there once.
-- **Erasure means the row is gone.** `delete_faceprint` returns a count, never a name, and
-  distinguishes "they had none" from "I could not tell" — see the caveat in
-  `docs/learner-database.md` about bytes surviving in the file, which is tracked as D31.
+- **Erasure removes the bytes, not just the row — and says so only as far as it can.**
+  `delete_faceprint` returns a count, never a name, and distinguishes "they had none"
+  from "I could not tell". The database sets `PRAGMA secure_delete`, so a freed page is
+  zeroed as it is written, and the delete is checkpointed before the call returns —
+  otherwise it would sit in the write-ahead log while the main file still held the
+  original page, which is measurably what happened before. Asserted against the file,
+  not the table. The one thing a returned `1` does *not* claim is that the bytes have
+  already gone: the checkpoint yields to readers instead of blocking an erase on
+  somebody else's connection, so an open reader defers it to the next checkpoint — which
+  the code reports rather than passing over in silence. `docs/learner-database.md` has
+  the measurement. The file is owner-only (0600), companions included.
 - **Face recognition is not a lock.** There is no liveness check: a photograph or a screen
   counts as the person if the detector accepts it. The matching threshold has not been
   measured against real faces, `faces.THRESHOLD_CALIBRATED` says so at runtime, and

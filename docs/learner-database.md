@@ -696,25 +696,44 @@ function does not simply return a `bool`.
 A learner id that could never name anybody is answered `0` rather than refused, because
 `0` is the truthful answer: no such row existed to remove.
 
-**What `1` does and does not promise.** The row is removed and no reader can reach it
-again. The **bytes are not scrubbed from the file.** `connect()` sets no
-`PRAGMA secure_delete`, so SQLite returns the freed page to its freelist without zeroing
-it — measured: after `delete_faceprint` returned `1` and a `wal_checkpoint(TRUNCATE)`
-ran, the packed vector was still recoverable from `learners.v1.sqlite3`. The same is
-true of the `ON DELETE CASCADE` path, and the test that proves that cascade asks the
-table and the reader, which is a different claim from asking the file.
+**What `1` promises.** The row is removed, no reader can reach it again, and the bytes
+are not being kept. `connect()` sets `PRAGMA secure_delete`, so SQLite zeroes each page
+as it frees it — measured: after `delete_faceprint` returns `1` and a
+`wal_checkpoint(TRUNCATE)`, neither the packed vector nor the model name is findable
+anywhere in `learners.v1.sqlite3` or its `-wal`/`-shm` companions. The same holds for the
+`ON DELETE CASCADE` path, and both are asserted against the file rather than the table.
 
-That is ordinary for a row delete in any database, and it is stated here because a
-household asking to be forgotten means the larger thing. Two connection-wide changes
-would close it — `PRAGMA secure_delete = ON` and an owner-only file mode, both in
-`connect()` — and both are recorded as follow-up work rather than made here, because
-they change behaviour for every table rather than for faceprints.
+**What `1` does not promise: that the bytes have already left the file.** Zeroing happens
+when a freed page is *written*, and a checkpoint is what writes it. `delete_faceprint`
+checkpoints before returning, but a `PASSIVE` checkpoint yields to readers rather than
+waiting on them — so an erase never blocks on somebody else's connection, and the price
+is that a single open read transaction defers the copy. Measured, not supposed: with a
+second connection sitting in `BEGIN` + `SELECT`, `wal_checkpoint(PASSIVE)` returned
+`(busy=0, log_frames=2, checkpointed=0)` — copying nothing while reporting no contention,
+so a `busy` check would not catch it — and the vector and the model name were both still
+recoverable from the main file. Heavy load is not required; one idle reader does it.
 
-**The database file is currently created world-readable (0644).** That mattered less
-when this file held display names and lesson results; a faceprint is biometric data, and
-an approximate face can be reconstructed from an embedding given the model. Anyone with
-local filesystem access, an unencrypted backup, or the SD card out of a Reachy Wireless
-can read faceprints without going through the learner-scoping guard at all.
+That deferral is **reported rather than silent**: `delete_faceprint` compares the frames
+copied against the frames pending and logs the two counts (counts only — no path, no
+learner id, no vector) when the erase did not ship. And it is temporary. The bytes go at
+the next checkpoint no reader is pinning; measured, as soon as that reader let go, both
+the vector and the model name were gone from the file.
+
+`secure_delete` was set to `ON` rather than `FAST` on a measurement, not an argument:
+over 300 write-and-delete cycles in WAL with `synchronous = NORMAL`, the three settings
+came out at 5.0 ms (`OFF`), 4.9 ms (`FAST`) and 4.9 ms (`ON`) — that is the **total across
+all 300 cycles**, or 0.017 / 0.016 / 0.016 ms each, which is indistinguishable. The unit
+basis is spelled out because an earlier draft gave a bare number that read as
+per-operation and was not. The
+write amplification this pragma is known for needs a delete volume this app does not
+have. Re-measure if that stops being true on the Wireless model's storage.
+
+**The database is owner-only (0600), and so are its WAL companions.** That is applied on
+every open rather than only on create, so a database written by an earlier version at
+0644 is tightened the next time the app starts rather than staying readable forever.
+SQLite copies the main file's mode onto `-wal` and `-shm` when it creates them, so the
+companions matter most on that upgrade path — a faceprint can sit in a world-readable
+`-wal` that has not been checkpointed yet.
 
 ### Faceprint reason codes
 

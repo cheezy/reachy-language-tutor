@@ -10,6 +10,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from collections.abc import Mapping
 
+from reachy_language_tutor.logging_safety import log_safe
+
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +103,20 @@ def _read_memory_file(path: Path) -> list[MemoryFact]:
     except FileNotFoundError:
         return []
     except OSError as exc:
-        logger.warning("Failed to read memory store at %s: %s", path, exc)
+        # Neither the path nor the raw exception. The path names a household's home
+        # directory, and an OSError embeds that same path in its own __str__ -- so
+        # dropping the interpolation alone would have left the leak intact. Measured:
+        # this line printed "/Users/.../alice-smith-household/memory.v1.json" twice.
+        logger.warning("Failed to read the memory store: %s", log_safe(exc))
         return []
 
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        logger.warning("Failed to parse memory store at %s: %s", path, exc)
+        # Same rule as above. A JSONDecodeError reports a line and column and not the
+        # document, but it is rendered through log_safe anyway, because "this one is
+        # fine" decided per line is how the rule above it was broken.
+        logger.warning("Failed to parse the memory store: %s", log_safe(exc))
         return []
 
     if not isinstance(parsed, Mapping):

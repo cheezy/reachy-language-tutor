@@ -21,6 +21,7 @@ import pytest
 from untaught_language import UNTAUGHT_CODE, UNTAUGHT_CODE_ABSENT, UNTAUGHT_LANGUAGE_ROW_NAME
 
 import reachy_language_tutor.learners as learners
+from reachy_language_tutor import memory
 from reachy_language_tutor.learners import store
 from reachy_language_tutor.learners.models import Lesson, LessonAttempt, LearnerProfile
 
@@ -4118,3 +4119,294 @@ def test_the_refused_race_leaves_the_database_exactly_as_it_was(instance: Path) 
     finally:
         connection.close()
     assert _faceprint_rows(instance, "racy") == []
+
+
+# What a logger call in store.py is allowed to interpolate. An allow-list, not a list of
+# forbidden names: a deny-list of path-ish words has been wrong here four times, and it
+# only ever refuses the spellings somebody thought of. Anything not named below fails
+# this test, which is the point -- a new log line has to be looked at once.
+#
+#   _log_safe(...)        the module's own redacting renderer
+#   type(exc).__name__    an error class, which is a shape and not a value
+_PERMITTED_LOG_NAMES = frozenset(
+    {
+        "refusal",  # a reason code from the published vocabulary
+        "schema_applied",  # bool
+        "seeded",  # bool
+        "checkpointed",  # int, WAL frames copied
+        "log_frames",  # int, WAL frames pending
+        "SEEDED_LEARNERS_KEY",  # a module constant naming a settings key
+        "LEARNER_DB_FILENAME",  # the fixed filename, which names no person and no directory
+        "suffix",  # "" / "-wal" / "-shm" / "-journal", from a literal tuple in the loop
+    }
+)
+
+
+def _exception_bound_names(tree: ast.Module) -> frozenset[str]:
+    """Names that can only be an exception, because an `except ... as` is what binds them."""
+    bound = {node.name for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler) and node.name}
+    # A name that is ALSO bound some other way is not one of these -- `except OSError as
+    # x` elsewhere does not make `x = str(path)` here safe. A PARAMETER of that name is
+    # the same hazard, unless it is annotated as an exception, which _log_safe's own
+    # `exc: BaseException` is: the annotation is what makes the claim checkable.
+    exception_annotations = {"BaseException", "Exception"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in bound:
+            bound.discard(node.id)
+        if isinstance(node, ast.arg) and node.arg in bound:
+            annotation = node.annotation
+            annotated_as_exception = (
+                isinstance(annotation, ast.Name)
+                and (annotation.id in exception_annotations or annotation.id.endswith("Error"))
+            )
+            if not annotated_as_exception:
+                bound.discard(node.arg)
+    return frozenset(bound)
+
+
+def _log_argument_shape(node: ast.expr, exception_names: frozenset[str] = frozenset()) -> str | None:
+    """Name the permitted shape this argument has, or None if it has none."""
+    if isinstance(node, ast.Constant):
+        return "constant"
+    if isinstance(node, ast.Name) and node.id in _PERMITTED_LOG_NAMES:
+        return f"name:{node.id}"
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"_log_safe", "log_safe"}:
+        # _log_safe renders an EXCEPTION safely. It renders anything else exactly as it
+        # was handed over, so `_log_safe(path)` would launder a path straight through the
+        # guard -- which is how the OSError leak stayed invisible to an earlier version
+        # of this scan. Its argument must be a name bound by an `except ... as` clause.
+        if len(node.args) == 1 and isinstance(node.args[0], ast.Name) and node.args[0].id in exception_names:
+            return "_log_safe"
+        return None
+    # type(exc).__name__ -- an Attribute whose value is a call to type()
+    if isinstance(node, ast.Attribute) and node.attr == "__name__":
+        inner = node.value
+        if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) and inner.func.id == "type":
+            return "type(...).__name__"
+    return None
+
+
+# The ONLY methods a store log line may call. An allow-list, and deliberately not the
+# full set logging offers: `warn` and `fatal` are stdlib aliases that write exactly like
+# `warning` and `critical`, and an earlier version of this guard named the writers it
+# knew about and so waved both of them straight through. Naming what is permitted closes
+# that family at once -- including `handle`, `_log`, and whatever the next alias is.
+_PERMITTED_LOG_METHODS = frozenset({"debug", "info", "warning", "error", "exception", "critical"})
+
+
+def _parents(tree: ast.Module) -> dict[int, ast.AST]:
+    """Map each node to its parent, so a Name can be asked what it is being used AS."""
+    parents: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+    return parents
+
+
+def _module_logger_binding(tree: ast.Module) -> ast.Assign:
+    """Return the single module-level ``logger = logging.getLogger(...)`` assignment."""
+    bindings = []
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if [t.id for t in node.targets if isinstance(t, ast.Name)] != ["logger"]:
+            continue
+        if isinstance(node.value, ast.Call):
+            bindings.append(node)
+    assert len(bindings) == 1, f"expected exactly one module-level logger binding, found {len(bindings)}"
+    return bindings[0]
+
+
+# Every module that logs beside a household's data, and the floor each scan must clear.
+# A list rather than store.py alone, because the rule was moved into logging_safety and
+# given a second consumer while the ENFORCEMENT stayed pointed at one file -- which is
+# the same asymmetry that let memory.py log a home directory for as long as it did.
+_GUARDED_MODULES = [(store, 25), (memory, 2)]
+
+
+@pytest.mark.parametrize(("module", "minimum_calls"), _GUARDED_MODULES, ids=lambda v: getattr(v, "__name__", v))
+def test_no_log_line_in_the_store_can_carry_a_path_or_a_learner(module: object, minimum_calls: int) -> None:
+    """The rule the module states, held by the module rather than by whoever edits it.
+
+    CLAUDE.md's most expensive lesson is that a rule obeyed in one function is broken in
+    the one next to it: the no-PII rule was honoured in the store and broken in the loop
+    above it (D3), and then again inside a single function here -- one branch scrubbed of
+    the database path while its sibling four lines below still logged it in full.
+
+    Grep found that sibling once. This is what stops the next one, and EVERY part of it
+    is an allow-list, because the first two versions were not. Version one permitted an
+    allow-list of argument shapes but recognised only calls spelled ``logger.<method>``,
+    so ``log = logger`` made a line invisible to the scan rather than failing it. Version
+    two fixed the receiver and still enumerated the METHODS that write, so ``logger.warn``
+    and ``logger.fatal`` -- stdlib aliases a future editor reaches for without thinking --
+    sailed through. A deny-list is only ever as complete as the last person to read it,
+    and that is now three demonstrations of it in this one guard.
+
+    So the permitted shape is stated positively and nothing else is allowed to exist:
+
+    * the module builds exactly one logger, at module level;
+    * the name ``logging`` appears nowhere but inside that one binding, which is what
+      stops ``logging.warning(path)`` and ``from logging import warning``;
+    * the name ``logger`` appears nowhere except as the direct receiver of a call to a
+      method in _PERMITTED_LOG_METHODS, which is what stops aliasing, ``getattr``,
+      containers, ``handle`` and ``_log``;
+    * and each argument has a shape named in _PERMITTED_LOG_NAMES.
+
+    Anything else fails this test. A log line that needs a new shape adds it above,
+    deliberately, which is the whole point.
+    """
+    source = Path(module.__file__).resolve().read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    parents = _parents(tree)
+
+    exception_names = _exception_bound_names(tree)
+    binding = _module_logger_binding(tree)
+    permitted_logger_nodes = {id(target) for target in binding.targets}
+    permitted_logging_nodes = {id(node) for node in ast.walk(binding.value)}
+
+    scanned = 0
+    unpermitted: list[str] = []
+
+    # `import logging` is the only way the module may reach the logging package. A
+    # `from logging import ...` binds a writer under a bare name with no receiver to
+    # check, so it is refused outright rather than enumerated.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "logging":
+            unpermitted.append(f"line {node.lineno}: `from logging import ...` binds a writer with no receiver")
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Name):
+            continue
+
+        if node.id == "logging" and id(node) not in permitted_logging_nodes:
+            unpermitted.append(f"line {node.lineno}: `logging` is used outside the single logger binding")
+            continue
+
+        if node.id != "logger" or id(node) in permitted_logger_nodes:
+            continue
+
+        # From here: a use of `logger`. It must be the receiver of a permitted method
+        # call, and nothing else -- not assigned, not passed, not subscripted, not
+        # handed to getattr.
+        attribute = parents.get(id(node))
+        if not (isinstance(attribute, ast.Attribute) and attribute.value is node):
+            unpermitted.append(f"line {node.lineno}: `logger` is used as something other than a call receiver")
+            continue
+        call = parents.get(id(attribute))
+        if not (isinstance(call, ast.Call) and call.func is attribute):
+            unpermitted.append(f"line {node.lineno}: `logger.{attribute.attr}` is referenced without being called")
+            continue
+        if attribute.attr not in _PERMITTED_LOG_METHODS:
+            unpermitted.append(f"line {node.lineno}: `logger.{attribute.attr}()` is not a permitted log method")
+            continue
+
+        scanned += 1
+        # Keywords as well as positional arguments: extra= and exc_info= are how a value
+        # reaches a handler without ever appearing in the format string.
+        for argument in call.args:
+            if _log_argument_shape(argument, exception_names) is None:
+                unpermitted.append(f"line {call.lineno}: {ast.dump(argument)[:120]}")
+        for keyword in call.keywords:
+            unpermitted.append(f"line {call.lineno}: keyword {keyword.arg}= is not permitted on a store log line")
+
+    assert scanned >= minimum_calls, f"only {scanned} logger calls found, so this scan proves nothing"
+    assert unpermitted == [], unpermitted
+
+
+# The module helpers that produce a value safe to log: each returns a reason built from
+# type(value).__name__, or a bool. Named positively, because "anything but a path" is
+# the deny-list shape that has now been wrong five times in this repository.
+_SAFE_PRODUCERS = frozenset(
+    {
+        "_cannot_be_a_catalog_code",
+        "_cannot_be_a_path",
+        "_cannot_be_an_embedding_model",
+        "_cannot_name_a_learner",
+        "_cannot_name_a_lesson",
+        "_unconstrained_personal_relation",
+        "_insert_is_attributed",
+        "_apply_schema",
+        "_seed",
+    }
+)
+
+
+def test_the_generic_names_the_log_guard_permits_are_bound_to_what_they_claim() -> None:
+    """An allow-list of NAMES is only as good as what those names are bound to.
+
+    _PERMITTED_LOG_NAMES waves seven lowercase identifiers through on the strength of a
+    comment beside each. The comments were true and nothing checked them, so
+    ``refusal = str(path)`` followed by logging `refusal` passed green -- and `refusal`
+    is bound at fourteen sites and logged at twelve, so it is the one that matters.
+    Pinning only `suffix`, the name that prompted the finding, would be the
+    fix-the-member-not-the-class mistake CLAUDE.md names as this board's most repeated.
+
+    So every generic name is pinned, and the pin is an allow-list of PRODUCERS: each
+    binding must be an `except ... as` clause, a `for` over string literals, a tuple
+    unpack of int()s, or an assignment whose calls are all to _SAFE_PRODUCERS.
+
+    SCREAMING_CASE entries are not covered here: they are module constants, checked by
+    being constants.
+    """
+    tree = ast.parse(Path(store.__file__).resolve().read_text(encoding="utf-8"))
+    generic = {name for name in _PERMITTED_LOG_NAMES if not name.isupper()}
+    assert generic, "no generic names to check, so this test proves nothing"
+
+    # Every producer named above must actually exist, or the allow-list is decoration.
+    defined = {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert _SAFE_PRODUCERS <= defined, sorted(_SAFE_PRODUCERS - defined)
+
+    seen: dict[str, int] = dict.fromkeys(generic, 0)
+    wrong: list[str] = []
+    accounted: set[int] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler) and node.name in generic:
+            seen[node.name] += 1
+        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name) and node.target.id in generic:
+            seen[node.target.id] += 1
+            accounted.add(id(node.target))
+            literals = isinstance(node.iter, ast.Tuple) and all(
+                isinstance(element, ast.Constant) and isinstance(element.value, str) for element in node.iter.elts
+            )
+            if not literals:
+                wrong.append(f"line {node.lineno}: `{node.target.id}` iterates something other than string literals")
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id in generic:
+            # A dataclass field declaration. It binds no value here, and the annotation
+            # is the claim: bool and int cannot carry a name or a path. `path: Path`
+            # would be refused by the same rule, which is the point.
+            seen[node.target.id] += 1
+            accounted.add(id(node.target))
+            if not (isinstance(node.annotation, ast.Name) and node.annotation.id in {"bool", "int"}):
+                wrong.append(f"line {node.lineno}: `{node.target.id}` is declared as something that can carry a value")
+        elif isinstance(node, ast.Assign):
+            targets = [t for t in ast.walk(node.targets[0]) if isinstance(t, ast.Name) and t.id in generic]
+            if not targets:
+                continue
+            for target in targets:
+                seen[target.id] += 1
+                accounted.add(id(target))
+            calls = [c for c in ast.walk(node.value) if isinstance(c, ast.Call)]
+            called = {c.func.id for c in calls if isinstance(c.func, ast.Name)}
+            called |= {c.func.attr for c in calls if isinstance(c.func, ast.Attribute)}
+            # A tuple unpack of int()s, or an assignment built only from safe producers.
+            if called and called <= (_SAFE_PRODUCERS | {"int", "tuple"}):
+                continue
+            if not calls and all(isinstance(n, (ast.Constant, ast.Name, ast.Tuple)) for n in ast.walk(node.value)):
+                continue
+            wrong.append(
+                f"line {node.lineno}: `{', '.join(sorted(t.id for t in targets))}` is built from "
+                f"{sorted(called) or type(node.value).__name__}, not from a safe producer"
+            )
+
+    # Anything binding one of these names by a route not accounted for above.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in generic:
+            if id(node) not in accounted:
+                wrong.append(f"line {node.lineno}: `{node.id}` is bound by an unrecognised route")
+        if isinstance(node, ast.arg) and node.arg in generic:
+            wrong.append(f"line {node.lineno}: `{node.arg}` is a parameter, so its value comes from a caller")
+
+    unbound = sorted(name for name, count in seen.items() if count == 0)
+    assert not unbound, f"permitted but never bound, so the comment is unchecked: {unbound}"
+    assert wrong == [], wrong

@@ -1,9 +1,11 @@
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
+import reachy_language_tutor.memory as memory
 import reachy_language_tutor.prompts as prompts_mod
 from reachy_language_tutor.config import config
 from reachy_language_tutor.memory import (
@@ -103,3 +105,43 @@ def test_prompt_includes_memory_fragment(tmp_path: Path, monkeypatch: pytest.Mon
     assert instructions.startswith("Things you remember about the user")
     assert "- Prefers concise answers" in instructions
     assert "## IDENTITY" in instructions
+
+
+def test_a_broken_memory_store_cannot_carry_the_household_path_into_a_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The sibling leak, and why the rule now lives in one module.
+
+    learners/store.py carries the no-PII-in-logs rule and obeys it. This module holds
+    the same household's remembered facts and logged the store path AND the raw
+    exception on two lines -- and dropping the interpolation alone would not have been
+    enough, because an OSError embeds that same path in its own __str__. Measured, both
+    lines printed the household directory twice:
+
+        Failed to read memory store at /.../alice-smith-household/memory.v1.json:
+        [Errno 21] Is a directory: '/.../alice-smith-household/memory.v1.json'
+
+    That is CLAUDE.md's "check the layer above and below for the same mistake", found
+    one layer across instead.
+
+    Reverting either line to interpolate the path, or to render the exception raw,
+    makes this fail.
+    """
+    household = tmp_path / "alice-smith-household"
+    household.mkdir()
+
+    unreadable = household / "memory.v1.json"
+    unreadable.mkdir()  # a directory where the file must be: OSError, carrying the path
+    unparseable = household / "other.json"
+    unparseable.write_text("{not json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        assert memory._read_memory_file(unreadable) == []
+        assert memory._read_memory_file(unparseable) == []
+
+    assert "alice-smith-household" not in caplog.text, "the household's directory name reached a log"
+    assert str(tmp_path) not in caplog.text, "the path reached a log"
+    # Still diagnosable: which failure, and why.
+    assert "IsADirectoryError" in caplog.text
+    assert "errno=21" in caplog.text
+    assert "JSONDecodeError" in caplog.text

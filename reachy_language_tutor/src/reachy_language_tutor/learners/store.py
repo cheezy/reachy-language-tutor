@@ -34,6 +34,7 @@ import os
 import re
 import json
 import math
+import stat
 import time
 import string
 import struct
@@ -45,6 +46,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from collections.abc import Sequence
 
+from reachy_language_tutor.logging_safety import SafeToLog, log_safe
 from reachy_language_tutor.learners.models import (
     OUTCOMES,
     Drill,
@@ -397,7 +399,7 @@ def learner_db_path_for_instance(instance_path: str | Path | None = None) -> Pat
     if instance_path is not None:
         refusal = _cannot_be_a_path(instance_path)
         if refusal is not None:
-            raise ValueError(f"instance_path must be a path, not {refusal}")
+            raise _StoreRefusal(f"instance_path must be a path, not {refusal}")
         return Path(instance_path).expanduser() / LEARNER_DB_FILENAME
 
     data_home = os.getenv("XDG_DATA_HOME")
@@ -419,7 +421,7 @@ def _converted_lesson_course() -> Any:
     """Return the course block: what the converted lessons were made from."""
     course = json.loads(_converted_lessons_json())["course"]
     if not isinstance(course, dict):
-        raise ValueError("the converted-lesson file's 'course' is not an object")
+        raise _StoreRefusal("the converted-lesson file's 'course' is not an object")
     return course
 
 
@@ -443,7 +445,7 @@ def _converted_lessons() -> tuple[Any, ...]:
     parsed = json.loads(_converted_lessons_json())
     lessons = parsed["lessons"]
     if not isinstance(lessons, list):
-        raise ValueError("the converted-lesson file's 'lessons' is not a list")
+        raise _StoreRefusal("the converted-lesson file's 'lessons' is not a list")
     return tuple(lessons)
 
 
@@ -481,7 +483,94 @@ def connect(instance_path: str | Path | None = None, *, create: bool = False) ->
     connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = NORMAL")
+    # Zero a page when it is freed, rather than returning it to the freelist with its
+    # contents intact. Without this a deleted faceprint's bytes stay in the file:
+    # measured, the packed float32 vector and the model name were both still
+    # byte-recoverable after delete_faceprint returned 1 and a wal_checkpoint(TRUNCATE).
+    #
+    # ON rather than FAST, and the choice was measured rather than argued. Both scrub
+    # this case; over 300 write-and-delete cycles in WAL with synchronous=NORMAL the
+    # three settings came out at 5.0 ms (OFF), 4.9 ms (FAST) and 4.9 ms (ON) as a TOTAL
+    # across all 300 -- 0.017, 0.016 and 0.016 ms per cycle, which is indistinguishable.
+    # The unit basis is stated because an earlier version of this comment gave a bare
+    # figure that read as per-operation and was not.
+    #
+    # The write amplification this pragma is known for needs a delete volume this app
+    # does not have, so the stronger guarantee costs nothing here. Measured on dev
+    # hardware (Mac, SSD), not on the Wireless model's storage -- re-measure there if
+    # this choice is ever load-bearing.
+    connection.execute("PRAGMA secure_delete = ON")
+    _restrict_permissions(path)
     return connection
+
+
+# The mode the learner database and its companions are kept at. Owner-only, because the
+# file holds face templates for a household: the threat is another local account, an
+# unencrypted backup, or the SD card out of a Reachy Wireless -- none of which goes
+# through the learner-scoping guard at all.
+_OWNER_ONLY = 0o600
+
+# Which permission failures this process has already reported, as (file, error type)
+# pairs. A set rather than a single flag, because one boolean covering every path and
+# every error type silences the SECOND distinct failure: measured, a real chmod failure
+# on a different database at a different path, after the flag was set, logged nothing at
+# all. Keyed per file so a first failure on a new one still speaks, and per error type
+# so a read-only mount turning into a permissions error is not mistaken for a repeat.
+#
+# Paths live in this set but never leave it -- it is de-duplication state, not a log.
+_PERMISSION_FAILURES_REPORTED: set[tuple[str, str]] = set()
+
+
+def _restrict_permissions(path: Path) -> None:
+    """Make the database and its WAL companions owner-only, reporting any failure.
+
+    Applied on EVERY connect, not only on create, so a database written by an earlier
+    version at 0644 is tightened the next time the app opens it rather than staying
+    readable forever.
+
+    The -wal and -shm files matter as much as the main one and are easy to forget: a
+    0600 database beside a 0644 write-ahead log protects nothing, because the WAL holds
+    the pages that have not been checkpointed yet.
+
+    Never raises -- every caller is a store function that promises not to. But it does
+    not swallow either: a filesystem that cannot chmod is reported, because an
+    unreported failure to tighten permissions on biometric data is worse than a visible
+    one. The log line carries the error type only; the path can name a person's home
+    directory and the no-PII rule covers this module.
+    """
+    # -journal as well as the WAL pair. PRAGMA journal_mode = WAL can fail to take on a
+    # filesystem without shared memory, and SQLite then falls back to a rollback journal
+    # at <db>-journal -- which holds freed pages exactly as the WAL does, and which a
+    # loop naming only the two WAL suffixes would leave world-readable.
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        candidate = Path(f"{path}{suffix}")
+        try:
+            if candidate.exists() and stat.S_IMODE(candidate.stat().st_mode) != _OWNER_ONLY:
+                candidate.chmod(_OWNER_ONLY)
+        except OSError as exc:
+            # Once per (file, error type), not once per connect. Every store read opens
+            # its own connection, so a database this process can never chmod -- owned by
+            # another account, or on a read-only mount -- would otherwise warn several
+            # times per conversation turn, and a warning repeating that often is one an
+            # operator filters out, taking the real signal with it. The pitfall asks
+            # that the failure not be SWALLOWED; it is reported, once per thing that
+            # failed rather than once per process.
+            already_reported = (str(candidate), type(exc).__name__)
+            if already_reported not in _PERMISSION_FAILURES_REPORTED:
+                _PERMISSION_FAILURES_REPORTED.add(already_reported)
+                logger.warning(
+                    "Could not restrict permissions on %s%s: %s (further failures on this file are suppressed)",
+                    LEARNER_DB_FILENAME,
+                    suffix,
+                    type(exc).__name__,
+                )
+        else:
+            # A file that chmods cleanly forgets its past failures, so a mount that was
+            # read-only for a while and then recovered reports again if it recurs --
+            # rather than staying silent for the life of the process.
+            _PERMISSION_FAILURES_REPORTED.difference_update(
+                {key for key in _PERMISSION_FAILURES_REPORTED if key[0] == str(candidate)}
+            )
 
 
 def _apply_schema(connection: sqlite3.Connection) -> bool:
@@ -780,7 +869,12 @@ def ensure_learner_database(instance_path: str | Path | None = None) -> EnsureRe
             schema_applied = _apply_schema(connection)
             seeded = _seed(connection)
     except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError) as exc:
-        logger.warning("Learner database at %s is unavailable: %s", path or "<unresolved path>", exc)
+        # The path is absent from the format string AND from the exception: it can name
+        # a person's home directory, and _restrict_permissions states that rule for this
+        # module. Both halves are needed and an earlier version of this comment claimed
+        # the first while the second leaked -- OSError embeds its filename in __str__,
+        # so this line printed the household directory until _log_safe stopped it.
+        logger.warning("The learner database is unavailable: %s", _log_safe(exc))
         return EnsureResult(path=path or Path(LEARNER_DB_FILENAME), ready=False, error=str(exc))
     finally:
         if connection is not None:
@@ -789,12 +883,18 @@ def ensure_learner_database(instance_path: str | Path | None = None) -> EnsureRe
             except sqlite3.Error as close_exc:
                 # An unguarded close() here would propagate and discard the result the
                 # except branch just returned.
-                logger.warning("Failed to close the learner database: %s", close_exc)
+                # Routed through _log_safe like every sibling arm. A sqlite3.Error is
+                # rendered in full either way, but "this one is safe" decided per line
+                # is exactly how the OSError above reached a log.
+                logger.warning("Failed to close the learner database: %s", _log_safe(close_exc))
 
     if schema_applied or seeded:
+        # The path is absent here for the same reason it is absent from the warning
+        # branch above: it can name a person's home directory, and _restrict_permissions
+        # states that rule for this module. The filename is fixed and carries no
+        # information, so what is worth logging on a first run is what HAPPENED.
         logger.info(
-            "Learner database ready at %s (schema_applied=%s, seeded=%s)",
-            path,
+            "Learner database ready (schema_applied=%s, seeded=%s)",
             schema_applied,
             seeded,
         )
@@ -870,18 +970,23 @@ _MAX_MODEL_NAME = 128
 _MODEL_NAME_CHARACTERS = frozenset(string.ascii_letters + string.digits + "._-")
 
 
-def _log_safe(exc: BaseException) -> object:
-    r"""Render an exception for a log line without letting it quote the argument.
+class _StoreRefusal(SafeToLog, ValueError):
+    """A refusal this module built itself, safe to log in full.
 
-    Almost every exception these readers absorb is value-free: OverflowError says the
-    int was too large, sqlite3 names a type or a table, never a bound value. One is
-    not. UnicodeEncodeError's message is "'utf-8' codec can't encode character
-    '\\ud800' in position 5", which carries the offending character AND its index
-    within the learner id -- a fragment of personal data reaching a log line whose
-    neighbouring comment promises never to carry one. The class name says everything
-    an operator needs: the value could not be encoded.
+    Every message raised as one of these is assembled from type(value).__name__ -- see
+    _cannot_be_a_path and its siblings, which return a type and never a value. Carrying
+    that as a TYPE is what lets log_safe render these in full while a stdlib ValueError,
+    which quotes whatever it could not convert, is reduced to its class name.
+
+    Subclasses ValueError so that every `except ValueError` and every _READER_ABSORBS
+    catch in this module keeps working unchanged.
     """
-    return type(exc).__name__ if isinstance(exc, UnicodeError) else exc
+
+
+# The rule itself lives in logging_safety, because it was obeyed here and broken in
+# memory.py -- see that module's docstring. This name is kept because eighteen call
+# sites and the structural guard in tests/test_learner_store.py both use it.
+_log_safe = log_safe
 
 
 # What the lesson catalog can possibly hold, from schema.sql's own CHECK on
@@ -2433,13 +2538,27 @@ def delete_faceprint(learner_id: str, *, instance_path: str | Path | None = None
     distinction is the whole point -- erasure is a promise this app makes to a
     household, and "I could not tell" must never be reported as "it is gone".
 
-    Exactly what 1 promises, because the difference matters for biometric data: the
-    ROW is removed and no reader can reach it again. The BYTES are not scrubbed from
-    the file. connect() does not set PRAGMA secure_delete, so SQLite returns the freed
-    page to its freelist without zeroing it -- measured: after this returned 1 and a
-    wal_checkpoint(TRUNCATE), the packed vector was still recoverable from the
-    database file. That is normal for a row delete and it is less than "the numbers no
-    longer exist anywhere", which is what a household asking to be forgotten means.
+    Exactly what 1 promises, because the difference matters for biometric data: the row
+    is removed, no reader can reach it again, and the bytes are not being kept. It is
+    NOT a promise that the bytes have already left the file by the time this returns.
+
+    connect() sets PRAGMA secure_delete so a freed page is zeroed as it is written, and
+    this checkpoints before returning so that write actually happens -- measured,
+    without the checkpoint the delete sat in the WAL while the main file still held the
+    vector and the model name in full, with this function already returning 1.
+
+    The checkpoint is PASSIVE, so it yields rather than waiting on another connection:
+    an erase can never block on somebody else's reader. The price is that ONE ordinary
+    open read transaction is enough to defer it -- measured, not supposed: with a second
+    connection sitting in BEGIN + SELECT, wal_checkpoint(PASSIVE) returned
+    (busy=0, log_frames=2, checkpointed=0), copying nothing while reporting no
+    contention, and the packed vector and the model name were both still recoverable
+    from the main file. Heavy load is not required; a single idle reader does it.
+
+    A deferral is therefore reported rather than silent (see below), and it is
+    temporary: the bytes go at the next checkpoint no reader is pinning. Measured, as
+    soon as that reader let go, both the vector and the model name were gone from the
+    file.
 
     A learner id that could never name anybody is answered with 0 rather than a
     refusal, because that is the truthful answer: no such row existed to remove.
@@ -2454,6 +2573,41 @@ def delete_faceprint(learner_id: str, *, instance_path: str | Path | None = None
         connection = connect(instance_path)
         with connection:
             cursor = connection.execute(_DELETE_FACEPRINT_SQL, (learner_id,))
+        # Ship the delete into the main database before reporting it done.
+        #
+        # Without this the promise is conditional on nobody else holding a connection,
+        # and measured, that condition fails in the obvious way: with a second
+        # connection open the delete stays in the WAL, the main file still holds the
+        # original page, and the packed vector AND the model name were both fully
+        # recoverable from learners.v1.sqlite3 while this function had already returned
+        # 1. secure_delete zeroes a page when it is WRITTEN, and a checkpoint is what
+        # writes it. Measured cost: none worth naming. delete_faceprint runs at a
+        # median 0.660 ms with this line and 0.664 ms with it removed, over 300 samples
+        # each -- the checkpoint is inside the noise of the call it protects. (An
+        # earlier version of this comment reported 0.73-1.18 ms as the checkpoint's
+        # cost; that was the whole call, not this line's share of it.)
+        #
+        # PASSIVE rather than TRUNCATE: a passive checkpoint yields to readers instead
+        # of waiting on them, so an erase can never block on somebody else's open
+        # connection. The cost is that it can copy nothing, and SAY NOTHING about it --
+        # measured, one open read transaction gets (busy=0, log_frames=2,
+        # checkpointed=0), so busy is 0 and a busy-flag check would miss it entirely.
+        #
+        # So compare the two counts instead, and report a deferral. The row is gone
+        # either way -- this does not change what is returned -- but "the bytes are
+        # still in the file for now" is exactly the thing that must not be silent on
+        # biometric data. Counts only: no path, no learner id, no vector.
+        checkpoint = connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        if checkpoint is not None:
+            _, log_frames, checkpointed = (int(value) for value in tuple(checkpoint)[:3])
+            if checkpointed < log_frames:
+                logger.warning(
+                    "A faceprint was deleted but its pages are still in the write-ahead "
+                    "log: %d of %d frames checkpointed. They leave the database file at "
+                    "the next checkpoint no reader is holding open.",
+                    checkpointed,
+                    log_frames,
+                )
         return int(cursor.rowcount)
     except _FACEPRINT_ABSORBS as exc:
         logger.warning("Could not delete a faceprint: %s", _log_safe(exc))

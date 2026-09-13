@@ -2,6 +2,8 @@
 
 import os
 import json
+import stat
+import struct
 import logging
 import sqlite3
 from pathlib import Path
@@ -1334,3 +1336,458 @@ def test_a_name_cannot_hide_unbounded_content_behind_a_nul(tmp_path: Path) -> No
         assert connection.execute("SELECT COUNT(*) FROM learners").fetchone()[0] == 5
     finally:
         connection.close()
+
+
+# ------------------------------------ the file itself, not the rows it holds (D31)
+
+
+def _faceprint_bytes(values: list[float]) -> bytes:
+    """Pack the exact bytes the store writes for this vector, to search the file for."""
+    return struct.pack(f"<{len(values)}f", *values)
+
+
+def _all_database_files(instance_path: Path) -> list[Path]:
+    """Return the database and whichever of its WAL companions currently exist."""
+    main = Path(store.learner_db_path_for_instance(instance_path))
+    return [path for path in (main, Path(f"{main}-wal"), Path(f"{main}-shm")) if path.exists()]
+
+
+def test_the_database_and_its_companions_are_owner_only(tmp_path: Path) -> None:
+    """Asked of the filesystem, not of the source.
+
+    The file holds face templates for a household. Owner-only is the minimum, and the
+    threat model is the one that does not go through the learner-scoping guard at all:
+    another local account, an unencrypted backup, or the SD card out of a Wireless.
+
+    The -wal and -shm companions are checked too. Note what this does and does not
+    prove: SQLite COPIES the main file's mode onto them when it creates them --
+    measured, a 0600 database yields 0600 companions and a 0644 one yields 0644 -- so
+    on the create path this assertion holds whether or not the store touches them. The
+    companion tightening earns its place on the UPGRADE path instead, where companions
+    left behind by an earlier version already exist at 0644; that is what the test
+    below exercises, and that is the one that fails if it is removed.
+    """
+    store.ensure_learner_database(tmp_path)
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p','P',0)")
+        connection.commit()
+        # A second connection while the WAL is live is what brings the companions into
+        # existence and tightens them.
+        store.connect(tmp_path).close()
+
+        files = _all_database_files(tmp_path)
+        assert len(files) >= 1, "the database should exist by now"
+        for path in files:
+            mode = stat.S_IMODE(path.stat().st_mode)
+            assert mode == 0o600, f"{path.name} is {oct(mode)}, not owner-only"
+    finally:
+        connection.close()
+
+
+def test_a_database_left_world_readable_is_tightened_on_the_next_open(tmp_path: Path) -> None:
+    """The upgrade path, which matters more than the create path.
+
+    Every robot already running has a database at 0644. If this only tightened on
+    create, those files would stay readable forever and the fix would reach nobody who
+    already has one -- the same silent-no-op shape as a schema change that only touches
+    fresh installs.
+    """
+    store.ensure_learner_database(tmp_path)
+    path = Path(store.learner_db_path_for_instance(tmp_path))
+    path.chmod(0o644)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644, "the fixture did not take"
+
+    store.connect(tmp_path).close()
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_secure_delete_is_live_on_the_connection_that_actually_writes(tmp_path: Path) -> None:
+    """Read the pragma back from a real connection.
+
+    Grepping store.py for the line would pass with the pragma set on some other
+    connection, or on none -- the same defect shape as a guard that checks a different
+    invocation than the one running.
+    """
+    store.ensure_learner_database(tmp_path)
+    connection = store.connect(tmp_path)
+    try:
+        assert int(connection.execute("PRAGMA secure_delete").fetchone()[0]) == 1
+    finally:
+        connection.close()
+
+
+def test_a_deleted_faceprint_leaves_no_bytes_in_the_file(tmp_path: Path) -> None:
+    """The claim W25 could not make, and the reason this task exists.
+
+    W25's cascade test asks the TABLE whether the row is gone, which is a weaker claim:
+    measured before this fix, the packed float32 vector and the model name were both
+    still byte-recoverable from learners.v1.sqlite3 after delete_faceprint returned 1
+    and a wal_checkpoint(TRUNCATE). A household asking to be forgotten means the larger
+    thing, so this asks the FILE.
+
+    Reverting PRAGMA secure_delete makes this fail with the vector still present.
+    """
+    store.ensure_learner_database(tmp_path)
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p','P',0)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    values = [0.125 * index for index in range(64)]
+    assert store.save_faceprint("p", "arcface-r100", values, instance_path=tmp_path).saved is True
+    packed = _faceprint_bytes(values)
+
+    # It really is in the file while the row exists, or this test could pass on a
+    # database that never held the vector at all.
+    checkpoint = store.connect(tmp_path)
+    try:
+        checkpoint.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        checkpoint.close()
+    assert any(packed in path.read_bytes() for path in _all_database_files(tmp_path)), (
+        "the vector was never written, so its absence afterwards would prove nothing"
+    )
+
+    assert store.delete_faceprint("p", instance_path=tmp_path) == 1
+    checkpoint = store.connect(tmp_path)
+    try:
+        checkpoint.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        checkpoint.close()
+
+    # The MAIN file by name. A checkpoint truncates -wal to zero bytes, so looping over
+    # the companions here would assert `packed not in b""` and pass on an empty file --
+    # vacuously. The main database is where the page actually lands, so that is what is
+    # asserted; the concurrent-connection test below covers the case where the WAL is
+    # the file still holding something.
+    main = Path(store.learner_db_path_for_instance(tmp_path))
+    blob = main.read_bytes()
+    assert packed not in blob, "the faceprint's bytes survive in the database file"
+    assert b"arcface-r100" not in blob, "the model name survives in the database file"
+
+
+def test_deleting_a_learner_leaves_no_faceprint_bytes_in_the_file_either(tmp_path: Path) -> None:
+    """The cascade path gets the same treatment, because it is the one W30 will use.
+
+    Erasing a household member deletes the learner row and cascades to the faceprint;
+    the bytes have to go with it, not merely the row.
+    """
+    store.ensure_learner_database(tmp_path)
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p','P',0)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    values = [0.5 - 0.01 * index for index in range(64)]
+    store.save_faceprint("p", "sface_probe", values, instance_path=tmp_path)
+    packed = _faceprint_bytes(values)
+
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("DELETE FROM learners WHERE id = ?", ("p",))
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        connection.close()
+
+    main = Path(store.learner_db_path_for_instance(tmp_path))
+    assert packed not in main.read_bytes(), "the cascaded faceprint survives in the database file"
+
+
+def test_a_filesystem_that_cannot_chmod_is_reported_rather_than_raised(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never raise into a caller, and never swallow either.
+
+    Every caller of connect() is a store function that promises not to raise, so a
+    read-only filesystem must not end a conversation turn. But an unreported failure to
+    tighten permissions on biometric data is worse than a visible one, so it is logged
+    -- with the error TYPE only, because the path can name somebody's home directory.
+    """
+    # Start from an unlatched module. Without this the test passes only because it is
+    # the sole exercise of the branch and runs once: anything earlier in the process
+    # that failed a chmod on the same file would de-duplicate this one away, and the
+    # failure would be an order-dependency rather than the code under test. monkeypatch
+    # restores the real set afterwards.
+    monkeypatch.setattr(store, "_PERMISSION_FAILURES_REPORTED", set())
+
+    store.ensure_learner_database(tmp_path)
+    # The file must actually NEED tightening, or _restrict_permissions skips the chmod
+    # and this test passes without ever reaching the branch it is about. os.chmod here
+    # rather than Path.chmod, because Path.chmod is what gets patched below.
+    os.chmod(store.learner_db_path_for_instance(tmp_path), 0o644)
+
+    def refuse(self: Path, mode: int) -> None:
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(Path, "chmod", refuse)
+    with caplog.at_level(logging.WARNING):
+        store.connect(tmp_path).close()
+
+    assert "Could not restrict permissions" in caplog.text
+    assert "OSError" in caplog.text
+    assert str(tmp_path) not in caplog.text, "the path must not reach the log"
+
+
+def test_a_second_database_that_cannot_be_tightened_is_also_reported(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """De-duplicating a warning must not silence a different failure.
+
+    A single process-wide flag reports the first chmod failure and then nothing, ever:
+    measured, a genuine failure on a SECOND database at a second path, after the flag
+    was set, logged nothing at all. That is the swallow the pitfall is about, arriving
+    by way of the de-duplication rather than by way of the except.
+
+    Collapsing _PERMISSION_FAILURES_REPORTED back to one boolean makes this fail.
+    """
+    monkeypatch.setattr(store, "_PERMISSION_FAILURES_REPORTED", set())
+
+    first, second = tmp_path / "first", tmp_path / "second"
+    for instance in (first, second):
+        store.ensure_learner_database(instance)
+        os.chmod(store.learner_db_path_for_instance(instance), 0o644)
+
+    def refuse(self: Path, mode: int) -> None:
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(Path, "chmod", refuse)
+
+    with caplog.at_level(logging.WARNING):
+        store.connect(first).close()
+    assert "Could not restrict permissions" in caplog.text, "the first failure went unreported"
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        store.connect(second).close()
+    assert "Could not restrict permissions" in caplog.text, (
+        "a failure on a different database was silenced by the first one"
+    )
+    for instance in (first, second):
+        assert str(instance) not in caplog.text, "the path must not reach the log"
+
+
+def test_companions_left_world_readable_by_an_earlier_version_are_tightened(tmp_path: Path) -> None:
+    """The case where tightening the companions is the mechanism, not a side effect.
+
+    SQLite copies the main file's mode onto -wal and -shm when it creates them, so on a
+    fresh database they are already owner-only and the store's own chmod changes
+    nothing. It matters on the upgrade path: a robot running the previous version has a
+    0644 database AND 0644 companions, and the WAL holds pages that have not been
+    checkpointed -- so a faceprint can sit in a world-readable -wal while the main file
+    is already tightened.
+
+    Removing the companions from the loop in _restrict_permissions makes this fail.
+    """
+    store.ensure_learner_database(tmp_path)
+    main = Path(store.learner_db_path_for_instance(tmp_path))
+
+    keep_wal_alive = store.connect(tmp_path)
+    try:
+        keep_wal_alive.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p','P',0)")
+        keep_wal_alive.commit()
+
+        # -journal too. SQLite writes one instead of a WAL when journal_mode = WAL
+        # cannot take -- a filesystem without shared memory -- and it holds freed pages
+        # exactly as the WAL does. It is created here rather than provoked, because
+        # provoking it needs such a filesystem; what is being pinned is that the loop
+        # in _restrict_permissions names the suffix at all. Without this, deleting
+        # -journal from that loop leaves every test in this file green.
+        journal = Path(f"{main}-journal")
+        journal.touch()
+
+        companions = [Path(f"{main}{suffix}") for suffix in ("-wal", "-shm", "-journal")]
+        existing = [path for path in companions if path.exists()]
+        assert journal in existing, "the rollback journal is not being checked"
+        assert existing, "no WAL companions exist, so this test would prove nothing"
+
+        # Put them back the way an earlier version would have left them.
+        for path in existing:
+            os.chmod(path, 0o644)
+        assert all(stat.S_IMODE(path.stat().st_mode) == 0o644 for path in existing)
+
+        store.connect(tmp_path).close()
+
+        for path in existing:
+            mode = stat.S_IMODE(path.stat().st_mode)
+            assert mode == 0o600, f"{path.name} stayed {oct(mode)} after a connect"
+    finally:
+        keep_wal_alive.close()
+
+
+def test_erasure_holds_while_another_connection_is_open(tmp_path: Path) -> None:
+    """The case that actually broke, and the reason delete_faceprint checkpoints.
+
+    SQLite checkpoints when the LAST connection closes, so a test that opens and closes
+    one connection per call gets a checkpoint for free and proves nothing about a
+    running app -- where the conversation loop and a tool can hold connections at the
+    same time. Measured before the fix, with a second connection held open:
+    delete_faceprint returned 1 while the packed vector AND the model name were both
+    still fully recoverable from the MAIN database file, because the delete sat
+    unshipped in the WAL and the main file still held the original page.
+
+    Reverting the PRAGMA wal_checkpoint in delete_faceprint makes this fail.
+    """
+    store.ensure_learner_database(tmp_path)
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p','P',0)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    values = [0.125 * index for index in range(64)]
+    store.save_faceprint("p", "arcface-r100", values, instance_path=tmp_path)
+    packed = _faceprint_bytes(values)
+
+    holder = store.connect(tmp_path)
+    try:
+        assert store.delete_faceprint("p", instance_path=tmp_path) == 1
+
+        for path in _all_database_files(tmp_path):
+            blob = path.read_bytes()
+            assert packed not in blob, (
+                f"the faceprint survives in {path.name} while another connection is open -- "
+                "which is the state a running app is in"
+            )
+            assert b"arcface-r100" not in blob, f"the model name survives in {path.name}"
+    finally:
+        holder.close()
+
+
+def test_a_deferred_erase_is_reported_rather_than_silent(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A PASSIVE checkpoint can copy nothing and report no contention while doing it.
+
+    This is the state the docs describe and the reason they no longer promise the bytes
+    have gone. One ordinary open read transaction pins a snapshot, and measured,
+    wal_checkpoint(PASSIVE) then returns (busy=0, log_frames=2, checkpointed=0) -- so
+    busy is 0 and a busy-flag check would pass straight over it, while the packed vector
+    and the model name are both still recoverable from the MAIN database file.
+
+    The row is gone either way, which is why 1 is still the right answer. What must not
+    happen is that it goes unsaid. Removing the checkpointed-versus-log_frames report
+    from delete_faceprint makes this fail.
+    """
+    store.ensure_learner_database(tmp_path)
+    connection = store.connect(tmp_path)
+    try:
+        connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p','P',0)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    values = [0.125 * index for index in range(64)]
+    store.save_faceprint("p", "arcface-r100", values, instance_path=tmp_path)
+    packed = _faceprint_bytes(values)
+
+    # Land the vector in the main file first, so what survives below survives THERE and
+    # not merely in a companion the next checkpoint would truncate anyway.
+    settle = store.connect(tmp_path)
+    try:
+        settle.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        settle.close()
+    main = Path(store.learner_db_path_for_instance(tmp_path))
+    assert packed in main.read_bytes(), "the vector never reached the main file, so this proves nothing"
+
+    reader = sqlite3.connect(main)
+    try:
+        reader.execute("BEGIN")
+        reader.execute("SELECT count(*) FROM learners").fetchone()
+
+        with caplog.at_level(logging.WARNING):
+            assert store.delete_faceprint("p", instance_path=tmp_path) == 1
+
+        assert "still in the write-ahead log" in caplog.text, "the erase was deferred and nothing said so"
+        assert "0 of 2 frames checkpointed" in caplog.text, caplog.text
+        assert packed in main.read_bytes(), "the premise of this test no longer holds: the bytes left the file anyway"
+        assert str(tmp_path) not in caplog.text, "the path must not reach the log"
+        assert "arcface-r100" not in caplog.text, "the model name must not reach the log"
+    finally:
+        reader.rollback()
+        reader.close()
+
+    # And it is temporary: once no reader is pinning a snapshot, the bytes go.
+    closing = store.connect(tmp_path)
+    try:
+        closing.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        closing.close()
+    blob = main.read_bytes()
+    assert packed not in blob, "the vector survived a checkpoint with no reader holding it"
+    assert b"arcface-r100" not in blob, "the model name survived a checkpoint with no reader"
+
+
+def test_an_os_error_cannot_carry_the_household_directory_into_a_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The leak that made _log_safe an allow-list, pinned against its own return.
+
+    ensure_learner_database's warning never interpolated the path -- and printed it
+    anyway, because OSError embeds its filename in __str__ and _log_safe waved every
+    class but UnicodeError straight through. Measured on a real blocked path, the line
+    read: "The learner database is unavailable: [Errno 17] File exists:
+    '/.../alice-smith-household/instance'". That is a household's name in a log file on
+    a robot in their house, which is CWE-532 and the rule this module states about
+    itself.
+
+    Reverting _log_safe to render an OSError in full makes this fail.
+    """
+    household = tmp_path / "alice-smith-household"
+    household.mkdir()
+    # A FILE where the instance directory must be: mkdir then fails with FileExistsError,
+    # and the filename it carries is the household's.
+    blocked = household / "instance"
+    blocked.write_text("")
+
+    with caplog.at_level(logging.WARNING):
+        result = store.ensure_learner_database(blocked)
+
+    assert result.ready is False, "the premise is a database that could not be opened"
+    assert "alice-smith-household" not in caplog.text, "the household's directory name reached a log"
+    assert str(tmp_path) not in caplog.text, "the path reached a log"
+    # Still diagnosable: the class and the errno say what an operator needs.
+    assert "FileExistsError" in caplog.text
+    assert "errno=17" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("exc", "must_not_contain", "must_contain"),
+    [
+        (FileNotFoundError(2, "No such file", "/home/alice-smith/db"), "alice-smith", "errno=2"),
+        (PermissionError(13, "Denied", "/home/bob-jones/db"), "bob-jones", "errno=13"),
+        (UnicodeEncodeError("utf-8", "carol\ud800", 5, 6, "surrogate"), "carol", "UnicodeEncodeError"),
+        (ValueError("invalid literal for int() with base 10: 'dave-black'"), "dave-black", "ValueError"),
+        (TypeError("'<' not supported between 'str' and 'int': 'erin-white'"), "erin-white", "TypeError"),
+    ],
+)
+def test_log_safe_reduces_every_family_that_could_quote_a_value(
+    exc: BaseException, must_not_contain: str, must_contain: str
+) -> None:
+    """The allow-list, exercised on the families it exists to stop.
+
+    Each of these embeds a caller-supplied value in its own message. The old rule
+    rendered all five in full; only the UnicodeError one was ever caught.
+    """
+    rendered = str(store._log_safe(exc))
+
+    assert must_not_contain not in rendered, f"{type(exc).__name__} leaked its value"
+    assert must_contain in rendered, "the rendering must still say what happened"
+
+
+def test_log_safe_still_renders_the_families_an_operator_needs() -> None:
+    """The other half: reducing everything to a class name would be its own defect.
+
+    A guard that blinds the operator gets turned off. These four carry no caller value
+    and are rendered in full, which is what keeps the allow-list affordable.
+    """
+    assert "UNIQUE constraint failed" in str(store._log_safe(sqlite3.IntegrityError("UNIQUE constraint failed: t.id")))
+    assert "too large" in str(store._log_safe(OverflowError("Python int too large to convert to SQLite INTEGER")))
+    assert "home" in str(store._log_safe(RuntimeError("Could not determine home directory")))
+    assert "not a str" in str(store._log_safe(store._StoreRefusal("instance_path must be a path, not int, not a str")))
