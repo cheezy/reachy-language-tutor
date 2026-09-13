@@ -29,6 +29,7 @@ import pytest
 from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.tools import get_profile as module
 from reachy_language_tutor.learners import store
+from reachy_language_tutor.lesson_session import LessonSessionHolder
 from reachy_language_tutor.tools.core_tools import ToolDependencies
 from reachy_language_tutor.tools.get_profile import GetProfile
 
@@ -277,3 +278,25 @@ async def test_nothing_personal_is_logged(instance: Path, caplog: pytest.LogCapt
     messages = " ".join(record.getMessage() for record in caplog.records)
     assert SEEDED_LEARNER not in messages
     assert store.SEED_LEARNERS[0][1] not in messages
+
+
+# --- A reader must leave the running lesson exactly where it found it ------------------
+#
+# W18's round-2 review found this sibling unswept. The generic gate in
+# test_tool_identity_boundary.py names the pin states a dispatch MAY leave -- cleared,
+# unchanged, or this learner's own next lesson -- which is the right width for a rule
+# covering every tool including start_lesson. It is too wide for a tool that only reads:
+# this one has no business touching the pin at all, and nothing said so.
+
+
+@pytest.mark.asyncio
+async def test_it_leaves_the_running_lesson_exactly_where_it_found_it(instance: Path) -> None:
+    """A read that moved the pin would decide which lesson a later finish_lesson records."""
+    holder = LessonSessionHolder(SEEDED_LEARNER)
+    holder.open(lesson_id="es-01-greetings", language_code="es")
+    before = holder.read_for(SEEDED_LEARNER)
+    assert before is not None
+
+    await GetProfile()(_deps(current_learner_id=SEEDED_LEARNER, instance_path=instance, lesson_session=holder))
+
+    assert holder.read_for(SEEDED_LEARNER) == before, "a read-only tool moved the running lesson"

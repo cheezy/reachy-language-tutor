@@ -242,22 +242,25 @@ recommendation in unit XV — `fegato di vitello alla veneta`, restored.
 
 ## What a learner can actually do with this, today
 
-The content is in the database and reads back whole. **The tutor cannot yet speak it.**
+**Updated by W18.** What follows replaces this section's original text, which said the
+tutor could not yet speak this material and that no tool read lesson content. Both were
+true when W24 shipped and are false now; they are recorded here rather than deleted,
+because the limit and the date it was lifted are both part of the account.
 
-No tool reads lesson content: `start_lesson` and `finish_lesson` work in terms of which
-lesson is running, and neither they nor anything else imports `get_lesson_content`.
-Teaching *from* the new shape is W18's job, and W23's description assigns it there
-explicitly. So what a learner meets today is a converted unit's title and objective, with
-the tutor improvising as before while eighty-two dialogue turns and a hundred and thirteen
-drills sit underneath, unread.
+W18 added `get_lesson_content`, a parameter-free tool that reads the running lesson from
+the pinned session, so the tutor now teaches from the converted unit's own dialogue, notes
+and drills instead of improvising around its objective line. The locked profile tells it
+to teach that material and not to invent vocabulary or examples alongside it.
 
-What that means for this task's "end to end in the simulator" criterion is that it cannot
-be met here, and it is recorded as unmet rather than glossed. The half that can be
-executed is: a learner asking for Italian is offered `it-fast-01-what-time-is-it`, the app
-pins it, and finishing it records against it — proved through the real dispatch path in
-`test_a_learner_is_offered_a_converted_lesson_and_can_finish_it`. That test also asserts
-its own limit, by checking that no tool reads content; it will start failing the day W18
-lands, which is the right moment for somebody to come back and make the full claim.
+`test_a_learner_is_offered_a_converted_lesson_and_can_finish_it` carries the whole claim
+now rather than half of it: through the real dispatch path, a learner asking for Italian
+is offered `it-fast-01-what-time-is-it`, the app pins it, the same conversation reads back
+that unit's own turns, notes and drills, and finishing it records against it. The
+assertion that used to state the limit — that no tool read content — is gone, having done
+its job by failing the day W18 landed.
+
+What is still **not** claimed by any test is that a model teaches *well* from this. That
+is the manual session in the simulator, and it remains outstanding.
 
 ## What a reviewer should look at first
 

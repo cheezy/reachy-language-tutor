@@ -193,6 +193,14 @@ content column. The tutor improvises the entire lesson from that sentence plus f
 of teaching style, which means no two runs of the same lesson are alike and nothing
 constrains what a child is actually taught.
 
+> **Where this now stands.** The three paragraphs above describe what milestone 2 shipped,
+> and are kept because they are the argument for the decision below. They no longer
+> describe the app: W23 added the content tables, W24 converted six units of Italian FAST
+> into them, and W18 added the `get_lesson_content` tool and rewrote the locked profile, so
+> the tutor teaches a converted unit from its own dialogue, notes and drills. Italian is
+> the only language converted so far; the other four still hold title-and-objective
+> lessons, which the tutor still improvises around.
+
 **Decision: base lesson content on the Foreign Service Institute and Defense Language
 Institute courses** published at https://www.fsi-language-courses.org/fsi-courses/.
 

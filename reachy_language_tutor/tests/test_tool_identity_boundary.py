@@ -676,6 +676,96 @@ async def test_every_learner_tool_is_individually_observable(
     must answer differently for two different learners -- otherwise the attack above
     is running against it vacuously, and that must be a loud failure, not a silent one.
     """
+    # Each probe learner gets the lesson THEY would really be working on, resolved once
+    # so it is the same lesson on every dispatch. _run pins one constant for everybody,
+    # which is right for the attack itself -- it puts every tool in the same state, so
+    # equality across an injected identity means something. It is wrong here: a tool
+    # whose answer is keyed on the pinned lesson answers identically for two learners
+    # pinned to the SAME lesson, and reads as inert while being perfectly observable.
+    # Production never pins that way; start_lesson pins from the learner's own progress,
+    # and so does this. Resolved once rather than per dispatch because a tool that
+    # records a result moves the learner on, and re-resolving would pin a different
+    # lesson on the second call and report a stable tool as unstable.
+    own_lesson = {}
+    for learner, language in ((PRIMARY_LEARNER, PINNED_LANGUAGE), (HOUSEMATE_ID, HOUSEMATE_LANGUAGE)):
+        progress = store.get_progress(learner, language, instance_path=instance)
+        assert progress is not None and progress.next_lesson is not None, (
+            f"the fixture owes {language} lessons to both probe learners, and the observability "
+            "probe is vacuous without them"
+        )
+        own_lesson[learner] = (progress.next_lesson.id, language)
+    assert own_lesson[PRIMARY_LEARNER][0] != own_lesson[HOUSEMATE_ID][0], (
+        "both probe learners are pinned to the same lesson, so a tool keyed on the pinned "
+        "lesson would look inert no matter how observable it is"
+    )
+
+    # Where a tool is ALLOWED to leave the pin, per learner. Named as the permitted end
+    # states rather than as an exemption for whichever tool moves it, because a list of
+    # excused tools is only ever as complete as the last person to read it -- CLAUDE.md
+    # records four defects from exactly that shape.
+    #
+    # Three states are legitimate: cleared, because finish_lesson clears the lesson it
+    # just recorded; unchanged, because a tool that only reads must not move it; and
+    # this learner's own next lesson in ANY taught language, because that is what
+    # start_lesson pins and _benign_args may name a language other than the one pinned
+    # here. Anything else is a tool putting a learner on a lesson nobody chose.
+    def may_be_left_pinned(learner: str) -> set[str]:
+        """Return the lessons a dispatch may leave pinned for this learner, right now.
+
+        Resolved after the dispatch rather than once up front, because finish_lesson
+        records a result and moves the learner on -- so the lesson start_lesson may
+        legitimately pin next is one that did not exist as an answer before the loop
+        began. Computing this ahead of time reported start_lesson as a tool that had
+        moved the pin somewhere nobody chose, which it had not.
+        """
+        allowed = {own_lesson[learner][0]}
+        for entry in store.get_language_catalog(instance_path=instance) or ():
+            standing = store.get_progress(learner, entry.code, instance_path=instance)
+            if standing is not None and standing.next_lesson is not None:
+                allowed.add(standing.next_lesson.id)
+        return allowed
+
+    def _recorded_attempts(learner: str) -> int:
+        """Count what this learner has actually attempted, across every language."""
+        practised = store.get_practised_languages(learner, instance_path=instance)
+        return sum(entry.attempts for entry in practised or ())
+
+    moved: list[str] = []
+
+    async def run_on_their_own_lesson(tool_name: str, args: Any, deps: ToolDependencies) -> dict[str, Any]:
+        """Dispatch with this learner's own lesson pinned, re-pinned every time.
+
+        open() is last-open-wins, so re-pinning before each dispatch makes _run's own
+        conditional pin a no-op and leaves the state identical across repeated calls --
+        including after a tool clears the pin, which is what makes the stability half of
+        this test mean the same thing it did before.
+
+        Re-pinning costs one thing, and it is paid back below rather than dropped: it
+        hides a tool that MOVES the pin, which _run's conditional pin used to surface as
+        instability on the second call. So the pin is checked after every dispatch
+        against the states above.
+        """
+        learner = deps.current_learner_id
+        lesson_id, language_code = own_lesson[learner]
+        deps.lesson_session.open(lesson_id=lesson_id, language_code=language_code)
+        attempts_before = _recorded_attempts(learner)
+        result = await _run(core, registry, monkeypatch, tool_name, args, deps)
+        after = deps.lesson_session.read_for(learner)
+        if after is None:
+            # Clearing is permitted only by a dispatch that actually WROTE something,
+            # which is the condition finish_lesson ties its own clear to. Keyed on the
+            # store rather than on which tool it was, and rather than on the tool's own
+            # say-so: a list of tools excused from this check would be one name short
+            # the day a second recording tool exists, and a check reading the answer's
+            # own "recorded": true would let a tool that wrote nothing award itself the
+            # permission -- this harness exists to attack these tools, so it must not
+            # take their word for what they did.
+            if _recorded_attempts(learner) == attempts_before:
+                moved.append(tool_name)
+        elif after.lesson_id not in may_be_left_pinned(learner):
+            moved.append(tool_name)
+        return result
+
     inert = []
     unstable = []
     for tool_name in learner_tools:
@@ -683,28 +773,23 @@ async def test_every_learner_tool_is_individually_observable(
             continue
         args = _benign_args(registry[tool_name])
         repeated = _deps(current_learner_id=PRIMARY_LEARNER, instance_path=instance)
-        first = await _run(core, registry, monkeypatch, tool_name, args, repeated)
-        if first != await _run(core, registry, monkeypatch, tool_name, args, repeated):
+        first = await run_on_their_own_lesson(tool_name, args, repeated)
+        if first != await run_on_their_own_lesson(tool_name, args, repeated):
             unstable.append(tool_name)
-        as_primary = await _run(
-            core,
-            registry,
-            monkeypatch,
-            tool_name,
-            args,
-            _deps(current_learner_id=PRIMARY_LEARNER, instance_path=instance),
+        as_primary = await run_on_their_own_lesson(
+            tool_name, args, _deps(current_learner_id=PRIMARY_LEARNER, instance_path=instance)
         )
-        as_housemate = await _run(
-            core,
-            registry,
-            monkeypatch,
-            tool_name,
-            args,
-            _deps(current_learner_id=HOUSEMATE_ID, instance_path=instance),
+        as_housemate = await run_on_their_own_lesson(
+            tool_name, args, _deps(current_learner_id=HOUSEMATE_ID, instance_path=instance)
         )
         if as_primary == as_housemate:
             inert.append(tool_name)
 
+    assert not moved, (
+        "these tools left the running lesson somewhere nobody chose -- moved to a lesson the "
+        "learner was not on, or cleared without recording anything, either of which decides "
+        f"what a later finish_lesson writes: {sorted(set(moved))}"
+    )
     assert not unstable, (
         "these learner-reading tools do not answer consistently for the same learner, so "
         f"the injection attack cannot use equality against them: {unstable}"

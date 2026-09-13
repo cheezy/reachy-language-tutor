@@ -653,19 +653,18 @@ def test_a_learner_part_way_through_italian_keeps_their_history(instance: Path) 
 
 @pytest.mark.asyncio
 async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instance: Path) -> None:
-    """How far the tutor can take somebody through a converted unit today, exactly.
+    """A converted unit, end to end, through the real dispatch path.
 
-    **Read the limit of this test before trusting it.** It runs the real dispatch path
-    the realtime session uses, and it shows that a learner asking for Italian is offered
-    a converted unit, that the app pins it, and that finishing it is recorded against
-    it. What it does NOT show -- because nothing in the app can do it yet -- is the
-    tutor speaking that unit's dialogue, notes or drills. No tool reads lesson content;
-    that is W18's job, and until it lands the tutor still improvises from the objective
-    line while the real material sits in the database underneath it.
+    W24 shipped this test with half of it missing and said so: a learner was offered a
+    converted unit and could finish it, but nothing in the app could read the unit's
+    dialogue, notes or drills, so the tutor improvised from the objective line while the
+    real material sat in the database underneath it. Its closing assertion was written
+    to fail the day a tool reached that material, which is what W18 did.
 
-    So this is the honest half of the task's "end to end in the simulator" criterion:
-    the half that can be executed rather than asserted. The other half is named in the
-    completion notes and in the curation log rather than quietly left out.
+    So the missing half is here now, asserted rather than promised: between opening the
+    lesson and saving it, the same conversation reads back the unit's own turns, notes
+    and drills. What is still NOT asserted anywhere is that a model teaches well from
+    them -- that is the manual session, and no test claims it.
     """
     from reachy_language_tutor.tools import core_tools
     from reachy_language_tutor.lesson_session import LessonSessionHolder
@@ -696,6 +695,39 @@ async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instanc
     pinned = deps.lesson_session.read_for(learner)
     assert pinned is not None and pinned.lesson_id == "it-fast-01-what-time-is-it"
 
+    # The half W24 could not run. Called between the open and the save, because that is
+    # the only window in which a lesson is pinned -- which is itself the point.
+    material = await call("get_lesson_content", {})
+    assert material["have_content"] is True, material.get("reason")
+    assert material["lesson"]["title"] == "What time is it?"
+
+    content = store.get_lesson_content("it-fast-01-what-time-is-it", instance_path=instance)
+    assert content.turns and content.notes and content.drills, "the material exists in the database"
+
+    # Compared against the database rather than against a copy of the expected text: the
+    # claim is that the conversation reaches the unit that shipped, not that it reaches
+    # some text somebody typed into this test.
+    assert len(material["dialogue"]) == len(content.turns)
+    assert material["dialogue"][0]["speaker"] == content.turns[0].speaker
+    assert material["dialogue"][0]["text"] == content.turns[0].text
+    assert len(material["notes"]) == len(content.notes)
+    assert len(material["drills"]) == len(content.drills)
+
+    # A cue-response drill is the one a tutor can mark, so it is the one worth pinning:
+    # both halves present, and not the same string, or there is nothing to ask.
+    askable = [drill for drill in material["drills"] if drill["kind"] == "cue_response"]
+    assert askable, "the unit shipped cue-response drills and the tutor can see none of them"
+    for drill in askable:
+        # .get rather than [], so a drill rendered with the wrong kind's fields fails
+        # saying which drill and what was missing instead of raising KeyError.
+        assert drill.get("cue"), f"cue-response drill {drill['position']} has no cue to say: {sorted(drill)}"
+        assert drill.get("expected_response"), f"cue-response drill {drill['position']} has no answer to check"
+        assert drill["cue"] != drill["expected_response"], f"drill {drill['position']} answers itself"
+
+    # The id stays application state. Handing it back would let the next turn name a
+    # lesson, which is the whole reason start_lesson does not return one either.
+    assert "it-fast-01-what-time-is-it" not in json.dumps(material)
+
     saved = await call("finish_lesson", {"outcome": "completed", "score": 80})
     assert saved["recorded"] is True
     assert saved["lesson_title"] == "What time is it?"
@@ -704,22 +736,11 @@ async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instanc
     assert after["completed_count"] == progress["completed_count"] + 1
     assert after["last_completed"] == "What time is it?"
 
-    # And the limit itself, asserted rather than described: the content the learner just
-    # "completed" was never reachable by any tool in that conversation.
-    content = store.get_lesson_content("it-fast-01-what-time-is-it", instance_path=instance)
-    assert content.turns and content.drills, "the material exists in the database"
-    tools_dir = Path(core_tools.__file__).resolve().parent
-    # rglob and a broader match than one function name: W18 could land in a subpackage,
-    # or reach the content through another accessor, and either way the stated limit
-    # would be stale while this still passed.
-    reaches_content = re.compile(r"get_lesson_content|lesson_content|lesson_drills|lesson_dialogue_turns")
-    readers = [
-        path.name for path in tools_dir.rglob("*.py") if reaches_content.search(path.read_text(encoding="utf-8"))
-    ]
-    assert readers == [], (
-        "a tool now reads lesson content -- W18 has landed, so this test's stated limit is "
-        "stale and the end-to-end claim can finally be made properly"
-    )
+    # And the window closes with the lesson: saving it unpins it, so the material is no
+    # longer readable and the tutor is told that rather than handed the last lesson again.
+    closed = await call("get_lesson_content", {})
+    assert closed["have_content"] is False
+    assert closed["reason"] == "no_lesson_running"
 
 
 # ------------------------------------------------------------- the written record
