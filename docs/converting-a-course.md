@@ -47,6 +47,15 @@ Check, and do not skip this because it feels like a formality:
 Record the **SHA-256** in that course's entry in `converted_lessons.json`. It is what lets
 somebody later confirm they are looking at the same file you were.
 
+**Record the fetch date in the curation log too.** (`curation-log-italian-fast.md`
+predates this rule and has no fetch date. It is left as it is deliberately: nobody
+recorded that date at the time, and inventing one would be worse than the gap.) The digest pins the bytes; it does not
+pin the source. These come from a mutable third-party bucket with no object versioning,
+so if a later re-fetch disagrees with the digest, the date is the only thing that says
+which side moved and when. Consider keeping an archival snapshot as well — nothing in
+this repository preserves the file itself, and a rights position formed about bytes
+nobody can retrieve is a rights position nobody can re-check.
+
 ## Step 2: settle the rights, for this course, in writing
 
 Public domain is a property of a particular course, not of the FSI label. Some FSI
@@ -56,7 +65,21 @@ courses were produced under contract and are copyrighted.
 pdftotext -layout course.pdf course.txt
 grep -inE "copyright|©|all rights|public domain|contractor|reproduc" course.txt
 pdftotext -layout -f 1 -l 8 course.pdf -     # title page, preface, acknowledgements
+
+# The literals above are a starting point and NOT a search. Run a damage-tolerant one
+# too -- model the confusions the scan makes (o/0, y/v, r/n, i/l, t/f) and allow any one
+# character to be deleted. See curation-log-spanish.md for a worked matcher.
+pdftoppm -png -r 110 -f 1 -l 8 course.pdf pages/front   # then READ them
+pdftoppm -png -r 110 -f <last> -l <last> course.pdf pages/last
 ```
+
+**A zero from a scanned text layer is not evidence of absence, and Spanish proved it.**
+That log's search for `second printing` returned nothing, and the preface says it — as
+`second printinr`, one letter eaten. A single bad character defeats any literal, and
+measured on that scan, one badly-placed substitution defeats even the damage-tolerant
+matcher. **The conventional notice locations must be READ as page images**: the title
+page, its verso, and the final leaf at minimum. The greps corroborate; the images are
+the evidence.
 
 What you are looking for: a copyright notice anywhere; whether the preface names staff
 of the institute or an outside contractor; who signed it; and whether the scan announces

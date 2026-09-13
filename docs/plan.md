@@ -221,11 +221,34 @@ That last one is a spoken exchange with a right answer. It is what our tutor is 
 it is why these courses are worth the work of ingesting rather than writing lessons from
 scratch.
 
-Coverage is good for our five languages: French (Basic, Fast, Headstart), German (Basic,
-Fast, Headstart, Programmed), Italian (Fast, Headstart, Programmed), Portuguese (Brazilian
-Fast, Programmatic), Spanish (Basic, Fast, Programmatic, three Headstarts).
+Coverage is good for our five languages. The table below was enumerated from the CDN on
+**2026-09-13**, parsing **both** the directory prefixes and the loose objects at each
+language prefix — an earlier version of this table read only the directories, which is
+how it came to claim Spanish had no FAST when it does:
 
-### Licensing - free, but not uniformly, and it must be checked per course
+| Language | Courses (directories) | Loose files at the language prefix |
+|---|---|---|
+| French | Basic (Revised), Bridges, French-phonology, Headstart For Belgium, **Metropolitan FAST**, **Sub-Saharan FAST** | Basic Revised vols 1-2, French Phonology (2), Le Monde Francophone |
+| German | Basic, **FAST**, Headstart, Programmed | German Programmed Introduction |
+| Italian | **FAST**, Headstart, Programmed | Italian Programmed Course (2) |
+| Portuguese | **FAST**, Programmatic, Spanish to Portuguese | — |
+| Spanish | Basic, Headstart for Latin America, Headstart for Puerto Rico, Headstart for Spain, Programmatic, Secretarias | **`Fsi-SpanishFamiliarizationAndShort-termTraining.pdf` — this IS the Spanish FAST** |
+
+```bash
+# Both halves. Reading only <Prefix> is what produced the error above.
+curl -sS "https://fsi-language-courses-media.nyc3.cdn.digitaloceanspaces.com/?list-type=2&prefix=languages/<Language>/&delimiter=/"
+```
+
+**Spanish's FAST is stored as a loose object rather than a `FAST/` directory** — it is the
+only one of the five that is, which is exactly why a prefix-only listing looked correct
+for German, Italian and Portuguese and was wrong only here. FAST stands for
+Familiarization And Short-Term Training, so the filename is the course name spelled out.
+
+**French has two FAST courses**, Metropolitan and Sub-Saharan, and nothing has yet decided
+between them; that decision belongs to W42 and should be recorded there.
+
+This is a listing of a mutable third-party bucket on one day. Re-run the command rather
+than trusting the table.### Licensing - free, but not uniformly, and it must be checked per course
 
 FSI and DLI materials are works of the US federal government and so carry no copyright in
 the United States (17 U.S.C. 105). The site states plainly: "These courses are in the
