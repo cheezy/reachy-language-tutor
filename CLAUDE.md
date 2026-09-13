@@ -4,7 +4,10 @@
 
 A Reachy Mini app that helps people learn a new language. Reachy recognizes the person in front of it, loads their learner profile, and knows which languages they have worked on. When the person says which language they want to practice, Reachy looks up completed and remaining lessons and runs the next lesson as a spoken conversation, using expressive movement for feedback.
 
-Target deployment: about 20 unrelated people, each with a Reachy Mini Wireless in their own home.
+Target deployment: unrelated households, each with a Reachy Mini Wireless in their own home. The
+number of them is deliberately not fixed — assume it can grow by orders of magnitude, and prefer
+decisions that do not care either way. What matters is the shape rather than the count: every robot
+is on its own, in a home nobody administers, holding exactly one household's data.
 
 Full planning notes: `docs/plan.md`
 

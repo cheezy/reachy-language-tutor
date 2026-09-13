@@ -10,10 +10,11 @@ expressive reactions all work. Face recognition is *built but not yet wired in* 
 `faceprints` table stores them, but the current learner is still a constant in `main.py`.
 Connecting the camera to it, and then to identity, is the milestone in progress.
 
-The target deployment is about twenty unrelated households, each with their own robot. That
-number shapes almost every decision here: everything runs on the robot today, a failure in
-somebody's living room has to degrade rather than break, and face data stays on the device
-permanently. A later milestone moves *learning progress* to a hosted backend and routes LLM
+The target deployment is unrelated households, each with their own robot, and the count is
+deliberately left open — it could be a handful or a few thousand. The *shape* is what drives
+almost every decision here, not the number: nobody administers these machines, so everything
+runs on the robot today, a failure in somebody's living room has to degrade rather than break,
+and face data stays on the device permanently. A later milestone moves *learning progress* to a hosted backend and routes LLM
 calls through a proxy — names, emails and progress may leave the home; faceprints never do.
 
 ---

@@ -335,8 +335,9 @@ def log_handler_message(msg: dict) -> None:
         #   printing zero and reading as a deaf microphone.
         #
         #   The WORDS move to DEBUG, which is --debug: an opt-in an operator asks for
-        #   on a robot they are debugging, rather than the default on ~20 unrelated
-        #   households whose logs nobody chose to collect.
+        #   on a robot they are debugging, rather than the default in every unrelated
+        #   household whose logs nobody chose to collect. The argument does not depend on
+        #   how many households there are, and only gets stronger as they multiply.
         #
         # The console UI is untouched. It is fed by ConsoleApp._dispatch_transcript
         # over JSON-RPC, not by this log line, so the conversation still displays in

@@ -603,8 +603,9 @@ def test_a_spoken_name_does_not_reach_the_log_that_is_written_anyway(caplog: pyt
 
     get_profile exists so Reachy can greet the learner by name, so the sentence
     right after it returns carries that name -- as transcript, which D3 did not
-    touch. INFO is written whether or not --debug is on, in about 20 unrelated
-    homes, so this is the line that actually leaks.
+    touch. INFO is written whether or not --debug is on, in every home the app runs
+    in, so this is the line that actually leaks. However many that turns out to be, it
+    is written in all of them.
     """
     logged = _log_one(_transcript("assistant", SPOKEN_GREETING), caplog)
 

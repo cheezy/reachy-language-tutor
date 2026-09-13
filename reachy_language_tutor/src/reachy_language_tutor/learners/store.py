@@ -1805,8 +1805,13 @@ _LESSON_BY_ID_SQL = "SELECT id, language_code, position, title, objective FROM l
 # A join across four optional one-to-many tables multiplies their rows together, so the
 # caller would have to undo the product to get four lists back -- and a lesson with no
 # drills would lose its turns to an inner join or need an outer one per table. Five
-# indexed lookups on the same primary key are cheap here: at ~20 households the whole
-# catalog is a few hundred rows, and each statement reads one lesson's worth.
+# indexed lookups on the same primary key are cheap here: the whole catalog is a few
+# hundred rows, and each statement reads one lesson's worth.
+#
+# Note this does NOT depend on how large the deployment gets. A robot's database holds
+# the shipped catalog plus ONE household, so its row count is the same whether twenty
+# robots exist or twenty thousand -- an earlier version of this comment cited a fleet
+# size, which was the wrong quantity for the claim it was supporting.
 #
 # Ordered in SQL, never in Python. Each ORDER BY names the column its table's primary
 # key makes unique, so "in order" has exactly one meaning and cannot tie.

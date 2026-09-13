@@ -2,8 +2,8 @@
 
 ## What I understand you want
 
-A Reachy Mini app for language practice, deployed to ~20 unrelated households, each with a
-Wireless unit. Reachy recognises who is in front of it, loads that person's learner profile,
+A Reachy Mini app for language practice, deployed to unrelated households — an open number of
+them — each with a Wireless unit. Reachy recognises who is in front of it, loads that person's learner profile,
 finds out which language they want to practise, looks up the next lesson, and runs it as a
 spoken conversation with expressive movement as feedback.
 
