@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -82,23 +83,57 @@ def _normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _installed_versions(python: str) -> dict[str, str]:
-    """Ask pip what is installed, for the distributions worth watching."""
+# Variables that make a spawned interpreter report somebody else's packages. This is
+# not hypothetical: the dev environment's python sets PYTHONPATH to its OWN
+# site-packages, subprocess inherits it, and an apps_venv interpreter launched from
+# there loaded the DEV env's pip and listed the DEV env's packages -- while reporting
+# sys.prefix as apps_venv, so it looked right. The first version of this script
+# confidently described the wrong environment. `env` in a shell does not show it,
+# because the shell does not have it; only the python process does.
+_ENV_THAT_LEAKS = ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT", "PYTHONSTARTUP")
+
+
+def _clean_env() -> dict[str, str]:
+    """The current environment minus anything that redirects a child's import machinery."""
+    return {k: v for k, v in os.environ.items() if k not in _ENV_THAT_LEAKS}
+
+
+def _probe(python: str, code: str) -> Any:
+    """Run a snippet IN the target interpreter and parse its JSON, with the env cleaned."""
     try:
-        raw = subprocess.run(
-            [python, "-m", "pip", "list", "--format=json"],
+        out = subprocess.run(
+            [python, "-c", code],
             capture_output=True,
             text=True,
             timeout=60,
             check=True,
+            env=_clean_env(),
         ).stdout
-    except (subprocess.SubprocessError, OSError) as exc:
+        return json.loads(out)
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
         return {"__error__": type(exc).__name__}
 
-    # Normalise per PEP 503 before comparing: pip reports this SDK as "reachy_mini"
+
+def _installed_versions(python: str) -> dict[str, str]:
+    """What the TARGET interpreter itself can see, for the distributions worth watching.
+
+    importlib.metadata rather than `pip list`, because `-m pip` resolves through the
+    inherited path and can load a different environment's pip entirely. This reads the
+    target's own metadata through its own sys.path, so the answer belongs to the
+    interpreter being named.
+    """
+    code = (
+        "import json;from importlib import metadata;"
+        "print(json.dumps({(d.metadata['Name'] or ''): d.version for d in metadata.distributions()}))"
+    )
+    found = _probe(python, code)
+    if "__error__" in found:
+        return {"__error__": found["__error__"]}
+
+    # Normalise per PEP 503 before comparing: this SDK is distributed as "reachy_mini"
     # while its own pyproject asks for "reachy-mini", and a plain lowercase match
     # reported the installed package as absent -- measured, on the first run.
-    installed = {_normalize(entry["name"]): entry["version"] for entry in json.loads(raw)}
+    installed = {_normalize(name): version for name, version in found.items() if name}
     return {name: installed.get(_normalize(name), "(absent)") for name in _WATCHED}
 
 
@@ -109,14 +144,15 @@ def _cv2_identity(python: str) -> dict[str, str]:
     ship the SAME module name, so with both installed the answer is whichever landed in
     site-packages last. The file path is what distinguishes them.
     """
-    probe = "import cv2, json; print(json.dumps({'version': cv2.__version__, 'file': cv2.__file__}))"
-    try:
-        out = subprocess.run(
-            [python, "-c", probe], capture_output=True, text=True, timeout=60, check=True
-        ).stdout
-        return json.loads(out)
-    except (subprocess.SubprocessError, OSError, ValueError) as exc:
-        return {"error": type(exc).__name__}
+    code = (
+        "import json\n"
+        "try:\n"
+        "    import cv2\n"
+        "    print(json.dumps({'version': cv2.__version__, 'file': cv2.__file__}))\n"
+        "except Exception as exc:\n"
+        "    print(json.dumps({'version': '(absent)', 'file': type(exc).__name__}))\n"
+    )
+    return _probe(python, code)
 
 
 def _daemon_status() -> dict[str, Any]:
@@ -130,11 +166,19 @@ def _daemon_status() -> dict[str, Any]:
 
 
 def snapshot(python: str) -> dict[str, Any]:
-    """Everything worth comparing, in one object."""
+    """Everything worth comparing, in one object.
+
+    `prefix` is recorded and checked rather than assumed: a snapshot that names one
+    environment and describes another is worse than no snapshot, and that is exactly
+    what this script did before _ENV_THAT_LEAKS existed.
+    """
+    installed = _installed_versions(python)
+    prefix = _probe(python, "import sys,json;print(json.dumps({'prefix':sys.prefix}))")
     return {
         "python": python,
-        "sdk_version": _installed_versions(python).get("reachy-mini"),
-        "installed": _installed_versions(python),
+        "prefix": prefix.get("prefix", prefix.get("__error__")),
+        "sdk_version": installed.get("reachy-mini"),
+        "installed": installed,
         "cv2": _cv2_identity(python),
         "daemon": _daemon_status(),
     }
@@ -199,6 +243,7 @@ def main() -> int:
     print(f"  opencv-python          {record['installed'].get('opencv-python')}")
     print(f"  opencv-python-headless {record['installed'].get('opencv-python-headless')}")
     print(f"  cv2 resolves to        {record['cv2'].get('file')}")
+    print(f"  (environment inspected: {record['prefix']})")
     print(f"  daemon                 {record['daemon']}")
     return 0
 
