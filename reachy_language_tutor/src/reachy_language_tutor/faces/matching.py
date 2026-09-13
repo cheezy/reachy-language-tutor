@@ -106,6 +106,15 @@ FACE_MATCH_LONE_MEMBER_FLOOR = 0.65
 # scripts/calibrate_faceprints.py against a real set, recording the table beside
 # FACE_MATCH_SIMILARITY_FLOOR, and only then setting this True. Setting it True without
 # that is the exact "tune until it looks fine" failure the task's pitfalls name.
+#
+# SHIPPING UNCALIBRATED WAS AN EXPLICIT DECISION, not an oversight. A security review
+# raised the unmeasured threshold as an open authorization risk during W26; the project
+# owner accepted it and assigned the consequence to W29, the task that wires recognition
+# into choosing whose profile the tutor teaches from. So W29 is where this flag has to
+# stop being decorative: a caller that reads False and switches profiles anyway has
+# taken the risk without deciding to. The test in tests/test_face_matching.py that
+# refuses any caller of match_faceprint which never mentions this name is the mechanism
+# that makes W29 confront it rather than inherit it silently.
 THRESHOLD_CALIBRATED = False
 
 

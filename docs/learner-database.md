@@ -126,6 +126,17 @@ only, so the slash is refused. The `_fp32` suffix is load-bearing too — the sa
 ships int8 variants whose numbers differ, so a faceprint from one is not comparable
 with a faceprint from the other. CPU only; no GPU is used or required.
 
+**The matching threshold is not calibrated, and that was accepted deliberately.** The
+floor, the margin and the lone-member floor were chosen by argument — the floor sits
+above the model author's published 0.363 operating point — but never measured against
+real faces, because measuring needs face images and this database's whole promise is
+that none are kept. A security review raised it during W26; the project owner accepted
+it and assigned it to W29, the task that wires recognition into choosing a profile.
+`faces.THRESHOLD_CALIBRATED` is exported `False` so the state is readable at runtime,
+and `scripts/calibrate_faceprints.py` measures it against an operator's own directory
+outside the repository. Until that is run, a recognition is a good guess and not a
+proof of who is present.
+
 **There is no liveness check.** A photograph held up to the camera, or a face on a
 phone or television, is treated as that person if the detector accepts it. That is
 recorded rather than implied. What bounds the consequence is what recognition is used
