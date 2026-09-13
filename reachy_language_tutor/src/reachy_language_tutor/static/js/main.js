@@ -7,6 +7,7 @@ import {
   mountPersonalityBadge,
   showPersonalityBadge,
 } from "./personality-badge.js";
+import { refreshAvailability } from "./api.js";
 import { $ } from "./ui.js";
 import { mountHomeView } from "./views/home.js";
 import { mountTalkView } from "./views/talk.js";
@@ -45,6 +46,15 @@ function applyEmbeddedTheme() {
 
 function boot() {
   applyEmbeddedTheme();
+
+  // Ask, once, what this surface will actually run, before any view renders a control.
+  // Every gate in the views reads the answer synchronously and is permissive until it
+  // arrives, so without this the first render of home/tools/talk offers writers the
+  // server refuses -- which is the whole defect D26 exists to fix, reintroduced one
+  // layer up. Deliberately not awaited: a slow or failed status must not stop the app
+  // from starting, and a late answer only means the first render is permissive, which
+  // is the same state the views already handle.
+  refreshAvailability();
 
   const outlet = $("#view-outlet");
   if (!outlet) {

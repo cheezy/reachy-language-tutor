@@ -859,6 +859,19 @@ class LocalStream:
                 "can_proceed": has_hf_connection,
                 "can_proceed_with_hf": has_hf_connection,
                 "requires_restart": not self._can_rebuild_handler(),
+                # What this caller is actually allowed to invoke, DERIVED from the
+                # allow-list rather than restated. D26: the settings UI used to offer
+                # thirteen controls whose writers this surface refuses, so a click got a
+                # JSON-RPC error and no explanation. The UI needs to know what is
+                # permitted, and the only way to keep it in step with console.py is to
+                # send the same object the registrar enforces -- a second list in
+                # JavaScript would drift the first time a method is added, which is the
+                # deny-list shape CLAUDE.md records four defects against.
+                #
+                # This is a CONVENIENCE for the UI and never a control: the registrar
+                # still refuses anything outside the set, so a caller that ignores this
+                # field, or skips the UI entirely, is refused exactly as before.
+                "rpc_methods_available": sorted(_RPC_METHODS_EXPOSED_ON_THE_NETWORK),
                 **backend_connection,
             }
 

@@ -3,6 +3,10 @@
 const DEFAULT_TIMEOUT_MS = 8000;
 const TOOL_SPACE_TIMEOUT_MS = 60000;
 
+// How long /rpc may still be coming up after the page loads, and how often to re-ask.
+const STARTUP_POLL_MS = 2000;
+const STARTUP_DEADLINE_MS = 90000;
+
 const RPC_URL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/rpc`;
 
 class RpcError extends Error {
@@ -72,8 +76,71 @@ function handleMessage(msg) {
   }
 }
 
+/**
+ * Which methods this surface will actually run, as the server reported them.
+ *
+ * null means "not asked yet". The server sends `rpc_methods_available` on
+ * conversation.status, derived from its own allow-list -- see console.py. We never
+ * keep a list of REFUSED methods here: that would be a second copy of the rule, in
+ * another language, drifting from the first the day a method is added. What is
+ * permitted arrives from the one place that enforces it.
+ */
+let availableMethods = null;
+
+/** Remember what the server says it will run. Called with every status result. */
+function rememberAvailability(status) {
+  const listed = status?.rpc_methods_available;
+  if (Array.isArray(listed)) availableMethods = new Set(listed);
+  return status;
+}
+
+/**
+ * Whether the server will run this method, as far as we have been told.
+ *
+ * Unknown -> true. Before the first status arrives we must not disable controls on a
+ * guess: a UI that greys out a working button because it has not finished loading is
+ * worse than one that lets the call fail honestly.
+ */
+export function isAvailable(method) {
+  return availableMethods === null || availableMethods.has(method);
+}
+
+/**
+ * Ask the server what it will run, retrying while it is still coming up. Never throws.
+ *
+ * Retried, not asked once: /rpc can be unready for up to STARTUP_DEADLINE_MS after the
+ * page loads -- that is why untilReady exists at all -- and a single failed ask would
+ * leave availability unknown for the whole tab session, not merely for the first paint.
+ * Unknown is permissive, so that is a session in which every gate reads "available" and
+ * clicks reach writers the server refuses. Retrying is what makes the permissive window
+ * short rather than indefinite.
+ *
+ * Still permissive if it never succeeds: the chokepoint in rpcCall and the server's own
+ * registrar both still refuse, so the cost of never learning is a worse message, not a
+ * writer that runs.
+ */
+export async function refreshAvailability() {
+  if (availableMethods !== null) return availableMethods;
+  const deadline = Date.now() + STARTUP_DEADLINE_MS;
+  for (;;) {
+    try {
+      await getStatus();
+      return availableMethods;
+    } catch {
+      if (Date.now() >= deadline) return availableMethods;
+    }
+    await new Promise((resolve) => setTimeout(resolve, STARTUP_POLL_MS));
+  }
+}
+
 /** Call a JSON-RPC method and await its result. Rejects with RpcError. */
 export async function rpcCall(method, params = {}, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  if (!isAvailable(method)) {
+    // Refused here rather than on the wire. The server would refuse it anyway; doing it
+    // at the single chokepoint means no control can reach a refused writer however it
+    // was wired, and the caller gets the same stable reason string either way.
+    throw new RpcError(`${method} is not available over the network`, "not_available_over_the_network");
+  }
   await connect();
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     throw new RpcError("not connected", "disconnected");
@@ -103,9 +170,6 @@ export function subscribe(method, cb) {
   };
 }
 
-const STARTUP_POLL_MS = 2000;
-const STARTUP_DEADLINE_MS = 90000;
-
 /** Retry a request while the backend is still coming up at startup. */
 export async function untilReady(requestFn, signal, onRetry) {
   const deadline = Date.now() + STARTUP_DEADLINE_MS;
@@ -125,7 +189,7 @@ export async function untilReady(requestFn, signal, onRetry) {
   }
 }
 
-export const getStatus = () => rpcCall("conversation.status");
+export const getStatus = () => rpcCall("conversation.status").then(rememberAvailability);
 
 export const listPersonalities = () => rpcCall("personalities.list");
 export const loadPersonality = (name) => rpcCall("personalities.load", { name });
@@ -177,6 +241,11 @@ const ERROR_MESSAGES = Object.freeze({
   not_deletable: "This personality can't be deleted.",
   loop_unavailable: "Reachy is still starting up. Try again in a moment.",
   tool_space_not_installed: "That Tool Space is no longer installed.",
+  // The network refusal, in the learner's register rather than the protocol's. See
+  // docs/rpc-control-surface.md for why these writers are refused at all.
+  not_available_over_the_network:
+    "This can't be changed from here. Reachy is configured from its own files on the robot.",
+  mic_is_read_only: "The microphone can't be switched on or off from here.",
 });
 
 /** Map a thrown error to user-facing copy, falling back to its raw message. */

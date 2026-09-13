@@ -35,6 +35,31 @@ function appendChildren(parent, children) {
   }
 }
 
+/**
+ * Turn off controls whose writer this surface refuses, and say why.
+ *
+ * D26: these controls used to look ordinary, and a click produced a JSON-RPC error the
+ * page did nothing with -- the robot read as broken rather than as deliberately
+ * restricted. Disabling is only half the job; the sentence is the other half, because a
+ * greyed-out button with no explanation is its own small mystery.
+ *
+ * Takes the controls, not a container, so a caller cannot accidentally disable the
+ * read-only parts of its own form.
+ */
+export function markUnavailable(controls, status, message) {
+  for (const control of controls.flat(Infinity)) {
+    if (!control) continue;
+    control.disabled = true;
+    control.setAttribute("aria-disabled", "true");
+    control.title = message;
+  }
+  if (status) {
+    status.textContent = message;
+    status.classList.add("is-warning");
+    status.classList.remove("is-error");
+  }
+}
+
 export function $(selector, root = document) {
   return root.querySelector(selector);
 }

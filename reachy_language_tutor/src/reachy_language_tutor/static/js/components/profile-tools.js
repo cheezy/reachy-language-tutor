@@ -5,6 +5,7 @@ import {
   getProfileTools,
   resetProfileTools,
   saveProfileTools,
+  isAvailable,
 } from "../api.js";
 import { h, prettifyProfileName, prettifyToolName } from "../ui.js";
 import { confirmDialog } from "./confirm-dialog.js";
@@ -74,7 +75,7 @@ export function buildProfileToolsSection({ signal, initialProfile = null, onProf
   }
 
   function syncActions() {
-    const editable = currentPayload?.editable !== false;
+    const editable = currentPayload?.editable !== false && toolWritersAvailable();
     profileSelect.disabled = busy || !currentPayload?.profiles?.length;
     toolGroups.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
       const disabled = busy || !editable;
@@ -106,11 +107,27 @@ export function buildProfileToolsSection({ signal, initialProfile = null, onProf
     }
   }
 
+  /** Whether this surface will run either tool-access writer at all. */
+  function toolWritersAvailable() {
+    return isAvailable("profile_tools.save") && isAvailable("profile_tools.reset");
+  }
+
+  /** Why the Save/Restore buttons are off, or "" when they are on. */
+  function lockedReason(payload) {
+    if (!toolWritersAvailable()) {
+      return "Tool access is set from Reachy's own files on the robot, so it can't be changed from here.";
+    }
+    if (payload?.editable === false) return "Tool editing is locked by the administrator.";
+    return "";
+  }
+
   function renderSummary(payload) {
     const enabledCount = payload.enabled_tools?.length || 0;
     const pills = [];
     if (payload.is_active) pills.push(h("span", { class: "settings-pill is-active" }, "Active"));
-    if (payload.editable === false) pills.push(h("span", { class: "settings-pill" }, "Locked"));
+    if (payload.editable === false || !toolWritersAvailable()) {
+      pills.push(h("span", { class: "settings-pill" }, "Locked"));
+    }
     summary.replaceChildren(
       h(
         "div",
@@ -196,7 +213,9 @@ export function buildProfileToolsSection({ signal, initialProfile = null, onProf
     renderSummary(payload);
     renderToolGroups(payload);
     status.classList.remove("is-error");
-    status.textContent = payload.editable === false ? "Tool editing is locked by the administrator." : "";
+    const locked = lockedReason(payload);
+    status.textContent = locked;
+    status.classList.toggle("is-warning", locked !== "");
     setDirty(false);
   }
 

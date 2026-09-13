@@ -4,7 +4,15 @@
  * Robot stays live, tapping the orb only mutes or unmutes the user's mic.
  */
 
-import { applyPersonality, getMicState, listPersonalities, setMicMuted, subscribe } from "../api.js";
+import {
+  applyPersonality,
+  describeError,
+  getMicState,
+  isAvailable,
+  listPersonalities,
+  setMicMuted,
+  subscribe,
+} from "../api.js";
 import { ORB_STATES } from "../constants.js";
 import { createOrb, mapActivityToState } from "../orb.js";
 import { consumePendingApply } from "../pending-apply.js";
@@ -70,7 +78,7 @@ export async function mountTalkView({ outlet, signal }) {
     } catch (error) {
       if (signal.aborted) return;
       orb.setState(ORB_STATES.ERROR);
-      caption.textContent = `Failed to apply personality: ${error?.message || error}`;
+      caption.textContent = `Failed to apply personality: ${describeError(error)}`;
       return;
     }
     if (signal.aborted) return;
@@ -133,7 +141,7 @@ export async function mountTalkView({ outlet, signal }) {
       muted = Boolean(data?.muted);
     } catch (error) {
       if (!signal.aborted) {
-        caption.textContent = `Failed to toggle the microphone: ${error?.message || error}`;
+        caption.textContent = `Failed to toggle the microphone: ${describeError(error)}`;
       }
       return;
     } finally {
@@ -151,7 +159,13 @@ export async function mountTalkView({ outlet, signal }) {
     if (signal.aborted || personalityState == null) return;
     activePersonality = personalityState.current;
     setPersonality(personalityState.current);
-    const shouldHide = personalityState.locked || personalityState.current === personalityState.startup;
+    // Hidden rather than disabled here, unlike the settings forms: this button only
+    // appears at all when there is something to save, so a permanently greyed-out one
+    // would be a control the learner never saw working and cannot act on.
+    const shouldHide =
+      personalityState.locked ||
+      personalityState.current === personalityState.startup ||
+      !isAvailable("personalities.apply");
     if (defaultAction) {
       defaultAction.hidden = shouldHide;
     }
@@ -168,7 +182,7 @@ export async function mountTalkView({ outlet, signal }) {
       caption.textContent = `"${prettifyProfileName(activePersonality)}" will be used at startup.`;
     } catch (error) {
       if (!signal.aborted) {
-        caption.textContent = `Failed to save default: ${error?.message || error}`;
+        caption.textContent = `Failed to save default: ${describeError(error)}`;
       }
     } finally {
       defaultAction.disabled = false;

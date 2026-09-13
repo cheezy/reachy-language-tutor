@@ -3,6 +3,7 @@
 import {
   addToolSpace,
   describeError,
+  isAvailable,
   listToolSpaces,
   removeToolSpace,
 } from "../api.js";
@@ -107,14 +108,34 @@ function buildToolSpacesSection({ signal, onBeforeChange, onChanged } = {}) {
     });
   }
 
+  /**
+   * Why the Add/Remove controls are off, or "" when they are on.
+   *
+   * Two different reasons, and a learner deserves the right one: the administrator
+   * locked the profile, or this surface refuses the writer over the network. Reusing the
+   * existing `editable` flag keeps one disable path rather than two racing each other.
+   */
+  function lockedReason(payload) {
+    if (!isAvailable("tool_spaces.add") || !isAvailable("tool_spaces.remove")) {
+      return "Tool Spaces are installed from Reachy's own files on the robot, so they can't be changed from here.";
+    }
+    if (payload?.editable === false) return "Tool Space editing is locked by the administrator.";
+    return "";
+  }
+
   function render(payload) {
-    editable = payload?.editable !== false;
+    const locked = lockedReason(payload);
+    editable = locked === "";
+    // Assigned unconditionally: a re-render after the reason goes away -- availability
+    // arrives, or the administrator unlocks the profile -- must not leave the old
+    // sentence and its warning colour on screen. profile-tools.js does the same.
+    status.textContent = locked;
+    status.classList.toggle("is-warning", locked !== "");
     const spaces = Array.isArray(payload?.spaces) ? payload.spaces : [];
     list.replaceChildren();
     if (!spaces.length) {
       list.appendChild(h("p", { class: "settings-hint" }, "No Tool Spaces installed."));
       setBusy(busy);
-      if (!editable) status.textContent = "Tool Space editing is locked by the administrator.";
       return;
     }
 

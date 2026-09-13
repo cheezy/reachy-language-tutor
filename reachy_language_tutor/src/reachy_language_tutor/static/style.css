@@ -203,6 +203,39 @@ button.ghost:hover { border-color: rgba(94, 240, 193, 0.4); }
 .status.warn { color: var(--warn); }
 .status.error { color: var(--error); }
 
+/* Status lines in the SPA views.
+ *
+ * D26 added explanatory copy to controls this surface refuses over the network, and an
+ * explanation nobody can see is not an explanation -- so the classes that copy relies on
+ * are defined here. These follow .status/.status.warn above rather than inventing a
+ * second scheme; the SPA simply uses longer class names than the legacy page did.
+ *
+ * Narrow on purpose: style.css is also missing .is-disabled, .settings-pill and
+ * .settings-hint, which the views already reference. That gap predates this change and
+ * is left alone rather than swept in unasked. */
+.settings-status,
+.view-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.settings-status.is-warning,
+.view-status.is-warning { color: var(--warn); }
+.settings-status.is-error,
+.view-status.is-error { color: var(--error); }
+
+/* A refused control should read as off rather than merely unresponsive.
+ *
+ * Scoped to the SPA views. This stylesheet also dresses the legacy page that index.html
+ * actually loads today, and restyling every disabled control there is outside what this
+ * change was asked to touch. */
+.view button:disabled,
+.view select:disabled,
+.view input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 @media (max-width: 760px) {
   .hero h1 { font-size: 26px; }
   button { width: 100%; justify-content: center; }

@@ -8,6 +8,7 @@ import {
   loadPersonality,
   savePersonality,
   untilReady,
+  isAvailable,
 } from "../api.js";
 import { AVATAR_BY_PROFILE, ROUTES, avatarFor } from "../constants.js";
 import { $, h, prettifyProfileName } from "../ui.js";
@@ -56,10 +57,18 @@ export async function mountHomeView({ outlet, signal, navigate }) {
   const current = personalities?.current;
   const lockedTo = personalities?.locked ? personalities.locked_to : null;
 
+  // What this surface will actually run. Switching, editing and deleting a personality
+  // are three separate writers, and the network refuses each on its own terms, so they
+  // are asked about separately rather than collapsed into one "read-only" flag.
+  const canApply = isAvailable("personalities.apply");
+  const canSave = isAvailable("personalities.save");
+  const canDelete = isAvailable("personalities.delete");
+
   grid.replaceChildren();
   for (const name of choices) {
-    const disabled = Boolean(lockedTo) && name !== lockedTo;
-    const editable = !personalities?.locked && name.startsWith("user_personalities/");
+    const disabled = (Boolean(lockedTo) && name !== lockedTo) || !canApply;
+    const editable =
+      canSave && !personalities?.locked && name.startsWith("user_personalities/");
     grid.appendChild(
       buildPersonalityCard({
         name,
@@ -71,14 +80,21 @@ export async function mountHomeView({ outlet, signal, navigate }) {
         onEdit: editable ? () => handleEditClick(name) : null,
         // No delete affordance for the active personality: it would keep
         // running with no card to manage it.
-        onDelete: editable && name !== current ? (slot) => handleDeleteClick(name, slot) : null,
+        onDelete:
+          canDelete && editable && name !== current ? (slot) => handleDeleteClick(name, slot) : null,
       })
     );
   }
-  if (!lockedTo) grid.appendChild(buildCustomCard({ onClick: handleCustomClick }));
+  if (!lockedTo && canSave) grid.appendChild(buildCustomCard({ onClick: handleCustomClick }));
 
   if (lockedTo) {
     status.textContent = `Personality locked to “${prettifyProfileName(lockedTo)}”; switching is disabled.`;
+    status.classList.add("is-warning");
+  } else if (!canApply || !canSave || !canDelete) {
+    // Said once, for the grid, rather than per card: thirteen little notices would be
+    // worse than the silence this replaces.
+    status.textContent =
+      "Personalities are set from Reachy's own files on the robot, so they can't be changed from here.";
     status.classList.add("is-warning");
   }
 

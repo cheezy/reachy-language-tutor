@@ -8,8 +8,9 @@ import {
   listVoices,
   saveBackendConfig,
   untilReady,
+  isAvailable,
 } from "../api.js";
-import { h } from "../ui.js";
+import { h, markUnavailable } from "../ui.js";
 
 const HF_CONNECTION_MODES = Object.freeze({
   DEPLOYED: "deployed",
@@ -28,7 +29,7 @@ export async function mountSettingsView({ outlet, signal }) {
   const connectionSection = buildConnectionSection({
     onSaved: () =>
       Promise.all([
-        refreshStatus({ statusSection, connectionSection, signal }),
+        refreshStatus({ statusSection, connectionSection, voiceSection, signal }),
         refreshVoices({ voiceSection, signal }),
       ]),
   });
@@ -51,7 +52,7 @@ export async function mountSettingsView({ outlet, signal }) {
   outlet.replaceChildren(view);
 
   await Promise.all([
-    refreshStatus({ statusSection, connectionSection, signal }),
+    refreshStatus({ statusSection, connectionSection, voiceSection, signal }),
     refreshVoices({ voiceSection, signal }),
   ]);
 }
@@ -123,11 +124,15 @@ function buildConnectionSection({ onSaved } = {}) {
     form
   );
 
+  // Sticky: once the server has told us this writer is refused, nothing in the busy
+  // handling or the field-sync below may quietly switch the control back on.
+  let unavailable = false;
+
   function syncLocalFields() {
     const isLocal = hfModeSelect.value === HF_CONNECTION_MODES.LOCAL;
     hfLocalFields.style.display = isLocal ? "" : "none";
-    hfHostInput.disabled = !isLocal;
-    hfPortInput.disabled = !isLocal;
+    hfHostInput.disabled = unavailable || (!isLocal);
+    hfPortInput.disabled = unavailable || (!isLocal);
     hfHostInput.required = isLocal;
     hfPortInput.required = isLocal;
     hint.textContent = HF_MODE_HINTS[hfModeSelect.value] || "";
@@ -161,9 +166,9 @@ function buildConnectionSection({ onSaved } = {}) {
       status.textContent = `Failed to save: ${describeError(error)}`;
       status.classList.add("is-error");
     } finally {
-      submitButton.disabled = false;
-      hfModeSelect.disabled = false;
-      syncLocalFields();
+      submitButton.disabled = unavailable;
+      hfModeSelect.disabled = unavailable;
+      if (!unavailable) syncLocalFields();
       form.removeAttribute("aria-busy");
     }
   });
@@ -172,6 +177,15 @@ function buildConnectionSection({ onSaved } = {}) {
 
   return {
     element,
+    lockIfUnavailable() {
+      if (unavailable || isAvailable("backend.config")) return;
+      unavailable = true;
+      markUnavailable(
+        [submitButton, hfModeSelect, hfHostInput, hfPortInput],
+        status,
+        "The connection is set from Reachy's own files on the robot, so it can't be changed from here."
+      );
+    },
     syncFromStatus(payload) {
       if (Object.values(HF_CONNECTION_MODES).includes(payload?.hf_connection_mode)) {
         hfModeSelect.value = payload.hf_connection_mode;
@@ -229,14 +243,27 @@ function buildVoiceSection() {
       status.textContent = `Failed to apply: ${describeError(error)}`;
       status.classList.add("is-error");
     } finally {
-      submitButton.disabled = !select.value;
-      select.disabled = !select.value;
+      submitButton.disabled = voiceUnavailable || !select.value;
+      select.disabled = voiceUnavailable || !select.value;
       form.removeAttribute("aria-busy");
     }
   });
 
+  // Sticky, for the same reason as the connection section above: setOptions re-enables
+  // these controls every time the voice list is refreshed.
+  let voiceUnavailable = false;
+
   return {
     element,
+    lockIfUnavailable() {
+      if (voiceUnavailable || isAvailable("voices.apply")) return;
+      voiceUnavailable = true;
+      markUnavailable(
+        [submitButton, select],
+        status,
+        "The voice is set from Reachy's own files on the robot, so it can't be changed from here."
+      );
+    },
     setOptions(voices, current) {
       select.replaceChildren();
       if (!voices.length) {
@@ -251,9 +278,9 @@ function buildVoiceSection() {
         if (v === current) opt.selected = true;
         select.appendChild(opt);
       }
-      select.disabled = false;
-      submitButton.disabled = false;
-      status.textContent = "";
+      select.disabled = voiceUnavailable;
+      submitButton.disabled = voiceUnavailable;
+      if (!voiceUnavailable) status.textContent = "";
     },
   };
 }
@@ -339,12 +366,16 @@ function formatHfTarget(payload) {
   return `${host}:${port || DEFAULT_HF_PORT}`;
 }
 
-async function refreshStatus({ statusSection, connectionSection, signal }) {
+async function refreshStatus({ statusSection, connectionSection, voiceSection, signal }) {
   try {
     const payload = await untilReady(getStatus, signal);
     if (signal.aborted) return;
     statusSection.render(payload);
     connectionSection.syncFromStatus(payload);
+    // The status payload is what carries rpc_methods_available, so this is the first
+    // moment either section can know whether its writer will run.
+    connectionSection.lockIfUnavailable();
+    voiceSection?.lockIfUnavailable();
   } catch (error) {
     if (signal.aborted) return;
     statusSection.renderUnavailable(error);
@@ -352,6 +383,7 @@ async function refreshStatus({ statusSection, connectionSection, signal }) {
 }
 
 async function refreshVoices({ voiceSection, signal }) {
+  // setOptions re-enables the select and button, so the lock is re-applied at the end.
   let voices = [];
   let current = "";
   try {
@@ -368,4 +400,5 @@ async function refreshVoices({ voiceSection, signal }) {
   }
   if (signal.aborted) return;
   voiceSection.setOptions(voices, current);
+  voiceSection.lockIfUnavailable();
 }
