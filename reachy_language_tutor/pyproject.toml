@@ -8,7 +8,15 @@ version = "1.0.1"
 description = ""
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [ "huggingface-hub>=1.17.0", "httpx>=0.28.1", "python-dotenv", "openai==2.28.0", "reachy_mini_dances_library", "reachy-mini>=1.10.0rc5", "mcp>=1.27.1,<2",]
+# opencv-python-headless, not opencv-python, and the distinction is load-bearing:
+# they both provide `cv2`, so installing both lets two distributions fight over the
+# same import. reachy-mini pulls opencv-python under BOTH its [opencv] and [examples]
+# extras, and [all] pulls [opencv] transitively -- so reachy-mini[all], the most
+# likely way to meet this, collides too. Headless
+# is the right half for a robot: no GUI bindings, a smaller wheel, and nothing here
+# ever opens a window. The floor is 4.10 because FaceDetectorYN and FaceRecognizerSF
+# arrived in 4.5.4 and this is comfortably past it.
+dependencies = [ "huggingface-hub>=1.17.0", "httpx>=0.28.1", "python-dotenv", "openai==2.28.0", "reachy_mini_dances_library", "reachy-mini>=1.10.0rc5", "mcp>=1.27.1,<2", "opencv-python-headless>=4.10,<6",]
 [[project.authors]]
 name = "Pollen Robotics"
 email = "contact@pollen-robotics.com"

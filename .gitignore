@@ -74,3 +74,8 @@ tmp/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Face models are fetched from the hub at a pinned revision, never committed.
+# The recognizer alone is 37 MB, and a model in the tree is a model nobody can
+# tell apart from the pinned one it was supposed to be.
+*.onnx

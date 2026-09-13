@@ -1,0 +1,65 @@
+"""Face recognition: pixels to numbers, and numbers to one household member or nobody.
+
+This package is the boundary. Import from here, never from the modules underneath.
+
+It touches no camera and no database. `embedding.py` is handed a frame by whatever
+owns the camera, and `matching.py` is handed rows by whatever owns the store. That
+separation is what lets the threshold be exercised in both error directions on every
+test run, with no hardware and no downloaded weights.
+
+WHAT IS STORED, AND WHAT IS NOT. A faceprint is 128 float32 numbers. No image, no
+crop, no thumbnail and no path to one is written by anything in this package, at any
+point, including temporarily.
+
+**THERE IS NO LIVENESS CHECK, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.** A
+photograph held up to the camera, or a face on a television or a phone screen, is
+treated as that person if the detector accepts it. Nobody should read this package as
+proving who is physically present.
+
+What bounds the consequence is what recognition is USED for here: it selects which
+learner profile the tutor teaches from. The worst case is that somebody sees another
+household member's language progress and practises as them -- a real privacy failure
+inside one home, and the reason the threshold and margin in `matching.py` are treated
+as an authorization control. It is not a lock, it does not guard money or messages,
+and it must never be extended to something that does without a liveness check
+arriving first.
+"""
+
+from reachy_language_tutor.faces.matching import (
+    MATCH_REASONS,
+    FACE_MATCH_MARGIN,
+    THRESHOLD_CALIBRATED,
+    EXPECTED_MATCH_DIMENSION,
+    FACE_MATCH_SIMILARITY_FLOOR,
+    FACE_MATCH_LONE_MEMBER_FLOOR,
+    MatchOutcome,
+    EnrolledFaceprint,
+    match_faceprint,
+)
+from reachy_language_tutor.faces.embedding import (
+    EMBEDDING_MODEL_ID,
+    FACE_EMBEDDING_AVAILABLE,
+    EXPECTED_EMBEDDING_DIMENSION,
+    embed_face,
+    warm_face_models,
+    loaded_face_models,
+)
+
+
+__all__ = [
+    "EMBEDDING_MODEL_ID",
+    "EXPECTED_EMBEDDING_DIMENSION",
+    "EnrolledFaceprint",
+    "FACE_EMBEDDING_AVAILABLE",
+    "EXPECTED_MATCH_DIMENSION",
+    "FACE_MATCH_LONE_MEMBER_FLOOR",
+    "FACE_MATCH_MARGIN",
+    "FACE_MATCH_SIMILARITY_FLOOR",
+    "MATCH_REASONS",
+    "THRESHOLD_CALIBRATED",
+    "MatchOutcome",
+    "embed_face",
+    "loaded_face_models",
+    "match_faceprint",
+    "warm_face_models",
+]

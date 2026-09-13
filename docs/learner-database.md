@@ -99,6 +99,42 @@ here is a **name**, not a location, and the slash is exactly what makes it a loc
 stored faceprint into a different person's numbers while any test that only round-trips
 through one module kept passing.
 
+**What produces these numbers, and what the `embedding_model` column will say.**
+Recognition lives in `src/reachy_language_tutor/faces/`, which this table deliberately
+knows nothing about — but the two have to agree on the identifier, so it is recorded
+here where a reader of the schema will find it.
+
+| | |
+|---|---|
+| Library | `opencv-python-headless` (`cv2.FaceDetectorYN` + `cv2.FaceRecognizerSF`) |
+| Detector | YuNet `face_detection_yunet_2023mar.onnx`, 0.23 MB |
+| Recognizer | SFace `face_recognition_sface_2021dec.onnx`, 38.7 MB |
+| Stored `embedding_model` | `opencv_sface_2021dec_fp32` |
+| Stored `dimension` | 128 |
+| Vector | 128 × little-endian float32 = 512 bytes |
+
+Both models are fetched from the HuggingFace hub **at a pinned revision** and are never
+committed (`*.onnx` is gitignored). The pin is not ceremony: an upstream force-push
+would silently change what a robot downloads, and every stored faceprint would then
+have been computed by a model nobody can name — which is precisely what storing
+`embedding_model` per row exists to prevent. This repository already carries D30 for an
+unpinned hub fetch elsewhere.
+
+Note the identifier is `opencv_sface_2021dec_fp32` and **not** the hub repo name
+`opencv/face_recognition_sface`: the `embedding_model` CHECK permits `A-Za-z0-9._-`
+only, so the slash is refused. The `_fp32` suffix is load-bearing too — the same repo
+ships int8 variants whose numbers differ, so a faceprint from one is not comparable
+with a faceprint from the other. CPU only; no GPU is used or required.
+
+**There is no liveness check.** A photograph held up to the camera, or a face on a
+phone or television, is treated as that person if the detector accepts it. That is
+recorded rather than implied. What bounds the consequence is what recognition is used
+for: selecting which learner profile the tutor teaches from. The worst case is that
+somebody sees another household member's language progress — a real privacy failure
+inside one home, and why the threshold and margin are treated as an authorization
+control — but it guards no money, no messages and no door, and it must not be extended
+to anything that does without a liveness check arriving first.
+
 ### `languages` — what the tutor can teach
 
 | Column | Type | Null? | Meaning |
