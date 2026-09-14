@@ -121,8 +121,13 @@ no unit test of the conversation will show.
 **Must:** work from the lesson's written material — or, when a lesson has none, say so
 and refuse to invent vocabulary.
 
-Only Italian currently has written material. Confirm what a lesson actually contains
-before judging this step:
+**Italian and Spanish both have written material now** — six converted units each, at
+positions 1-6, with the six title-and-objective placeholders behind them at 7-12. French,
+German and Portuguese still have none. So for Spanish this step tests the tutor TEACHING
+the material, not refusing for want of it; the refusal branch is now reached by French,
+German or Portuguese. `docs/lesson-flow.md`'s coverage table carries the measured figures.
+
+Confirm what a lesson actually contains before judging this step:
 
 ```bash
 sqlite3 "$DB" "SELECT

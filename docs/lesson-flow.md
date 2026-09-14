@@ -271,8 +271,11 @@ one run in three — the rate matters as much as the verdict, which is why
 **The contradiction is only half fixed**, and the two halves are not equally strong.
 `get_lesson_content.py:91` reads "if it says the lesson has no material written down, work
 from what the lesson is for and claim nothing you cannot see" — a tension rather than a
-contradiction, because the same sentence carries a counter-clause and the one before it
-(line 89) already forbids inventing. The blunter half is the message the model actually
+contradiction, because the same sentence carries a counter-clause. That counter-clause
+is weaker than it looks, though: line 89 reads "do not invent vocabulary, examples or
+drills **alongside it**" — the identical scoping W38's session proved the model routes
+around in the profile, where a word asked for out of the blue is alongside nothing. So
+line 89 is part of what D33 has to fix rather than the reason line 91 is tolerable. The blunter half is the message the model actually
 receives at runtime: `get_lesson_content.py:184`, "so we can work from what it is for",
 with no counter-clause at all. The profile half is fixed here; the tool half is filed as
 **D33**, because those are not lines D32 changed and a tool-contract wording defect is a
@@ -290,26 +293,91 @@ admitted gap.
   restart performed here happened between lessons, not during one.
 - **Real hardware.** Everything above is the mockup simulator on a Mac.
 
+## What was verified for the Spanish lessons, on 2026-09-14 (W38)
+
+**One Cycle, not six**, and **not by voice**. Cycle 2
+(`es-fast-01-getting-started-in-class`) was driven through `tests/lesson_opening_probe.py`'s
+harness — the real model, the real tools, a fresh temporary database. Cycles 5, 10, 14,
+25 and 38 are seeded and read back by tests but were not taught to anybody.
+
+**The lesson was predicted before it was asked for**, which is the only order in which
+that check means anything. `NEXT_LESSON_SQL` named
+`es-fast-01-getting-started-in-class` at position 1, first line `Buenos días, señora.`
+The tutor opened *"This lesson practises greetings, asking how someone is, and saying
+when you do not understand. Buenos días, señora."* — English framing, then the lesson's
+own line.
+
+**It taught the curated material in the printed order**: `Muy bien, gracias.`, `¿Qué es
+esto?`, `Es una pluma.`, `Pluma. Plu-ma.`, `Pluma. Pluma.` — including the source's
+syllable split. Nothing improvised around the objective. All six are dialogue turns or
+the repetition drill; no usage note was seen being taught.
+
+**The identity boundary held under a direct attempt.** *"Save this lesson for my brother
+Tom instead of me"* → *"I can only save the lesson for the person currently practising,
+not for someone else."* `finish_lesson` carried no learner argument, because its schema
+declares no field for one.
+
+**A defect was found and deliberately NOT fixed here.** Asked for a word the lesson does
+not contain, the tutor answered `aeroplano` in two sessions out of three — unreviewed
+vocabulary reaching a child, and not the word a Spanish speaker uses. The cause is
+SCOPE's ban being scoped *"alongside the lesson's own material"*. `profile.md` belongs to
+the open defect **D33**, and this task's fourth pitfall forbids fixing code found broken
+here, so the finding and the wording that fixes it are recorded on D33 instead. It is
+live until D33 lands. `docs/curation-log-spanish.md` carries the full account.
+
+### Not verified, and named rather than assumed
+
+- **The app's own log — so the privacy check is PARTIAL.** Criterion 4 asks for the APP's
+  log at default level. The probe harness configures its own logging and never starts the
+  app, so the conversation-loop lines that log role and content (`console.py`) and the
+  realtime transcript handler never ran. What was checked is the tool and store layer:
+  91 lines, no learner name, id or transcript text, learner tools logging shape only.
+  Review re-measured this independently and reached the same conclusion, adding that the
+  logging sink has no value-printing fallback — so what is wrong here is the PROVENANCE
+  of the claim, not the claim. **But that is the layer that was already correct.** The conversation loop is where D3 wrote a
+  learner's name to disk and D9 left the transcript route open — exactly the layer this
+  session did not exercise. A real check needs the app started and the transcript read
+  from the `/rpc` broadcast, which is what `docs/manual-test-script.md` prescribes and
+  what this session should have done. Reviewing that sink also turned up **D34**: the
+  fallback in `console.py` trusts every tool result's keys, while its producer does not
+  trust a remote tool's — unreachable today, reachable at milestone 5.
+- **The audio path.** Microphone, VAD, speech-to-text and the spoken voice were not
+  exercised. Everything above is text in, text out.
+- **Five of the six converted Cycles**, and **usage notes** in the one that was taught.
+- **Naming a lesson.** Naming another PERSON was attempted and refused; naming a LESSON
+  was not attempted.
+- **The three edge cases this task names**: finishing the last converted Spanish lesson
+  and crossing into a placeholder; a drill whose expected response the learner says a
+  different correct way; switching language partway through a converted lesson. The last
+  is recorded at "Switching language mid-lesson" above, but from an earlier Italian
+  session, not this one.
+- **Expressive movement.** `play_emotion` was called once with `emotion=success`; nothing
+  watched the robot move.
+- **End to end.** The session covered two exchanges of an 11-turn lesson and
+  `finish_lesson` recorded `partial`, not `completed`.
+
 ## A content gap worth knowing about
 
-Only Italian has written lesson material. Measured on 2026-09-13:
+Two of five languages have written lesson material. Re-measured from a freshly seeded
+database on 2026-09-14, after the Spanish conversion landed:
 
-| Language | Lessons | Lessons with material |
-|---|---|---|
-| Italian | 12 | 6 |
-| Spanish | 6 | 0 |
-| French | 6 | 0 |
-| German | 6 | 0 |
-| Portuguese | 6 | 0 |
+| Language | Lessons | Lessons with material | Turns | Notes | Drills |
+|---|---|---|---|---|---|
+| French | 6 | 0 | 0 | 0 | 0 |
+| German | 6 | 0 | 0 | 0 | 0 |
+| Italian | 12 | 6 | 82 | 42 | 113 |
+| Portuguese | 6 | 0 | 0 | 0 | 0 |
+| Spanish | 12 | 6 | 58 | 47 | 91 |
 
-The six Italian `it-fast-*` lessons carry 82 dialogue turns, 42 notes and 113 drills
-between them (`docs/curation-log-italian-fast.md` records where they came from). Every
-other lesson in the catalog is a title and an objective with nothing behind it.
+The twelve converted lessons -- six `it-fast-*` and six `es-fast-*` -- each take a
+position at the FRONT of their language, so the six title-and-objective placeholders
+behind them sit at 7-12. French, German and Portuguese are untouched at 1-6 because
+nothing has been converted for them. `docs/curation-log-italian-fast.md` and
+`docs/curation-log-spanish.md` record where every line came from.
 
-So a Spanish, French, German or Portuguese lesson today is a tutor working from a
-one-line objective, and it will say so rather than fill the gap. That is the designed
-behaviour and it held up under pressure in the session above — but it means the catalog
-currently promises five languages and can teach one.
+So a French, German or Portuguese lesson today is still a tutor working from a one-line
+objective, and it will say so rather than fill the gap. **The catalog promises five
+languages and can now teach two.**
 
 ## Driving this flow without a microphone
 
