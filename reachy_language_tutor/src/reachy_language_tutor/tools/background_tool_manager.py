@@ -11,11 +11,12 @@ import asyncio
 import logging
 from typing import Any, Dict, Callable, Optional, Coroutine
 
-from pydantic import Field, BaseModel, PrivateAttr
+from pydantic import Field, BaseModel, StrictBool, PrivateAttr
 
 from reachy_language_tutor.tools.core_tools import (
     ToolDependencies,
     dispatch_tool_call,
+    log_trust_for_tool_result,
     dispatch_tool_call_with_manager,
 )
 from reachy_language_tutor.tools.tool_constants import ToolState, SystemTool
@@ -34,7 +35,13 @@ class ToolProgress(BaseModel):
 
 
 class ToolCallRoutine(BaseModel):
-    """Encapsulates an async callable with its arguments for deferred execution."""
+    """Encapsulates a tool NAME and its arguments for deferred execution.
+
+    Not a callable, despite what this said until D34. The callable is resolved
+    from `tool_name` when the routine runs, which is why the log-trust verdict
+    taken at dispatch and the tool that actually executes are two separate reads
+    of the registry -- see ToolNotification.log_keys_trusted, and D36.
+    """
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -43,7 +50,13 @@ class ToolCallRoutine(BaseModel):
     deps: "ToolDependencies"
 
     async def __call__(self, tool_manager: BackgroundToolManager) -> Any:
-        """Execute the stored callable with its arguments."""
+        """Resolve this routine's tool BY NAME and execute it with its arguments.
+
+        There is no stored callable -- the class docstring says so, and this one said
+        otherwise until review caught the sibling. The lookup happens in
+        dispatch_tool_call -> _dispatch_tool_call, which is the second read of the
+        registry that D36 exists to remove.
+        """
         if self.tool_name in _SYSTEM_TOOL_NAMES:
             # For safety purposes, we only allow system tools to be called with the tool manager
             return await dispatch_tool_call_with_manager(
@@ -61,6 +74,32 @@ class ToolNotification(BaseModel):
     status: ToolState
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    # May this result's top-level keys be named in a log? Taken at DISPATCH, from the
+    # tool name, and carried from there -- so the console never re-derives it and two
+    # renderings of one result cannot disagree. D34 answered it after the tool had
+    # run, and the security review reproduced the consequence:
+    # `initialize_tools(force=True)` can rebind a name in between, so a RemoteMcpTool's
+    # envelope keys -- third-party, possibly a learner's name -- were trusted at INFO.
+    #
+    # NOT CLOSED, and saying so here because the version of this comment that claimed
+    # otherwise is what a later reviewer would have trusted instead of re-checking.
+    # `ToolCallRoutine` stores a tool NAME, not a resolved callable, and the callable
+    # is looked up again at core_tools `_dispatch_tool_call` when the task runs. So
+    # this verdict and the tool that actually executes are still two reads of one
+    # mutable registry, and a rebind between them still answers for the wrong object
+    # -- reproduced. The window is a scheduling turn rather than the whole execution
+    # plus queue transit, which is a real narrowing and not a fix. Closing it means
+    # deciding where the callable is resolved and reporting it back: filed as D36.
+    #
+    # Defaults to False so a notification built by anything that does not set it
+    # fails closed, which is the only safe direction for a field that gates what
+    # reaches a log in a child's household.
+    #
+    # StrictBool, not bool: pydantic's lax mode coerces "yes" and 1 to True, and the
+    # console deliberately requires `is True` at the other end. The two ends of one
+    # carried value disagreeing about what counts as a yes is how a future producer
+    # forwarding a JSON field would get permission from a truthy string.
+    log_keys_trusted: StrictBool = False
 
 
 class BackgroundTool(ToolNotification):
@@ -85,6 +124,7 @@ class BackgroundTool(ToolNotification):
             status=self.status,
             result=self.result,
             error=self.error,
+            log_keys_trusted=self.log_keys_trusted,
         )
 
 
@@ -135,7 +175,10 @@ class BackgroundToolManager(BaseModel):
 
         Args:
             call_id: The ID of the tool
-            tool_call_routine: The ToolCallRoutine containing the callable and its arguments
+            tool_call_routine: The ToolCallRoutine carrying the tool NAME and its arguments.
+                Not a callable -- the tool is resolved by name when the routine runs,
+                which is why the verdict stamped below is not certainly about the tool
+                that executes. See ToolNotification.log_keys_trusted, and D36.
             with_progress: Whether to track progress (0.0-1.0)
             is_idle_tool_call: Whether the tool call was triggered by an idle signal
 
@@ -151,6 +194,12 @@ class BackgroundToolManager(BaseModel):
             is_idle_tool_call=is_idle_tool_call,
             progress=ToolProgress(progress=0.0) if with_progress else None,
             status=ToolState.RUNNING,
+            # Asked here, at dispatch, and carried forward -- earlier than every
+            # later moment, and still not early enough to be certain: the callable
+            # is resolved by name again when the task runs. See the field's comment
+            # and D36. Carrying one answer is what stops the CONSUMERS disagreeing;
+            # it does not make this answer certainly right about the callable.
+            log_keys_trusted=log_trust_for_tool_result(tool_name),
         )
         self._tools[background_tool.tool_id] = background_tool
 

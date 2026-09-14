@@ -565,6 +565,16 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
 
     async def _handle_tool_result(self, completed_tool: ToolNotification) -> None:
         """Process the result of a tool call."""
+        # CARRIED, not looked up. May this result's top-level keys be named in a
+        # log? The notification answers, because the answer was taken at dispatch
+        # where the tool was being resolved. Deriving it here from the tool NAME --
+        # which is what D34 did first, and then did once instead of twice -- asks a
+        # registry `initialize_tools(force=True)` can rebind after the tool has run,
+        # and the security review reproduced a learner's name reaching INFO that way.
+        #
+        # Read once into a local so the DEBUG line below and the record queued for
+        # the console cannot render the same result two different ways.
+        _trusted = completed_tool.log_keys_trusted
         if completed_tool.error is not None:
             # Shape, not text. A tool is required to RETURN an error dict rather than
             # raise, so anything arriving here already escaped that rule -- and this
@@ -598,9 +608,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
             logger.debug(
                 "Tool '%s' model-visible result: %s",
                 completed_tool.tool_name,
-                describe_for_log(
-                    tool_result_for_model, trust_keys=core_tools.result_keys_are_ours(completed_tool.tool_name)
-                ),
+                describe_for_log(tool_result_for_model, trust_keys=_trusted),
             )
         else:
             logger.warning(
@@ -659,9 +667,30 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                         # render it: a consumer that sees the kind redacts even if the
                         # rendering below is ever missing or malformed.
                         "kind": "tool_result",
-                        "log_safe": describe_for_log(
-                            tool_result_for_model, trust_keys=core_tools.result_keys_are_ours(completed_tool.tool_name)
-                        ),
+                        # The ANSWER travels with the record, not the question. The
+                        # console's fallback could not answer it at all before D34 --
+                        # it saw only role, content, kind and log_safe, so it guessed
+                        # from the kind and guessed yes for every tool, remote ones
+                        # included. The first fix sent the NAME instead and had the
+                        # console look it up; the security review of D34 found the
+                        # race that opens, and reproduced it: initialize_tools(force=
+                        # True) can rebind a name between this queue put and the
+                        # console's get, so a name that was a RemoteMcpTool here could
+                        # be a local Tool there, and a third-party Space's envelope
+                        # keys would be trusted. The verdict is taken at dispatch
+                        # now and carried on the notification, so nothing downstream
+                        # re-derives it. What that does NOT do is make the verdict
+                        # certainly right about the callable -- see the field's
+                        # comment in background_tool_manager, and D36.
+                        #
+                        # It also keeps get_tools() out of the console's synchronous
+                        # log path, which was taking a lock and re-resolving remote
+                        # tools from inside the asyncio loop.
+                        #
+                        # An absent key is not True, so an older or different producer
+                        # degrades to the safe answer.
+                        "log_keys_trusted": _trusted,
+                        "log_safe": describe_for_log(tool_result_for_model, trust_keys=_trusted),
                     },
                 ),
             )

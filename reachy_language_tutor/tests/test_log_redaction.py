@@ -29,6 +29,7 @@ from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pydantic
 
 import reachy_language_tutor.huggingface_realtime as hf_mod
 
@@ -43,7 +44,12 @@ from reachy_language_tutor.console import log_handler_message
 from reachy_language_tutor.streaming import AdditionalOutputs
 from reachy_language_tutor.tools.core_tools import ToolDependencies
 from reachy_language_tutor.huggingface_realtime import HuggingFaceRealtimeHandler
-from reachy_language_tutor.tools.background_tool_manager import ToolState, ToolNotification
+from reachy_language_tutor.tools.background_tool_manager import (
+    ToolState,
+    ToolNotification,
+    ToolCallRoutine,
+    BackgroundToolManager,
+)
 
 
 LEARNER_NAME = "Alice Ferreira"
@@ -220,14 +226,22 @@ def _handler(monkeypatch: Any, *, local_tools: tuple[str, ...] = ("get_profile",
     return handler
 
 
-def _profile_call() -> ToolNotification:
-    """Build a completed get_profile call carrying a real-looking learner name."""
+def _profile_call(log_keys_trusted: bool = True) -> ToolNotification:
+    """Build a completed get_profile call carrying a real-looking learner name.
+
+    `log_keys_trusted` is what the manager stamps at dispatch, and get_profile is a
+    locally-registered tool, so True is what production would carry here. It is a
+    parameter rather than a constant because the interesting case is the other one:
+    the field defaults to False on the model, so anything that forgets to set it
+    fails closed.
+    """
     return ToolNotification(
         id="call_a",
         tool_name="get_profile",
         is_idle_tool_call=False,
         status=ToolState.COMPLETED,
         result=dict(PROFILE_RESULT),
+        log_keys_trusted=log_keys_trusted,
     )
 
 
@@ -248,6 +262,29 @@ async def test_the_realtime_loop_does_not_log_the_learners_name(
     # The debug signal survives: which tool, and what shape it returned.
     assert "get_profile" in logged
     assert "display_name" in logged
+
+
+@pytest.mark.asyncio
+async def test_a_notification_that_forgets_the_verdict_is_not_trusted(
+    monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The field defaults to False, and that default is the control.
+
+    `log_keys_trusted` is set by the manager at dispatch. Anything that builds a
+    notification another way -- an older producer, a test, a future code path --
+    gets False and has its envelope keys suppressed. The alternative default would
+    hand a learner's name to the log on any path somebody forgot about, which is
+    how this layer has been broken twice already (D3, D9).
+    """
+    handler = _handler(monkeypatch)
+    handler._in_flight_tool_calls = {"call_a"}
+
+    with caplog.at_level(logging.DEBUG):
+        await handler._handle_tool_result(_profile_call(log_keys_trusted=False))
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert LEARNER_NAME not in logged
+    assert "display_name" not in logged, f"an unset verdict was treated as permission: {logged}"
 
 
 @pytest.mark.asyncio
@@ -564,6 +601,14 @@ def test_a_tool_result_with_no_rendering_is_still_redacted(caplog: pytest.LogCap
 
     A producer that forgets log_safe, or builds a malformed one, must not fall
     through to cleartext -- the default outcome of this control has to be redaction.
+
+    These records carry no `tool_name`, and D34 changed what that means. The branch
+    used to trust a result's keys on the strength of its kind alone; it now asks
+    core_tools.log_trust_for_tool_result, which answers no to a name it does not
+    have. So the key names are suppressed for BOTH kinds here, where a result's used
+    to come back -- and that is the fix, not a loss: the records that legitimately
+    want their keys named are the ones carrying a name to justify it, covered by
+    test_the_fallback_names_the_keys_of_a_tool_this_app_wrote_itself below.
     """
     raw = json.dumps(PROFILE_RESULT)
 
@@ -573,12 +618,394 @@ def test_a_tool_result_with_no_rendering_is_still_redacted(caplog: pytest.LogCap
             logged = _log_one({"role": "assistant", "content": raw, "kind": kind, **broken}, caplog)
             assert LEARNER_NAME not in logged, (kind, broken)
             assert "str(len=" in logged, (kind, broken)
-            # Degraded, but not blind -- and the key names come back only for a
-            # RESULT, whose keys are our own schema. A call's keys stay suppressed.
-            if kind == "tool_result":
-                assert "display_name" in logged, (kind, broken)
+            # Degraded, and with no name to justify trusting the envelope, not even
+            # the key names come back. An absent tool_name is not permission.
+            assert "display_name" not in logged, (kind, broken)
+
+
+def test_the_fallback_does_not_trust_a_remote_tools_envelope_keys(caplog: pytest.LogCaptureFixture) -> None:
+    """D34: the branch that runs WHEN THE PRODUCER FAILED was the unsafe one.
+
+    A RemoteMcpTool returns dict(result) straight from a third-party Space, so its
+    top-level keys are written by whoever wrote the Space and can be anything --
+    including a learner's name, which is the shape used here. The producer already
+    knew that and asked core_tools; this fallback asked only whether the record's
+    kind was "tool_result" and answered yes for every tool. So a name arriving as an
+    envelope KEY rendered in cleartext at INFO, on the one path that exists because
+    the producer is not to be relied on.
+
+    Driven through log_handler_message, not through the handler: the handler path
+    already passed (test_a_remote_tools_envelope_keys_are_not_trusted above), and a
+    test that exercised it would have gone green over this defect for the same
+    reason the real session log did.
+
+    Not reachable in today's tree -- the in-tree producer always supplies a string
+    log_safe -- and that is the point: milestone 5 makes the learner tools
+    remote-shaped, with a household's data behind them.
+    """
+    logged = _log_one(
+        {
+            "role": "assistant",
+            "content": json.dumps({LEARNER_NAME: "es-3", "score": 88}),
+            "kind": "tool_result",
+            "log_keys_trusted": False,
+            "log_safe": None,
+        },
+        caplog,
+    )
+
+    assert LEARNER_NAME not in logged, f"a learner name reached the log as an envelope key: {logged}"
+    assert "2 keys" in logged, f"the shape should still be described: {logged}"
+
+
+def test_the_fallback_names_the_keys_of_a_tool_this_app_wrote_itself(caplog: pytest.LogCaptureFixture) -> None:
+    """The other half of the same decision, so the fix is not just "suppress it all".
+
+    A locally-registered tool composes its own return dict, so its top-level keys are
+    this application's schema and are most of the dispatch signal an operator reads.
+    Suppressing those too would be a safe change and a worse one, and nothing would
+    have failed -- which is exactly how a fix becomes a regression.
+    """
+    logged = _log_one(
+        {
+            "role": "assistant",
+            "content": json.dumps(PROFILE_RESULT),
+            "kind": "tool_result",
+            "log_keys_trusted": True,
+            "log_safe": None,
+        },
+        caplog,
+    )
+
+    assert LEARNER_NAME not in logged, f"the VALUE is never logged, only the key: {logged}"
+    assert "display_name" in logged, f"our own schema keys are worth seeing: {logged}"
+
+
+def test_an_unreadable_tool_registry_answers_no_rather_than_raising(monkeypatch: Any) -> None:
+    """The rule runs inside a log statement, so it may not raise, and may not say yes.
+
+    core_tools.get_tools() calls initialize_tools(), which raises RuntimeError when a
+    profile cannot be loaded. A logging call that raises turns a degraded log line
+    into a crashed console, and the answer it would have needed is "do not trust", so
+    it fails closed twice over.
+
+    Asserted against the RULE and not through the console, because the console no
+    longer asks: the verdict is decided at the producer and travels with the record.
+    """
+
+    def explode() -> dict[str, Any]:
+        raise RuntimeError("the profile could not be loaded")
+
+    monkeypatch.setattr(core_tools, "get_tools", explode)
+
+    assert core_tools.log_trust_for_tool_result("get_profile") is False
+
+
+@pytest.mark.parametrize(
+    "absent", [{}, {"log_keys_trusted": None}, {"log_keys_trusted": "yes"}, {"log_keys_trusted": 1}]
+)
+def test_only_a_literal_true_verdict_is_trusted(absent: dict[str, Any], caplog: pytest.LogCaptureFixture) -> None:
+    """An absent or oddly-typed verdict is not a yes.
+
+    The record contract is the whole control now, so the thing that must not happen
+    is a truthy value standing in for a decision nobody made. `1` and `"yes"` are
+    both truthy; neither is a producer saying these keys are ours.
+    """
+    logged = _log_one(
+        {
+            "role": "assistant",
+            "content": json.dumps(PROFILE_RESULT),
+            "kind": "tool_result",
+            "log_safe": None,
+            **absent,
+        },
+        caplog,
+    )
+
+    assert LEARNER_NAME not in logged
+    assert "display_name" not in logged, f"a non-True verdict was treated as permission: {logged}"
+
+
+def _mentions_rule(path: Path, rule: str) -> bool:
+    """Say whether a module reaches the named function by any spelling an AST can see.
+
+    Three spellings, because review found the first version catching only one:
+
+    * a call -- `rule()` or `mod.rule()`, read from ast.Call;
+    * an import -- `from ... import rule` or `... as r`, which is how an alias gets
+      its other name, so the alias is caught at the point it is created rather than
+      at the point it is used;
+    * a string literal equal to the name, which is what `getattr(mod, "rule")` is
+      made of.
+
+    A module that imports the rule and never calls it is reported too. That is
+    deliberate: for a rule whose whole point is having one caller, importing it is
+    already the interesting event.
+
+    THE LIMIT, stated rather than glossed: a name assembled at runtime --
+    `getattr(mod, "result_keys" + "_are_ours")` -- is invisible to any static read,
+    and no version of this guard will see it. What this closes is the accidental
+    second caller, which is what actually happened here; it is not a defence against
+    someone deliberately hiding one.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:  # a module that does not parse cannot be cleared by reading it
+        raise AssertionError(f"{path} does not parse, so this guard cannot clear it") from None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == rule:
+                return True
+            if isinstance(func, ast.Attribute) and func.attr == rule:
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if any(alias.name == rule for alias in node.names):
+                return True
+        elif isinstance(node, ast.Constant) and node.value == rule:
+            return True
+    return False
+
+
+def _called_names(path: Path) -> set[str]:
+    """Return every function name CALLED in a module, read from its AST.
+
+    Not a text scan. The first version of this guard compared source strings and had
+    to strip comments first, which is how it went wrong twice in one review: the
+    stripper only handled whole-line comments, so a trailing one survived and could
+    satisfy the guard's positive assertions on its own -- `trusted = ...  # replaced
+    log_trust_for_tool_result` passed. That is the D19 shape this task's own
+    patterns_to_follow names, reproduced inside the guard meant to prevent it.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            names.add(func.id)
+        elif isinstance(func, ast.Attribute):
+            names.add(func.attr)
+    return names
+
+
+def test_the_rule_answers_no_for_a_space_tool_and_yes_for_one_this_app_registered(monkeypatch: Any) -> None:
+    """The rule itself, both ways, since everything else now trusts its verdict.
+
+    A RemoteMcpTool returns dict(result) from a third-party Space, so its envelope
+    keys belong to whoever wrote it. A locally-registered tool composes its own
+    return dict here, so its keys are this application's schema.
+    """
+    remote = MagicMock(spec=core_tools.RemoteMcpTool)
+    local = MagicMock(spec=core_tools.Tool)
+    monkeypatch.setattr(core_tools, "get_tools", lambda: {"space_tool": remote, "get_profile": local})
+
+    assert core_tools.log_trust_for_tool_result("space_tool") is False
+    assert core_tools.log_trust_for_tool_result("get_profile") is True
+    assert core_tools.log_trust_for_tool_result("never_registered") is False
+    for not_a_name in (None, "", 5, b"get_profile", True, ["get_profile"]):
+        assert core_tools.log_trust_for_tool_result(not_a_name) is False, not_a_name
+
+
+@pytest.mark.parametrize("coercible", ["yes", 1, "true", 0])
+def test_the_verdict_field_refuses_a_value_that_merely_looks_true(coercible: Any) -> None:
+    """StrictBool, pinned -- relaxing it to `bool` left the whole suite green.
+
+    The console requires `log_keys_trusted is True` and a sibling test pins that. If
+    the model coerced on the way in, the two ends of one carried value would disagree
+    about what counts as a yes, and a future producer forwarding a field out of a
+    JSON payload would get permission from a truthy string.
+
+    Asserted on the error TYPE, not merely that something raised: pydantic's own
+    `bool_type`, so this fails for the reason it names rather than for a typo.
+    """
+    with pytest.raises(pydantic.ValidationError) as caught:
+        ToolNotification(
+            id="x",
+            tool_name="get_profile",
+            is_idle_tool_call=False,
+            status=ToolState.COMPLETED,
+            log_keys_trusted=coercible,
+        )
+
+    assert [error["type"] for error in caught.value.errors()] == ["bool_type"]
+
+
+@pytest.mark.asyncio
+async def test_the_manager_stamps_the_verdict_from_the_registry_at_dispatch(monkeypatch: Any) -> None:
+    """The one expression the whole design rests on, pinned behaviourally.
+
+    Everything downstream -- the handler, the record, the console -- carries this
+    verdict rather than deriving it, which is the point. So the single place it IS
+    derived is the single point of failure, and the third security pass of D34 found
+    nothing testing it: the drift guard inspects dict LITERALS carrying a
+    `kind: "tool_result"` key, and the producer's verdict is a keyword argument to
+    `BackgroundTool(...)`, which that sweep never looks at. Replacing it with a bare
+    `True` left the entire suite green -- the original D34 defect restored at the
+    producer, granting blanket permission to every tool including a remote one.
+
+    Both directions, because a guard that only checks the safe answer would pass an
+    implementation that always says no and quietly costs an operator the dispatch
+    signal they read.
+    """
+    remote = MagicMock(spec=core_tools.RemoteMcpTool)
+    local = MagicMock(spec=core_tools.Tool)
+    monkeypatch.setattr(core_tools, "get_tools", lambda: {"space_tool": remote, "get_profile": local})
+
+    manager = BackgroundToolManager()
+    try:
+        for name, expected in (("space_tool", False), ("get_profile", True), ("never_registered", False)):
+            tool = await manager.start_tool(
+                call_id=f"call-{name}",
+                tool_call_routine=ToolCallRoutine(
+                    tool_name=name,
+                    args_json_str="{}",
+                    deps=ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()),
+                ),
+                is_idle_tool_call=False,
+            )
+            assert tool.log_keys_trusted is expected, f"{name} was stamped {tool.log_keys_trusted}"
+            assert tool.get_notification().log_keys_trusted is expected, f"{name} lost its verdict in transit"
+    finally:
+        for tool in list(manager._tools.values()):
+            if tool._task is not None:
+                tool._task.cancel()
+
+
+def _call_name(node: ast.Call) -> str | None:
+    """The bare name of a called function, however it was reached."""
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+CARRIED_FIELD = "log_keys_trusted"
+
+
+def _names_bound_from(module: Path, rule: str) -> set[str]:
+    """Local names holding a verdict that came from the rule, directly or carried.
+
+    Two provenances are legitimate and a third is not:
+
+    * `x = log_trust_for_tool_result(...)` -- computed here from the rule;
+    * `x = something.log_keys_trusted` -- carried from a notification that took the
+      answer at dispatch, which is where D34 ended up after the security review
+      showed that computing it later asks a registry that may have been rebound;
+    * `x = True` -- which is the hardcoded verdict this guard exists to refuse.
+    """
+    bound: set[str] = set()
+    for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        from_rule = isinstance(value, ast.Call) and _call_name(value) == rule
+        carried = isinstance(value, ast.Attribute) and value.attr == CARRIED_FIELD
+        if not (from_rule or carried):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                bound.add(target.id)
+    return bound
+
+
+def test_exactly_one_place_in_the_tree_decides_whether_a_result_s_keys_are_logged() -> None:
+    """Criterion 4, read off the AST: the two sides cannot drift apart again.
+
+    They already did once, and that is this defect -- the producer asked
+    `result_keys_are_ours` while the console's fallback asked whether the record's
+    kind was "tool_result". Two spellings of one decision.
+
+    Criterion 4 asks that both sides "derive trust_keys from one shared function".
+    What is asserted here is STRONGER than two callers of one function: there is one
+    CALL, at the producer, and the console reads the verdict it stamped. The security
+    review of D34 is why -- deriving it twice, even through one function, means
+    deriving it at two moments, and `initialize_tools(force=True)` can rebind a tool
+    name in between, which it reproduced as a learner's name reaching INFO. One
+    computation cannot disagree with itself.
+
+    An ALLOW-LIST over the whole source tree, not a check of two named files: a THIRD
+    module reaching the rule would reintroduce the second spelling unseen, and the
+    narrow version of this guard was not looking.
+    """
+    RULE = "log_trust_for_tool_result"
+    root = _source_root()
+    modules = sorted(root.rglob("*.py"))
+    assert len(modules) > 10, "the source sweep found almost nothing, so this guard proves nothing"
+
+    deciders = {path for path in modules if _mentions_rule(path, RULE)}
+    assert deciders == {root / "tools" / "background_tool_manager.py"}, (
+        "the verdict must be COMPUTED in exactly one place, where the tool is resolved for dispatch; "
+        f"found: {sorted(str(path.relative_to(root)) for path in deciders)}"
+    )
+
+    underlying = {path for path in modules if _mentions_rule(path, "result_keys_are_ours")}
+    assert underlying == {root / "tools" / "core_tools.py"}, (
+        "result_keys_are_ours must be reached only by the log_trust_for_tool_result wrapper beside it; "
+        f"found: {sorted(str(path.relative_to(root)) for path in underlying)}"
+    )
+
+    assert "def log_trust_for_tool_result" in (root / "tools" / "core_tools.py").read_text(encoding="utf-8"), (
+        "the rule has moved out of core_tools, so this guard is looking in the wrong place"
+    )
+
+    # THE PRODUCERS, not a fixed list of modules. An earlier version of this guard
+    # asserted the decider set was exactly {huggingface_realtime.py}, and the
+    # security review showed that was worse than useless: it FAILED a second
+    # producer that did the right thing and called the rule, while passing one that
+    # hardcoded `"log_keys_trusted": True` -- so it pushed the next author toward the
+    # literal nothing checks. Constrain the record instead.
+    #
+    # WHAT THIS FINDS, stated exactly, because a guard claiming more than it checks
+    # is the D19 shape this task's own patterns_to_follow names. It finds a dict
+    # LITERAL carrying `"kind": "tool_result"` as a literal pair. There is exactly
+    # one in the tree today -- huggingface_realtime, inline in _handle_tool_result --
+    # and the sweep walks every module, so one written inside a helper would be found
+    # too. It does NOT find a record built by `dict(kind=...)`,
+    # assembled by item assignment or `update()`, spread from a base mapping that
+    # carries the kind, or tagged with a named constant (`"kind": TOOL_RESULT_KIND`
+    # -- the D6 shape this repository has already paid for). Those would pass unseen.
+    # Widening to catch them is possible and was not done, because a second producer
+    # is hypothetical and the guard's value is in constraining the one that exists.
+    literals = []
+    for module in modules:
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Dict):
+                continue
+            entries = {
+                key.value: value
+                for key, value in zip(node.keys, node.values)
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
+            if entries.get("kind") is None or getattr(entries["kind"], "value", None) != "tool_result":
+                continue
+            verdict = entries.get("log_keys_trusted")
+            where = f"{module.relative_to(root)}:{node.lineno}"
+            if verdict is None:
+                literals.append(f"{where} carries no verdict at all")
+            elif isinstance(verdict, ast.Call):
+                if _call_name(verdict) != RULE:
+                    literals.append(f"{where} computes its verdict with something other than {RULE}")
+            elif isinstance(verdict, ast.Attribute) and verdict.attr == CARRIED_FIELD:
+                pass  # carried straight from the notification that took it at dispatch
+            elif isinstance(verdict, ast.Name):
+                # A bare name is only acceptable if it was BOUND from the rule in this
+                # module. Without this, `ok = True` then `"log_keys_trusted": ok`
+                # walks straight through the guard that exists to stop exactly that.
+                if verdict.id not in _names_bound_from(module, RULE):
+                    literals.append(f"{where} uses a name not bound from {RULE}")
             else:
-                assert "display_name" not in logged, (kind, broken)
+                literals.append(f"{where} computes its verdict some other way")
+    assert not literals, "a tool_result record must take its verdict from log_trust_for_tool_result: " + "; ".join(
+        literals
+    )
+
+    console = _called_names(root / "console.py")
+    assert "log_trust_for_tool_result" not in console, "console.py decides this again instead of reading the verdict"
+    assert "result_keys_are_ours" not in console, "console.py asks the rule a second way"
 
 
 # --- Sink 2, transcript: the D9 decision --------------------------------------------
@@ -1139,9 +1566,7 @@ def test_no_caught_exception_is_logged_without_being_rendered_safe(module: str) 
                     and any(n is name for n in ast.walk(call))
                 ]
                 # type(exc).__name__ is a shape, not a value, and is equally fine.
-                shaped = any(
-                    isinstance(a, ast.Attribute) and a.attr == "__name__" for a in ast.walk(argument)
-                )
+                shaped = any(isinstance(a, ast.Attribute) and a.attr == "__name__" for a in ast.walk(argument))
                 if not enclosing and not shaped:
                     raw.append(f"{module}:{node.lineno}: `{name.id}` is logged without log_safe")
 

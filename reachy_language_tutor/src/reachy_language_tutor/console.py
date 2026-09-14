@@ -303,12 +303,29 @@ def log_handler_message(msg: dict) -> None:
         if isinstance(log_safe, str):
             logger.info("role=%s content=%s", msg.get("role"), log_safe)
             return
-        # Degraded but not blind. A result's keys are our own schema and are worth
-        # seeing; a call's keys were composed by the model and are not.
+        # Degraded but not blind, and NOT deciding this for itself. This branch used
+        # to read `trust_keys=kind == "tool_result"`: a blanket yes for every tool
+        # result, including a RemoteMcpTool whose envelope keys are written by a
+        # third-party Space and may be a learner's name. The producer already knew
+        # better one layer up, the two spellings disagreed, and this one runs
+        # precisely when the producer failed -- so the fallback for a broken producer
+        # was the unsafe one (D34).
+        #
+        # The verdict now arrives WITH the record, decided where the tool object is
+        # unambiguous. Deriving it here from a tool name, which the first fix did,
+        # re-opened the question against a registry that initialize_tools(force=True)
+        # can rebind between the queue put and this get -- the security review
+        # reproduced a learner's name reaching INFO that way.
+        #
+        # `is True` and not a truthiness test: an absent key, a None, a string, or
+        # anything an older producer put there is not a yes. A call's keys are
+        # composed by the model and are never trusted, which is why only a result
+        # even carries a verdict.
+        trusted = kind == "tool_result" and msg.get("log_keys_trusted") is True
         logger.info(
             "role=%s content=%s",
             msg.get("role"),
-            describe_json_for_log(msg.get("content"), trust_keys=kind == "tool_result"),
+            describe_json_for_log(msg.get("content"), trust_keys=trusted),
         )
         return
 

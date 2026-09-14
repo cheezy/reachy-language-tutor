@@ -608,6 +608,51 @@ def result_keys_are_ours(tool_name: str) -> bool:
     return tool is not None and not isinstance(tool, RemoteMcpTool)
 
 
+def log_trust_for_tool_result(tool_name: object) -> bool:
+    """Decide whether a tool result's envelope keys may be logged -- the ONE rule.
+
+    ONE caller, deliberately: `BackgroundToolManager.start_tool`, which takes the
+    answer at dispatch and puts it on the ToolNotification, so everything downstream
+    carries it rather than asking again. The console does not call this and must not --
+    tests/test_log_redaction.py asserts that, and a guard there requires every
+    tool_result record in the tree to take its verdict from this function.
+
+    D34 is why. The producer asked `result_keys_are_ours`; the console's fallback
+    asked whether the record's kind was "tool_result", a blanket yes for every tool
+    result including a remote one -- so a learner's name arriving as an ENVELOPE KEY
+    from a third-party Space would have printed in cleartext at INFO, where the
+    producer would have rendered it as a count. Two spellings of one decision is how
+    they came apart. The first fix gave both sides this one function; the security
+    review of D34 then showed that two CALLS is still two moments, because
+    `initialize_tools(force=True)` can rebind a name in between. So it is called
+    once, and the answer travels.
+
+    It FAILS CLOSED, in three ways, and the reason is stronger than it used to be:
+    this now runs inside `start_tool`, so a raise here would abort the dispatch of
+    the tool itself rather than spoil one log line.
+
+    * a `tool_name` that is not a non-empty string -- including the None a record
+      simply does not carry -- is not trusted. An absent name must never read as
+      permission; that is the same inversion D34 is about.
+    * `result_keys_are_ours` calls `get_tools()`, which calls `initialize_tools()`,
+      which raises RuntimeError when a profile cannot be loaded. A logging call that
+      raises turns a degraded log line into a crash, so the exception is swallowed
+      and the answer is no.
+    * anything else unforeseen from the registry lands in the same place.
+
+    Untrusted is always the safe answer here: it renders the shape (`{3 keys: str,
+    int, list}`) instead of the names, which is strictly less information and never
+    a person's data.
+    """
+    if not isinstance(tool_name, str) or not tool_name:
+        return False
+    try:
+        return result_keys_are_ours(tool_name)
+    except Exception:  # noqa: BLE001 -- see the docstring: a log line must not raise
+        logger.debug("log_trust_for_tool_result: the tool registry was unreadable, so keys were not trusted")
+        return False
+
+
 def get_tools() -> dict[str, Tool]:
     """Return a shallow snapshot of the active tool registry."""
     initialize_tools()
