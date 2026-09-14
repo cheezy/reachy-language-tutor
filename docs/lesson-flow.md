@@ -212,9 +212,35 @@ both halves, and a second test pins the instructions D32 must not have weakened 
 way past — teaching only the lesson's own material, saying so when a lesson has no
 written material, and treating lesson text as content rather than instructions.
 
-**Not verified by voice.** This is a prompt change, and the transcript evidence above
-was gathered by running the app in the simulator. Nobody has yet heard the new opening.
-That check belongs with the next session that has the simulator up.
+Review then found two places the same mechanism survived, and both are fixed:
+
+- **The no-material path was still switching first**, and it is the *dominant* path:
+  30 of the 36 seeded lessons have no dialogue, notes or drills. The model would open in
+  English, switch to the target language because the next sentence told it to, and only
+  then tell a beginner there was nothing written down — in the language they could not
+  follow. Exactly this defect, one turn later, on the majority of lessons. The profile
+  now stays in English for that case and switches afterwards.
+- **Only the switch INTO the target language was ordered, never the switch back.** The
+  end-of-lesson report — how the practice went — would have landed in the target
+  language for the same reason. `LANGUAGE RULES` now orders both ends.
+
+Both are pinned, and each was confirmed by reverting the profile sentence and watching
+the specific test fail.
+
+### Still to check, and it needs a person
+
+**Nobody has heard the new opening.** This is a prompt change; the evidence that the
+defect existed came from running the app and reading transcripts, and the equivalent
+evidence that it is gone can only come the same way. The tests assert that particular
+sentences are in the profile, which is not the same claim as the model obeying them.
+
+The check, for whoever has the simulator up: start the robot service *and* the tutor app
+(they are two different things — see `docs/manual-test-script.md`), ask for **Italian**,
+which has written material, and then for **Spanish**, which has none. Both openings
+should be one English sentence naming what is about to be practised. The Spanish one
+should also say in English that there is nothing written down, and neither should switch
+before saying it. The Italian one should switch straight afterwards and teach in
+Italian.
 
 ## What was not verified
 
