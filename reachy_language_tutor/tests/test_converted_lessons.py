@@ -841,6 +841,100 @@ def test_the_spanish_course_reads_back_exactly_as_it_shipped(instance: Path) -> 
     )
 
 
+def _positions(connection, language_code: str) -> dict[str, int]:
+    """Every lesson id in one language, with the position it holds."""
+    return {
+        str(row["id"]): int(row["position"])
+        for row in connection.execute(
+            "SELECT id, position FROM lessons WHERE language_code = ?", (language_code,)
+        )
+    }
+
+
+def test_a_language_already_renumbered_once_does_not_move_again(tmp_path: Path) -> None:
+    """The third edge case the task names, and the path the NEXT conversion takes.
+
+    Italian was renumbered when it was converted: its placeholders went to 7-12 and six
+    converted units took 1-6. Spanish was then converted, which renumbers Spanish -- and
+    must leave Italian exactly where it is. Nothing tested that. The two upgrade cases
+    that existed both start from a language at 1-6, so a seed that re-applied its shift
+    to an already-shifted language would have moved Italian to 13-18 and passed both.
+
+    This constructs the real shape: Italian already at 7-12, Spanish rewound to the
+    layout it had before its own conversion, and the version marker rewound so the seed
+    actually runs. Then it asserts Spanish moves and Italian does not.
+
+    **What this can and cannot catch, measured rather than assumed.** Positions in
+    SEED_LESSONS are ABSOLUTE -- each lesson is upserted to the position it declares --
+    so a seed cannot re-apply a relative shift to an already-shifted language. A first
+    draft of this test asserted only that Italian was unchanged across the upgrade,
+    which given absolute positions is close to unfalsifiable: simulating the defect by
+    shifting Italian's declared positions to 13-18 moved the baseline too, so
+    before == after still held and only the precondition tripped.
+
+    So the Italian layout is PINNED here rather than merely compared with itself. That
+    is what makes it fail for the reason it names: an edit that shifts Italian while
+    converting another language -- the realistic human error, since the constants are
+    hand-written -- fails on the pin. Shifting Italian's declared positions to 13-18
+    was confirmed to fail this assertion.
+    """
+    assert store.ensure_learner_database(tmp_path).ready is True
+    spanish_converted = _converted_ids("es")
+
+    connection = store.connect(tmp_path)
+    try:
+        # Rewind SPANISH only, to how it looked before its conversion. Italian is left
+        # in its already-renumbered state, which is the whole point of this test.
+        connection.execute(
+            "DELETE FROM lessons WHERE id IN (%s)" % ",".join("?" * len(spanish_converted)), spanish_converted
+        )
+        connection.execute("UPDATE lessons SET position = position - 6 WHERE language_code = 'es'")
+        connection.execute(
+            "UPDATE schema_meta SET value = ? WHERE key = ?", (str(store.SEED_VERSION - 1), store.SEED_VERSION_KEY)
+        )
+        connection.commit()
+        italian_before = _positions(connection, "it")
+        assert _positions(connection, "es") == {f"es-0{n}-{name}": n for n, name in enumerate(
+            ["greetings", "introductions", "numbers", "ordering-food", "directions", "daily-routine"], 1
+        )}, "the rewind has to produce the real pre-Spanish layout, or this test proves nothing"
+        # PINNED, not merely remembered. See the docstring: comparing Italian with
+        # itself cannot fail while positions are declared absolutely.
+        assert italian_before == {
+            "it-fast-01-what-time-is-it": 1,
+            "it-fast-02-room-service": 2,
+            "it-fast-03-taxi-and-haircut": 3,
+            "it-fast-04-shopping-for-clothes": 4,
+            "it-fast-05-eating-out": 5,
+            "it-fast-06-phone-call-about-a-flat": 6,
+            "it-01-greetings": 7,
+            "it-02-introductions": 8,
+            "it-03-numbers": 9,
+            "it-04-ordering-food": 10,
+            "it-05-directions": 11,
+            "it-06-daily-routine": 12,
+        }, "Italian must start this test ALREADY renumbered, with its converted units leading"
+    finally:
+        connection.close()
+
+    result = store.ensure_learner_database(tmp_path)
+    assert result.ready is True, f"the upgrade aborted: {result.error}"
+
+    connection = store.connect(tmp_path)
+    try:
+        assert _positions(connection, "it") == italian_before, (
+            "Italian moved while another language was being converted. A language "
+            "renumbered by an earlier conversion must not be shifted again by a later "
+            "one -- its placeholders already sit behind its converted units and there "
+            "is nothing to make room for."
+        )
+        spanish_after = _positions(connection, "es")
+    finally:
+        connection.close()
+
+    assert spanish_after["es-01-greetings"] == 7, "Spanish placeholders should have moved up behind its units"
+    assert sorted(spanish_after.values()) == list(range(1, len(spanish_after) + 1)), "no gap and no collision"
+
+
 def test_renumbering_a_placeholder_downwards_is_the_hazard_to_watch(tmp_path: Path) -> None:
     """Why the upgrade above works, stated as the condition it actually depends on.
 

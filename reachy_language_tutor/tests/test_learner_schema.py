@@ -1,6 +1,7 @@
 """Tests for the learner database schema, seeding, and its failure modes."""
 
 import os
+import re
 import json
 import stat
 import struct
@@ -96,10 +97,32 @@ def test_ensure_creates_and_seeds_on_first_run(tmp_path: Path) -> None:
         connection.close()
 
 
+def _catalog_rows(instance_path: Path) -> list[tuple[str, str, int, str, str]]:
+    """Every lesson row in full, for comparing a catalog with itself exactly."""
+    connection = store.connect(instance_path)
+    try:
+        return [
+            (str(r["id"]), str(r["language_code"]), int(r["position"]), str(r["title"]), str(r["objective"]))
+            for r in connection.execute(
+                "SELECT id, language_code, position, title, objective FROM lessons ORDER BY id"
+            )
+        ]
+    finally:
+        connection.close()
+
+
 def test_ensure_is_idempotent_across_runs(tmp_path: Path) -> None:
-    """Re-running against an existing database does no work and changes nothing."""
+    """Re-running against an existing database does no work and changes nothing.
+
+    Row COUNTS were what this compared, and a count is the weakest thing a catalog can
+    be wrong about: the early return exists to stop the seed rewriting positions on a
+    database that is already current, and a renumbering that moved every lesson while
+    adding and removing none would keep every count identical. The rows themselves are
+    compared now, position included.
+    """
     store.ensure_learner_database(tmp_path)
     first = _counts(tmp_path)
+    rows_first = _catalog_rows(tmp_path)
 
     second = store.ensure_learner_database(tmp_path)
     third = store.ensure_learner_database(tmp_path)
@@ -110,6 +133,7 @@ def test_ensure_is_idempotent_across_runs(tmp_path: Path) -> None:
         assert result.seeded is False
 
     assert _counts(tmp_path) == first
+    assert _catalog_rows(tmp_path) == rows_first, "the early return let something rewrite the catalog"
 
 
 def test_seed_version_bump_upserts_without_duplicating(tmp_path: Path) -> None:
@@ -408,7 +432,7 @@ def test_lesson_positions_are_contiguous_and_unique(tmp_path: Path) -> None:
         # this used to assert named a COUNT while the test's title claims a SHAPE,
         # so it excluded the two languages where the shape can actually break:
         # Italian, whose six converted lessons pushed its placeholders to 7-12, and
-        # Spanish, whose one converted lesson pushed its placeholders to 2-7. Every
+        # Spanish, whose six converted Cycles pushed its placeholders to 7-12. Every
         # catalogued language is checked now, which is the claim this test was
         # always making.
         codes = [row["code"] for row in connection.execute("SELECT code FROM languages ORDER BY code")]
@@ -1826,3 +1850,81 @@ def test_log_safe_still_renders_the_families_an_operator_needs() -> None:
     assert "too large" in str(store._log_safe(OverflowError("Python int too large to convert to SQLite INTEGER")))
     assert "home" in str(store._log_safe(RuntimeError("Could not determine home directory")))
     assert "not a str" in str(store._log_safe(store._StoreRefusal("instance_path must be a path, not int, not a str")))
+
+
+def test_the_documented_catalog_is_the_one_the_seed_actually_produces(tmp_path: Path) -> None:
+    """docs/learner-database.md's lesson table, checked row for row against the seed.
+
+    This guard exists because the table went stale silently and stayed that way. It
+    said "Lessons (30 total)" and listed Italian at positions 1-6 for as long as it
+    took to notice -- through the whole Italian conversion, which moved those
+    placeholders to 7-12 and put six converted units in front of them. Nothing failed,
+    because nothing was looking.
+
+    A reader reaches for that table to find out what a robot ships with. A table that
+    is confidently wrong is worse than no table, and the catalog moves every time a
+    course is converted -- so the cost of keeping it honest belongs on the suite rather
+    than on whoever converts the next one.
+
+    All four columns are checked -- id, position, title and objective. An earlier
+    draft of this test checked only id and position, reasoning that titles are prose a
+    curator may reword. Review measured that reasoning and it was wrong twice over:
+    rewriting a title to "Ordering a beer" passed, and every one of the 42 documented
+    titles and objectives ALREADY matches the seed byte for byte, so the stricter tuple
+    costs nothing and the looser one bought nothing.
+
+    The parse asserts every table row was understood, rather than quietly dropping the
+    ones it could not read. A regex that skips what it does not match is a deny-list:
+    it fails OPEN, so a row advertising a lesson that does not exist would simply not
+    appear in `documented` and the comparison would pass. This repository has paid for
+    that shape four times (CLAUDE.md, "Name what is PERMITTED"), and here the fix is to
+    count the rows that look like rows and require the parse to have claimed all of
+    them.
+    """
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "learner-database.md").read_text(encoding="utf-8")
+
+    heading = re.search(r"^### Lessons \((\d+) total\)$", doc, re.MULTILINE)
+    assert heading, "the lesson table's heading is gone, so this test cannot find what to check"
+
+    body = doc[heading.end() : doc.index("### Sample learner", heading.end())]
+
+    row_pattern = re.compile(
+        r"^\| `([a-z0-9-]+)`(?: \*\*C\*\*)? \| \w+ \| (\d+) \| ([^|]+?) \| ([^|]+?) \|$",
+        re.MULTILINE,
+    )
+    documented = {
+        (match.group(1), int(match.group(2)), match.group(3).strip(), match.group(4).strip())
+        for match in row_pattern.finditer(body)
+    }
+
+    # Every line that LOOKS like a lesson row must have parsed. Without this the regex
+    # is a deny-list: an unreadable row is silently absent from `documented` instead of
+    # failing, so a ghost lesson or a malformed position passes unnoticed.
+    candidates = [
+        line
+        for line in body.splitlines()
+        if line.startswith("| `") and not line.startswith("| `id`")
+    ]
+    assert len(candidates) == len(documented), (
+        f"{len(candidates)} rows look like lesson rows but only {len(documented)} parsed; "
+        "a row this test cannot read is a row it cannot check"
+    )
+
+    store.ensure_learner_database(tmp_path)
+    connection = store.connect(tmp_path)
+    try:
+        seeded = {
+            (str(row["id"]), int(row["position"]), str(row["title"]), str(row["objective"]))
+            for row in connection.execute("SELECT id, position, title, objective FROM lessons")
+        }
+    finally:
+        connection.close()
+
+    assert documented == seeded, (
+        "docs/learner-database.md's lesson table no longer matches the seed. Update the "
+        "table in the same change that moved the catalog -- a converted unit takes a "
+        "position at the front of its language and pushes the placeholders up behind it."
+    )
+    assert int(heading.group(1)) == len(seeded), (
+        f"the heading says {heading.group(1)} lessons and the seed produces {len(seeded)}"
+    )

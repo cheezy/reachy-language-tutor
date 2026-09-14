@@ -169,9 +169,11 @@ to anything that does without a liveness check arriving first.
 
 ### The lesson-content tables — what a lesson is made of
 
-Five tables hold the material a lesson is actually taught from. All of it is **optional**:
-the thirty seeded lessons carry none of it yet, and a lesson with nothing in them reads
-back as empty rather than as an error, because the corpus is converted a unit at a time.
+Five tables hold the material a lesson is actually taught from. All of it is **optional**,
+and most lessons still have none: twelve of the forty-two seeded lessons are converted
+units carrying dialogue, notes and drills, and the other thirty are title-and-objective
+placeholders. A lesson with nothing in these tables reads back as empty rather than as an
+error, because the corpus is converted a unit at a time.
 
 None of it is personal data. These rows are identical in every household, nothing in them
 may name a learner, and they all cascade from `lessons` rather than from `learners` — so
@@ -350,28 +352,51 @@ Seeded so the app is demonstrable before any real learner exists.
 | `it` | Italian |
 | `pt` | Portuguese |
 
-### Lessons (30 total)
+### Lessons (42 total)
+
+Thirty of these are the original title-and-objective placeholders, six per language.
+The other twelve are **converted units** carrying real dialogue, usage notes and
+drills, marked **C** below: six Italian from the FSI Italian FAST and six Spanish from
+the FSI Spanish FAST. A converted unit takes a position at the FRONT of its language,
+so the placeholders behind it moved up — Italian's and Spanish's now sit at 7-12, while
+French, German and Portuguese are untouched at 1-6 because nothing has been converted
+for them yet.
+
+That asymmetry is the current state of the content gap, not a design: three of the five
+languages the catalog advertises still have no material at all.
 
 | ID | Language | Position | Title | Objective |
 |---|---|---|---|---|
-| `es-01-greetings` | Spanish | 1 | Greetings and goodbyes | Greet someone, ask how they are, and say goodbye: hola, buenos días, ¿cómo estás?, adiós. |
-| `es-02-introductions` | Spanish | 2 | Introducing yourself | Give your name and where you are from, and ask the same back: me llamo…, soy de…, ¿y tú? |
-| `es-03-numbers` | Spanish | 3 | Numbers one to twenty | Count to twenty out loud and say your age and a phone number. |
-| `es-04-ordering-food` | Spanish | 4 | Ordering food and drink | Order in a café and ask what something costs: quisiera…, ¿cuánto cuesta? |
-| `es-05-directions` | Spanish | 5 | Asking for directions | Ask where a place is and follow a simple answer: ¿dónde está…?, a la derecha, a la izquierda. |
-| `es-06-daily-routine` | Spanish | 6 | Talking about your day | Describe a typical day using present-tense verbs and times of day. |
+| `es-fast-01-getting-started-in-class` **C** | Spanish | 1 | Getting started | Greet someone, give your name, ask how they are, and say when you have not understood: buenos días, ¿cómo se llama usted?, no entiendo, ¿cómo se dice…? |
+| `es-fast-02-at-the-restaurant` **C** | Spanish | 2 | At the restaurant | Be seated, order a drink and a meal, say how you want it, and ask for the bill: ¿dónde quiere sentarse?, tráigame…, por favor, la cuenta. |
+| `es-fast-03-getting-around-inside` **C** | Spanish | 3 | Getting around inside | Find your way inside a building: the ordinal floors, ¿dónde están las escaleras?, doble a la derecha, and asking what floor something is on. |
+| `es-fast-04-the-familiar-form` **C** | Spanish | 4 | Saying tú | Switch from usted to tú with someone you know, and ask to be corrected: ¿por qué no nos tratamos de tú?, corrígeme si me equivoco. |
+| `es-fast-05-shopping-at-the-market` **C** | Spanish | 5 | Shopping at the market | Say what you want to buy, ask where to go and whether it is cheaper, and ask someone to come with you: quiero comprar…, ¿son más baratas?, ¿quieres ir conmigo? |
+| `es-fast-06-household-repairs` **C** | Spanish | 6 | Household repairs | Tell someone what went wrong at home and what you had to do about it: una avería eléctrica, se fundieron los fusibles, fue necesario que llamáramos a un electricista. |
+| `es-01-greetings` | Spanish | 7 | Greetings and goodbyes | Greet someone, ask how they are, and say goodbye: hola, buenos días, ¿cómo estás?, adiós. |
+| `es-02-introductions` | Spanish | 8 | Introducing yourself | Give your name and where you are from, and ask the same back: me llamo…, soy de…, ¿y tú? |
+| `es-03-numbers` | Spanish | 9 | Numbers one to twenty | Count to twenty out loud and say your age and a phone number. |
+| `es-04-ordering-food` | Spanish | 10 | Ordering food and drink | Order in a café and ask what something costs: quisiera…, ¿cuánto cuesta? |
+| `es-05-directions` | Spanish | 11 | Asking for directions | Ask where a place is and follow a simple answer: ¿dónde está…?, a la derecha, a la izquierda. |
+| `es-06-daily-routine` | Spanish | 12 | Talking about your day | Describe a typical day using present-tense verbs and times of day. |
 | `fr-01-greetings` | French | 1 | Greetings and politeness | Greet someone and use bonjour, salut, s'il vous plaît, merci, au revoir. |
 | `fr-02-introductions` | French | 2 | Introducing yourself | Give your name, age, and where you live: je m'appelle…, j'ai … ans, j'habite à… |
 | `fr-03-numbers` | French | 3 | Numbers one to twenty | Count to twenty out loud and say a price and a time. |
 | `fr-04-ordering-food` | French | 4 | At the café | Order a drink and a pastry, then ask for the bill: je voudrais…, l'addition, s'il vous plaît. |
 | `fr-05-directions` | French | 5 | Getting around town | Ask the way to the station and understand tout droit, à gauche, à droite. |
 | `fr-06-daily-routine` | French | 6 | Your daily routine | Describe your morning with reflexive verbs: je me lève, je me prépare. |
-| `it-01-greetings` | Italian | 1 | Greetings and goodbyes | Greet someone, ask how they are, and say goodbye: ciao, buongiorno, come stai?, arrivederci. |
-| `it-02-introductions` | Italian | 2 | Introducing yourself | Give your name and where you are from, and ask the same back: mi chiamo…, sono di…, e tu? |
-| `it-03-numbers` | Italian | 3 | Numbers one to twenty | Count to twenty out loud and say your age and a price. |
-| `it-04-ordering-food` | Italian | 4 | At the bar | Order a coffee and something to eat, then ask the price: vorrei…, quanto costa? |
-| `it-05-directions` | Italian | 5 | Asking for directions | Ask where a place is and follow a simple answer: dov'è…?, a destra, a sinistra. |
-| `it-06-daily-routine` | Italian | 6 | Talking about your day | Describe your morning with reflexive verbs: mi alzo, mi preparo. |
+| `it-fast-01-what-time-is-it` **C** | Italian | 1 | What time is it? | Ask and tell the time, and say where you have come from: che ora è?, sono le dieci e venti, da dove arriva? |
+| `it-fast-02-room-service` **C** | Italian | 2 | Room service | Say where things go and ask for what you need in a hotel room: le metta qui, Le occorre altro?, vorrei un'altra coperta. |
+| `it-fast-03-taxi-and-haircut` **C** | Italian | 3 | A taxi, and waiting your turn | Ask for a taxi, say where to take you, and ask how long the wait is: mi chiami un tassì, mi porti in..., quanto c'è da aspettare? |
+| `it-fast-04-shopping-for-clothes` **C** | Italian | 4 | Shopping for clothes | Buy clothes: say what you want to see, give your size, and say how something fits: che taglia porta?, mi sta bene, è un po' stretta. |
+| `it-fast-05-eating-out` **C** | Italian | 5 | Eating out | Ask for a table, read a menu and order for the table: ci sono tavoli liberi?, come sono fatti?, ce ne porti tre porzioni. |
+| `it-fast-06-phone-call-about-a-flat` **C** | Italian | 6 | A phone call about a flat | Telephone about somewhere to live and ask what it has: chi parla?, come sono suddivisi?, a che piano si trova? |
+| `it-01-greetings` | Italian | 7 | Greetings and goodbyes | Greet someone, ask how they are, and say goodbye: ciao, buongiorno, come stai?, arrivederci. |
+| `it-02-introductions` | Italian | 8 | Introducing yourself | Give your name and where you are from, and ask the same back: mi chiamo…, sono di…, e tu? |
+| `it-03-numbers` | Italian | 9 | Numbers one to twenty | Count to twenty out loud and say your age and a price. |
+| `it-04-ordering-food` | Italian | 10 | At the bar | Order a coffee and something to eat, then ask the price: vorrei…, quanto costa? |
+| `it-05-directions` | Italian | 11 | Asking for directions | Ask where a place is and follow a simple answer: dov'è…?, a destra, a sinistra. |
+| `it-06-daily-routine` | Italian | 12 | Talking about your day | Describe your morning with reflexive verbs: mi alzo, mi preparo. |
 | `de-01-greetings` | German | 1 | Greetings and politeness | Greet someone and use hallo, guten Tag, bitte, danke, auf Wiedersehen. |
 | `de-02-introductions` | German | 2 | Introducing yourself | Give your name, age, and where you live: ich heiße…, ich bin … Jahre alt, ich wohne in… |
 | `de-03-numbers` | German | 3 | Numbers one to twenty | Count to twenty out loud and say a price and a time. |
@@ -407,16 +432,22 @@ like the sample learner practised at install time.
 
 **What this seed produces:**
 
-- **Spanish** → next lesson is `es-03-numbers`. The learner completed lessons 1 and 2,
-  and attempted lesson 3 with a `partial` outcome that does **not** advance them. This
-  is the case most likely to be implemented wrong, so it is seeded to make the bug
-  obvious immediately.
-- **French** → next lesson is `fr-01-greetings`. Nothing attempted, so the language
-  starts from the beginning.
-- **German, Italian and Portuguese** → next lesson is `<code>-01-greetings` in each.
-  Nothing attempted. They were added after the first two, so they are also the case that
-  proves a catalog expansion reaches a robot whose database was seeded before they
-  existed — see `SEED_VERSION` below.
+- **Spanish** → next lesson is `es-fast-01-getting-started-in-class`, the first
+  converted Cycle. The sample learner's history is against the placeholders, which now
+  sit at 7-12, so six lessons they have never attempted stand in front of it. **This is
+  what happens to a real learner when content lands ahead of them**, and it is the
+  reason the seeded history is worth reading carefully: the `partial` on
+  `es-03-numbers` still does **not** advance them, but it is no longer what the next
+  lesson turns on. That rule is now demonstrated by finishing all six converted Cycles
+  and watching the learner land back on their partial rather than skip past it —
+  `test_learner_schema.py::test_next_lesson_is_unambiguous`.
+- **Italian** → next lesson is `it-fast-01-what-time-is-it`. Nothing attempted, and the
+  six converted units lead its catalog exactly as Spanish's do.
+- **French, German and Portuguese** → next lesson is `<code>-01-greetings` in each.
+  Nothing attempted, and nothing converted: these three still carry only the
+  title-and-objective placeholders. They were also added after the first two, so they
+  remain the case that proves a catalog expansion reaches a robot whose database was
+  seeded before they existed — see `SEED_VERSION` below.
 
 ### Provenance, one row per lesson
 
