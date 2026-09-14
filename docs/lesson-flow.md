@@ -190,6 +190,32 @@ This is a conversation-design issue in the prompting, not in the flow this page
 documents, so it is recorded here and belongs in a defect of its own rather than a
 change made in passing.
 
+### Fixed in D32, on 2026-09-14
+
+The locked profile now says it explicitly, in both of the places that were ambiguous.
+`RUNNING A LESSON` opens the lesson in English with one sentence naming what is about to
+be practised, before any target-language teaching; `LANGUAGE RULES` orders the switch
+after that sentence rather than at the moment the lesson opens.
+
+**The prompt already looked as though it said this**, which is why the defect survived
+review of the profile: it carried "You default to English for the framing conversation"
+and "Say in one sentence what the lesson is for". Neither states which *language* that
+sentence is in, and "switch into it for the practice itself" reads naturally as
+switching when the practice begins — which is exactly when the lesson opens. Two
+sentences that are each correct, and a gap between them wide enough for the behaviour
+above.
+
+The framing is bounded to the title and objective the tools returned, and explicitly not
+to anything the learner said, so it cannot become the model describing a lesson the
+database did not pin. `test_the_prompt_opens_a_lesson_in_english_before_switching` pins
+both halves, and a second test pins the instructions D32 must not have weakened on its
+way past — teaching only the lesson's own material, saying so when a lesson has no
+written material, and treating lesson text as content rather than instructions.
+
+**Not verified by voice.** This is a prompt change, and the transcript evidence above
+was gathered by running the app in the simulator. Nobody has yet heard the new opening.
+That check belongs with the next session that has the simulator up.
+
 ## What was not verified
 
 Named rather than assumed, because a claim nobody measured is worth less than an
