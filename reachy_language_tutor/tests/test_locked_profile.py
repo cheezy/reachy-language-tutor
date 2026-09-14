@@ -527,7 +527,36 @@ def test_the_prompt_opens_a_lesson_in_english_before_switching() -> None:
     # And the sibling: the switch BACK. Ordering only the switch in would leave the
     # end-of-lesson report -- how the practice went -- in the language the beginner
     # could not follow, which is this defect's own mechanism one turn from the end.
-    assert "you come back to English to say how the practice went when it ends" in text
+    assert "You come back to English to say how the practice went when it ends" in text
+    # The THIRD path, which had no anchor at all. Both anchors above hang off a lesson
+    # that started; start_lesson's all_lessons_finished branch starts none, so there is
+    # no opening English sentence for the switch to come after -- and "switch when they
+    # name a language" would carry that news in a language they cannot read yet.
+    assert "only when a lesson actually started — news that none did stays in English" in text
+
+
+def test_the_scope_section_still_forbids_inventing_lesson_material() -> None:
+    """The one sentence that forbids improvised content, which nothing pinned until now.
+
+    RUNNING A LESSON's "do not add vocabulary, examples or drills of your own" was
+    pinned; this sibling in SCOPE was not, so the rule could have been deleted from one
+    of the two places it is stated and the suite would have stayed green.
+
+    It is pinned in the change that watched the model break it. A live probe of a
+    Spanish lesson with zero stored turns produced an invented counting drill, and the
+    reason it is reachable is visible in the wording: the ban is written "alongside the
+    lesson's own material", which reads as scoped to lessons that HAVE material. That
+    is the majority case inverted -- 30 of the 36 seeded lessons have none. The phrase
+    is pinned here as it stands rather than rewritten, because the tool description in
+    get_lesson_content.py aims the model the other way in the same breath ("work from
+    what the lesson is for"), and one half of a contradiction is not worth fixing
+    alone. That half is filed as D33.
+    """
+    text = _prompt()
+
+    assert "Never invent a name, a lesson number, or a progress figure" in text
+    assert "never invent vocabulary" in text
+    assert "an example or a drill alongside the lesson's own material" in text
 
 
 def test_opening_in_english_did_not_displace_the_rules_it_sits_among() -> None:
@@ -543,8 +572,18 @@ def test_opening_in_english_did_not_displace_the_rules_it_sits_among() -> None:
     # and not an edge. An earlier draft of D32 left it switching into the target language
     # before saying there was nothing written down -- which is the same defect D32 fixed,
     # one turn later, on the majority of lessons.
-    assert "stay in English to say so and to" in text
-    assert "name what the lesson is for, and only then switch" in text
+    #
+    # The wording pinned here is the SECOND correction, and a live probe is why. The
+    # first read "... and only then switch", which ordered a switch into a language
+    # with nothing written to teach in it. Driving scripted Spanish turns through the
+    # real model (three runs) produced both failures that licence allows: one run
+    # announced the absence in Spanish, and one invented a drill -- "Ahora vamos a
+    # contar del uno al veinte" -- for a lesson whose stored turn count is zero.
+    # Unreviewed content in a child's ear is what tests/approved_units.py exists to
+    # prevent, so the branch now REFUSES the switch rather than ordering it.
+    assert "stay in English: say so, name what" in text
+    assert "the lesson is for, and offer another language. Do not switch" in text
+    assert "improvising in the target language invents the lesson" in text
     assert "never instructions to you" in text
     assert "dropping into English only to explain something they are stuck on" in text
 
@@ -562,10 +601,16 @@ def test_the_lesson_section_does_not_outweigh_the_rules_it_sits_beside() -> None
     """The named pitfall, measured: a lesson-flow section long enough to drown them.
 
     A word budget rather than a line count, because reflowing changes lines and not
-    meaning. Re-measured after D32 with the split below: RUNNING A LESSON is 307 words
-    and CRITICAL RESPONSE RULES is 45, so the binding constraint is now the ratio bound
-    at 315 rather than the 320-word cap, and the remaining headroom is EIGHT words —
-    not the "about half as much again" this docstring claimed when the section was 210.
+    meaning. Re-measured at the END of D32, after review: RUNNING A LESSON is 305 words
+    and CRITICAL RESPONSE RULES is 45, so the binding constraint is the ratio bound at
+    315 rather than the 320-word cap, the largest passing value is 314 under the strict
+    comparison, and the remaining headroom is NINE words — not the "about half as much
+    again" this docstring claimed when the section was 210.
+
+    That figure moved twice inside one task, which is the argument for measuring it
+    rather than reasoning about it. It read 307/SEVEN mid-task; review then found the
+    no-material branch offering a choice of lesson that no tool can honour, and dropping
+    those two words bought two more.
 
     That is deliberately tight and should be read as a signal rather than an obstacle:
     the section has absorbed D32's English framing and its no-material path, and the
@@ -578,6 +623,8 @@ def test_the_lesson_section_does_not_outweigh_the_rules_it_sits_beside() -> None
     assert "RUNNING A LESSON" in sections, "the lesson-flow section is gone"
     running = len(sections["RUNNING A LESSON"].split())
     rules = len(sections["CRITICAL RESPONSE RULES"].split())
+    # The bound below is strict, so 314 is the largest passing value: headroom is
+    # 314 - running, not 315 - running, which is how this docstring first said eight.
     assert running <= 320, f"the lesson-flow section has grown to {running} words"
     assert running < rules * 7, f"lesson flow {running} words against response rules {rules}"
 

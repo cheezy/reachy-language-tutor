@@ -227,20 +227,56 @@ Review then found two places the same mechanism survived, and both are fixed:
 Both are pinned, and each was confirmed by reverting the profile sentence and watching
 the specific test fail.
 
-### Still to check, and it needs a person
+### Heard, by the model rather than by a person
 
-**Nobody has heard the new opening.** This is a prompt change; the evidence that the
-defect existed came from running the app and reading transcripts, and the equivalent
-evidence that it is gone can only come the same way. The tests assert that particular
-sentences are in the profile, which is not the same claim as the model obeying them.
+An earlier draft of this section said the new opening could only be checked by someone
+at a microphone. That was wrong, and the review said so: `tests/conversation_probe.py`
+drives scripted learner turns through the real model with no audio hardware at all —
+its own docstring lists three tasks that shipped their manual test undischarged for
+want of a person who was never needed.
 
-The check, for whoever has the simulator up: start the robot service *and* the tutor app
-(they are two different things — see `docs/manual-test-script.md`), ask for **Italian**,
-which has written material, and then for **Spanish**, which has none. Both openings
-should be one English sentence naming what is about to be practised. The Spanish one
-should also say in English that there is nothing written down, and neither should switch
-before saying it. The Italian one should switch straight afterwards and teach in
+The probe (`tests/lesson_opening_probe.py`) asks for **Italian**, which has written material,
+then **Spanish**, which has none. Run before the second correction, three times:
+
+| Run | Spanish opening | Verdict |
+|-----|-----------------|---------|
+| 1 | English framing, then *"No tengo material escrito para esta lección"* | absence announced **in Spanish** |
+| 2 | English framing only; absence not mentioned | no orientation about the gap |
+| 3 | English framing, then *"Ahora vamos a contar del uno al veinte: uno"* | **invented a drill** |
+
+Run 3 is the serious one. Spanish position 3 has **zero** stored dialogue turns, so that
+counting drill came from the model, not the database — unreviewed content in a child's
+ear, which is the single thing `tests/approved_units.py` exists to prevent.
+
+Both failures trace to the same clause. The first fix ended *"and only then switch"*,
+which ordered a switch into a language the tutor had nothing written to teach in, while
+`RUNNING A LESSON` simultaneously forbids adding material of its own. Facing that
+contradiction the model resolved it, twice out of three, by breaking the ban. The branch
+now refuses the switch instead of ordering it, and offers another language.
+
+Re-run afterwards, every Spanish opening stayed in English, named what the lesson
+practises, said the material is missing and offered an alternative; no run switched, and
+none invented content. Every Italian opening framed in English and then switched into
 Italian.
+
+Seven post-fix runs, and they are not interchangeable: four used an earlier wording that
+offered "another lesson or language", and three used the shipped wording, which offers
+only another language — review found that a lesson cannot be chosen at all, since
+`start_lesson` declares only `language` and the database picks the lesson. So the
+shipped text has three runs behind it and the branch's shape has seven. That is a
+handful of samples, not a proof, and the failure it replaces was itself intermittent at
+one run in three — the rate matters as much as the verdict, which is why
+`tests/lesson_opening_probe.py` defaults to four runs rather than one.
+
+**The contradiction is only half fixed**, and the two halves are not equally strong.
+`get_lesson_content.py:91` reads "if it says the lesson has no material written down, work
+from what the lesson is for and claim nothing you cannot see" — a tension rather than a
+contradiction, because the same sentence carries a counter-clause and the one before it
+(line 89) already forbids inventing. The blunter half is the message the model actually
+receives at runtime: `get_lesson_content.py:184`, "so we can work from what it is for",
+with no counter-clause at all. The profile half is fixed here; the tool half is filed as
+**D33**, because those are not lines D32 changed and a tool-contract wording defect is a
+different class from an opening-turn orientation defect.
 
 ## What was not verified
 
@@ -277,18 +313,29 @@ currently promises five languages and can teach one.
 
 ## Driving this flow without a microphone
 
-You cannot, and that is worth stating plainly so the next person does not spend an hour
-looking. The `/rpc` control surface (`docs/rpc-control-surface.md`) exposes twelve
-methods over the network, pinned as an allow-list in
-`_RPC_METHODS_EXPOSED_ON_THE_NETWORK` (`console.py:156-171`): `conversation.status`,
-`.say`, `.interrupt`, `.mic`, four `personalities.*`, two `voices.*`,
-`tool_spaces.list` and `profile_tools.get`. **Not** `backend.config`, which is
-registered but deliberately refused over the network by D20.
+You can, but not over the network, and the distinction is worth stating precisely because
+an earlier draft of this page got it wrong in both directions — first claiming the whole
+flow needed a person, then correcting that in the D32 section above while leaving this
+section asserting the opposite two screens further down.
 
+**Over `/rpc`, you cannot.** The control surface (`docs/rpc-control-surface.md`) exposes
+twelve methods, pinned as an allow-list in `_RPC_METHODS_EXPOSED_ON_THE_NETWORK`
+(`console.py:156-171`): `conversation.status`, `.say`, `.interrupt`, `.mic`, four
+`personalities.*`, two `voices.*`, `tool_spaces.list` and `profile_tools.get`. **Not**
+`backend.config`, which is registered but deliberately refused over the network by D20.
 `conversation.say` makes the *robot* speak. **None of the twelve injects a learner
-utterance**, and the transcript broadcast is outbound only -- so there is no inbound
-text path at all.
+utterance**, and the transcript broadcast is outbound only — so over the network there is
+no inbound text path.
 
-So the end-to-end flow is exercised by a person speaking, following
-`docs/manual-test-script.md`, with the database as the oracle. `tests/` covers every
-layer below the microphone.
+**In process, you can.** `tests/conversation_probe.py` holds the session in memory and its
+`say()` creates a user message item directly, which is a learner turn the model answers.
+`tests/identity_probe_session.py` and `tests/lesson_opening_probe.py` are both built on
+it, and `docs/identity-boundary-probe.md` says to re-run that kind of probe after any
+prompt or model change. The D32 section above is the result of doing exactly that, and it
+found two failures no prompt-level assertion could have found.
+
+What still needs a person is the audio path itself — microphone, VAD, speech-to-text, and
+the spoken voice — plus the end-to-end run in `docs/manual-test-script.md`, with the
+database as the oracle. Everything above that layer can be driven from Python.
+
+`tests/` covers every layer below the microphone.
