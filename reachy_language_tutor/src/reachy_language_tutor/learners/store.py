@@ -1976,7 +1976,27 @@ _PRACTISED_LANGUAGES_SQL = _learner_scoped(
 # shared reference data, not personal data. The guard above covers the two tables
 # that hold anything about a person.
 _LANGUAGE_SQL = "SELECT code, name FROM languages WHERE code = ?"
-_LANGUAGE_CATALOG_SQL = "SELECT code, name FROM languages ORDER BY name"
+# has_material is DERIVED here rather than stored, so a conversion landing flips it
+# with no code change and nothing to remember. It asks the three content tables
+# directly: a language has material when ANY of its lessons has a dialogue turn, a
+# usage note or a drill. A lesson row on its own is a title and an objective, which is
+# a syllabus entry rather than something to teach from.
+_LANGUAGE_CATALOG_SQL = """
+    SELECT
+        languages.code,
+        languages.name,
+        EXISTS (
+            SELECT 1 FROM lessons
+            WHERE lessons.language_code = languages.code
+              AND (
+                  EXISTS (SELECT 1 FROM lesson_dialogue_turns WHERE lesson_dialogue_turns.lesson_id = lessons.id)
+                  OR EXISTS (SELECT 1 FROM lesson_notes WHERE lesson_notes.lesson_id = lessons.id)
+                  OR EXISTS (SELECT 1 FROM lesson_drills WHERE lesson_drills.lesson_id = lessons.id)
+              )
+        ) AS has_material
+    FROM languages
+    ORDER BY languages.name
+"""
 _LESSONS_SQL = (
     "SELECT id, language_code, position, title, objective FROM lessons WHERE language_code = ? ORDER BY position"
 )
@@ -2363,7 +2383,20 @@ def get_language_catalog(*, instance_path: str | Path | None = None) -> tuple[Ca
     try:
         connection = connect(instance_path)
         rows = connection.execute(_LANGUAGE_CATALOG_SQL).fetchall()
-        return tuple(CatalogLanguage(code=str(row["code"]), name=str(row["name"])) for row in rows)
+        catalog = tuple(
+            CatalogLanguage(
+                code=str(row["code"]),
+                name=str(row["name"]),
+                has_material=bool(row["has_material"]),
+            )
+            for row in rows
+        )
+        # Shape, never a value: two counts, and no language name either -- a catalog
+        # is not personal data but this reader follows the same rule as the others.
+        language_count = len(catalog)
+        with_material_count = len([entry for entry in catalog if entry.has_material])
+        logger.info("Catalog read: languages=%d with_material=%d", language_count, with_material_count)
+        return catalog
     except _READER_ABSORBS as exc:
         # No learner is bound here, but _log_safe stays: an exception's text can carry
         # a path, and this follows the same rule as every other reader regardless.

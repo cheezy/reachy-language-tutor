@@ -4173,6 +4173,8 @@ _PERMITTED_LOG_NAMES = frozenset(
         "SEEDED_LEARNERS_KEY",  # a module constant naming a settings key
         "LEARNER_DB_FILENAME",  # the fixed filename, which names no person and no directory
         "suffix",  # "" / "-wal" / "-shm" / "-journal", from a literal tuple in the loop
+        "language_count",  # int, len() of the catalog tuple
+        "with_material_count",  # int, len() of a filtered list
     }
 )
 
@@ -4414,6 +4416,19 @@ def test_the_generic_names_the_log_guard_permits_are_bound_to_what_they_claim() 
             accounted.add(id(node.target))
             if not (isinstance(node.annotation, ast.Name) and node.annotation.id in {"bool", "int"}):
                 wrong.append(f"line {node.lineno}: `{node.target.id}` is declared as something that can carry a value")
+            # An annotated ASSIGNMENT is not a field declaration, and this branch was
+            # checking only the annotation -- so `refusal: int = str(path)` would have
+            # passed on the strength of the word `int`. A declaration has no value;
+            # anything with one has to justify it the way a plain assignment does.
+            # A field DEFAULT is a constant and is fine (`seeded: bool = False`). A
+            # computed value is not a declaration at all, and this branch used to wave
+            # it through on the strength of the annotation -- so `refusal: int =
+            # str(path)` would have passed because the word `int` appeared.
+            if node.value is not None and not isinstance(node.value, ast.Constant):
+                wrong.append(
+                    f"line {node.lineno}: `{node.target.id}` is an annotated assignment with a computed "
+                    "value, so the annotation is a claim about the name rather than about what it is bound to"
+                )
         elif isinstance(node, ast.Assign):
             targets = [t for t in ast.walk(node.targets[0]) if isinstance(t, ast.Name) and t.id in generic]
             if not targets:
@@ -4425,7 +4440,18 @@ def test_the_generic_names_the_log_guard_permits_are_bound_to_what_they_claim() 
             called = {c.func.id for c in calls if isinstance(c.func, ast.Name)}
             called |= {c.func.attr for c in calls if isinstance(c.func, ast.Attribute)}
             # A tuple unpack of int()s, or an assignment built only from safe producers.
-            if called and called <= (_SAFE_PRODUCERS | {"int", "tuple"}):
+            # `len` joins them because CPython REQUIRES __len__ to return an int, so
+            # len() of anything is a count and cannot carry a name or a path out of its
+            # argument -- which is the property this list is about.
+            #
+            # `sum` was added here too, on the reasoning that summing 1s gives a count.
+            # That reasoning is WRONG and review had the bypass: `sum([], start)`
+            # returns `start` unchanged, because an empty iterable never touches the
+            # addition. `with_material_count = sum([], instance_path)` passed both
+            # guards and wrote a household path into the log line. Widening a security
+            # allow-list on an argument that sounds right is how a guard stops being
+            # one; the entry is gone and `len` is the only addition.
+            if called and called <= (_SAFE_PRODUCERS | {"int", "tuple", "len"}):
                 continue
             if not calls and all(isinstance(n, (ast.Constant, ast.Name, ast.Tuple)) for n in ast.walk(node.value)):
                 continue
@@ -4445,3 +4471,37 @@ def test_the_generic_names_the_log_guard_permits_are_bound_to_what_they_claim() 
     unbound = sorted(name for name, count in seen.items() if count == 0)
     assert not unbound, f"permitted but never bound, so the comment is unchecked: {unbound}"
     assert wrong == [], wrong
+
+
+def test_the_log_guard_refuses_an_annotated_assignment_that_hides_a_value() -> None:
+    """The hole the AnnAssign branch had, pinned so it cannot reopen.
+
+    That branch exists for dataclass FIELD declarations, where the annotation is the
+    whole claim: `seeded: bool = False` cannot carry a name or a path. It checked only
+    the annotation, so an annotated ASSIGNMENT with a computed value -- `refusal: int
+    = str(path)` -- passed on the strength of the word `int` while binding a path to a
+    name the log guard waves through.
+
+    Constants stay permitted, because a field default is one. Anything computed has to
+    justify itself the way a plain assignment does.
+    """
+    checker = inspect.getsource(test_the_generic_names_the_log_guard_permits_are_bound_to_what_they_claim)
+
+    def verdicts(source: str) -> list[str]:
+        """Run the branch's rule over a snippet and return what it objected to."""
+        wrong: list[str] = []
+        generic = {"refusal", "seeded"}
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id in generic:
+                if not (isinstance(node.annotation, ast.Name) and node.annotation.id in {"bool", "int"}):
+                    wrong.append(f"{node.target.id}: annotation")
+                if node.value is not None and not isinstance(node.value, ast.Constant):
+                    wrong.append(f"{node.target.id}: computed value")
+        return wrong
+
+    assert "not isinstance(node.value, ast.Constant)" in checker, (
+        "the AnnAssign value check is gone, so an annotated assignment can hide a path again"
+    )
+    assert verdicts("refusal: int = str(path)") == ["refusal: computed value"]
+    assert verdicts("seeded: bool = False") == [], "a constant field default is still fine"
+    assert verdicts("seeded: bool") == [], "a bare field declaration is still fine"

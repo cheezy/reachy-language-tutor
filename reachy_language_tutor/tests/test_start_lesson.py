@@ -179,8 +179,13 @@ async def test_the_returned_lesson_carries_no_id_for_the_model_to_reuse(instance
 
 @pytest.mark.asyncio
 async def test_a_learner_with_no_history_is_offered_the_first_lesson(instance: Path) -> None:
-    """No history is not an error: it is somebody about to start at the beginning."""
-    result = await _call({"language": "French"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    """No history is not an error: it is somebody about to start at the beginning.
+
+    Italian, not French. The seeded learner has no history in either, but French now
+    refuses for want of written material, so asking it here would test that refusal
+    rather than the fresh-start rule this test is named for.
+    """
+    result = await _call({"language": "Italian"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
 
     assert result["started"] is True
     assert result["lesson"]["position"] == 1
@@ -355,6 +360,12 @@ async def test_a_lesson_id_the_session_cannot_pin_is_reported_as_could_not_start
         "INSERT INTO lessons (id, language_code, position, title, objective) VALUES (?, ?, ?, ?, ?)",
         ("nl 01 groeten", "nl", 1, "Greetings", "Say hello."),
     )
+    # One dialogue turn, so the language HAS material. Without it start_lesson refuses
+    # with lesson_not_written_yet and never reaches the pin, and this test is about the pin.
+    connection.execute(
+        "INSERT INTO lesson_dialogue_turns (lesson_id, position, speaker, text) VALUES (?, ?, ?, ?)",
+        ("nl 01 groeten", 1, "Usted", "Goedendag."),
+    )
     connection.commit()
     connection.close()
     deps = _deps(current_learner_id=SEEDED_LEARNER, instance_path=instance)
@@ -473,3 +484,245 @@ async def test_nothing_personal_reaches_a_log(instance: Path, caplog: pytest.Log
         assert SEEDED_LEARNER not in rendered, rendered
         assert expected.next_lesson.id not in rendered, rendered
         assert expected.next_lesson.title not in rendered, rendered
+
+
+# ------------------------------------------------- a language with nothing written in it
+#
+# The catalog advertises five languages and, when this was written, two of them had
+# anything to teach from. Offering the other three beside Italian and Spanish told a
+# learner something false, and starting one handed the model a title and an objective
+# and asked it to teach from them -- which is how a child gets a lesson nobody reviewed.
+#
+# `lesson_not_written_yet` is the fourth empty answer, and the four mean different things to
+# the person listening: I do not teach that (language_not_taught), I have no lessons
+# planned (no_lessons_yet), I have the plan but nothing written (lesson_not_written_yet), and
+# you have done them all (all_lessons_finished). Collapsing any pair loses the meaning.
+
+
+def _language_with_lessons_but_no_material(instance: Path, code: str = "nl", name: str = "Dutch") -> None:
+    """A catalogued language with a full syllabus and not a word written in it."""
+    connection = sqlite3.connect(store.learner_db_path_for_instance(instance))
+    try:
+        connection.execute("INSERT INTO languages (code, name) VALUES (?, ?)", (code, name))
+        for position in (1, 2):
+            connection.execute(
+                "INSERT INTO lessons (id, language_code, position, title, objective) VALUES (?, ?, ?, ?, ?)",
+                (f"{code}-0{position}-placeholder", code, position, f"Lesson {position}", "An objective, and nothing else."),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_a_language_with_lessons_but_no_material_is_refused_distinctly(instance: Path) -> None:
+    """The whole point: a plan is not something to teach from."""
+    _language_with_lessons_but_no_material(instance)
+
+    result = await _call({"language": "Dutch"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+
+    assert result["started"] is False
+    assert result["reason"] == "lesson_not_written_yet"
+    # Each of the other three would be a different, wrong thing to tell the learner.
+    assert result["reason"] != "no_lessons_yet", "it has lessons; what it lacks is their content"
+    assert result["reason"] != "all_lessons_finished", "they have finished nothing"
+    assert result["reason"] != "language_not_taught", "it IS taught, and that is the problem"
+    # And the answer names what CAN be taught, so the refusal is useful rather than bare.
+    assert set(result["languages_with_material"]) == {"Italian", "Spanish"}
+
+
+@pytest.mark.asyncio
+async def test_a_language_with_no_lessons_at_all_still_says_no_lessons_yet(instance: Path) -> None:
+    """The distinction this nearly lost: no syllabus is not the same as an empty one.
+
+    A language with no lessons also has no material, so an earlier version of the
+    check fired first and turned `no_lessons_yet` into `lesson_not_written_yet`. The suite
+    caught it. The ordering is load-bearing and this pins it.
+    """
+    connection = sqlite3.connect(store.learner_db_path_for_instance(instance))
+    connection.execute("INSERT INTO languages (code, name) VALUES (?, ?)", ("da", "Danish"))
+    connection.commit()
+    connection.close()
+
+    result = await _call({"language": "Danish"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+
+    assert result["reason"] == "no_lessons_yet"
+
+
+@pytest.mark.asyncio
+async def test_a_language_gaining_material_starts_working_with_no_code_change(instance: Path) -> None:
+    """The property that makes this survive conversions landing one at a time.
+
+    Nothing here edits a list of which languages are ready. A single dialogue turn is
+    written into one lesson, and the same call that refused a moment ago now starts
+    it -- because the signal is derived from the content tables on every read.
+    """
+    _language_with_lessons_but_no_material(instance)
+    before = await _call({"language": "Dutch"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    assert before["reason"] == "lesson_not_written_yet", "the precondition, or this proves nothing"
+
+    connection = sqlite3.connect(store.learner_db_path_for_instance(instance))
+    connection.execute(
+        "INSERT INTO lesson_dialogue_turns (lesson_id, position, speaker, text) VALUES (?, ?, ?, ?)",
+        ("nl-01-placeholder", 1, "Usted", "Goedendag."),
+    )
+    connection.commit()
+    connection.close()
+
+    after = await _call({"language": "Dutch"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+
+    assert after["started"] is True, "one content row is all it should take"
+    assert after["lesson"]["position"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_language_with_material_in_only_some_lessons_is_not_refused(instance: Path) -> None:
+    """Italian and Spanish today: six converted units and six placeholders each.
+
+    The test is ANY, not ALL. A language whose first lessons are written and whose
+    later ones are not is a normal language part way through conversion, and refusing
+    it would take away the material that does exist.
+    """
+    result = await _call({"language": "Italian"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+
+    assert result["started"] is True
+    assert "reason" not in result, "a started lesson carries no refusal reason"
+    assert result["lesson"]["position"] == 1
+
+
+def test_the_availability_signal_comes_from_the_database_and_not_from_the_call(instance: Path) -> None:
+    """The security consideration: the conversation must not choose what is offered.
+
+    start_lesson declares one property, `language`, and the catalog read takes no
+    argument at all -- so there is no route by which anything the model says can make
+    a language look ready. This asserts the shape rather than trusting it.
+    """
+    catalog_call = inspect.signature(store.get_language_catalog)
+    assert list(catalog_call.parameters) == ["instance_path"], (
+        "the catalog read gained an argument, which is a route for the conversation to influence it"
+    )
+
+    declared = module.StartLesson.parameters_schema["properties"]
+    assert set(declared) == {"language"}, "start_lesson gained a property the model can fill in"
+
+    # And has_material is not something a caller can pass: it is computed in SQL.
+    source = Path(store.__file__).read_text(encoding="utf-8")
+    assert "AS has_material" in source, "has_material is no longer derived in the catalog query"
+
+
+@pytest.mark.asyncio
+async def test_finishing_an_unwritten_language_says_finished_not_no_material(instance: Path) -> None:
+    """The mirror of the collision above, and the one review had to find for me.
+
+    Moving the has_material check after the lesson counts fixed `no_lessons_yet` and
+    broke `all_lessons_finished`: a learner who had completed every lesson of a
+    language with no written material was told "I have nothing written" rather than
+    "you have finished them all". One collision fixed, its mirror opened -- the
+    fix-the-member-not-the-class shape, inside a single function.
+
+    The check now sits last, so it fires only when a lesson would otherwise start.
+    """
+    _language_with_lessons_but_no_material(instance)
+    connection = sqlite3.connect(store.learner_db_path_for_instance(instance))
+    for lesson_id in ("nl-01-placeholder", "nl-02-placeholder"):
+        connection.execute(
+            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at)"
+            " VALUES (?, ?, 'completed', 90, 1)",
+            (SEEDED_LEARNER, lesson_id),
+        )
+    connection.commit()
+    connection.close()
+
+    result = await _call({"language": "Dutch"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+
+    assert result["reason"] == "all_lessons_finished", "finishing a course is news, not a shortage"
+    assert result["reason"] != "lesson_not_written_yet"
+
+
+@pytest.mark.asyncio
+async def test_the_two_tools_describe_the_catalog_the_same_way(instance: Path) -> None:
+    """Sibling drift, caught in review: one tool split the catalog and the other did not.
+
+    get_progress learned to answer with languages_with_material and
+    languages_without_material_yet; start_lesson kept returning a flat list of all
+    five names. Both answer the same question in the same conversation, so a learner
+    could be told the robot teaches five languages by one tool and two by the other.
+    """
+    from reachy_language_tutor.tools.get_progress import GetProgress
+
+    deps = _deps(current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    started = await StartLesson()(deps, language=UNTAUGHT_NAME)
+    progressed = await GetProgress()(deps, language=UNTAUGHT_NAME)
+
+    for answer in (started, progressed):
+        assert set(answer["languages_with_material"]) == {"Italian", "Spanish"}
+        assert set(answer["languages_without_material_yet"]) == {"French", "German", "Portuguese"}
+
+
+@pytest.mark.asyncio
+async def test_an_unwritten_lesson_in_a_written_language_is_refused_too(instance: Path) -> None:
+    """The wall a per-LANGUAGE gate could not see, reachable today with no legacy data.
+
+    Italian and Spanish each ship six converted units in front of six empty
+    placeholders. The language has material, so a language-level check waves it
+    through -- and lesson seven is a title and an objective with nothing behind it.
+    start_lesson would open it and get_lesson_content would answer "we can work from
+    what it is for", which is the improvised lesson this task exists to prevent,
+    invited by the next tool call.
+
+    Gating on the lesson that would actually start catches this and the
+    whole-language case with one rule.
+    """
+    connection = sqlite3.connect(store.learner_db_path_for_instance(instance))
+    converted = [
+        row[0]
+        for row in connection.execute(
+            "SELECT id FROM lessons WHERE language_code = 'it' AND position <= 6 ORDER BY position"
+        )
+    ]
+    assert len(converted) == 6, "the six converted Italian units, or this test is about something else"
+    for lesson_id in converted:
+        connection.execute(
+            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at)"
+            " VALUES (?, ?, 'completed', 90, 1)",
+            (SEEDED_LEARNER, lesson_id),
+        )
+    connection.commit()
+    connection.close()
+
+    result = await _call({"language": "Italian"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+
+    assert result["started"] is False, "lesson seven has nothing written in it"
+    assert result["reason"] == "lesson_not_written_yet"
+    # And it is still honest about the language, which DOES have material.
+    assert set(result["languages_with_material"]) == {"Italian", "Spanish"}
+
+
+@pytest.mark.asyncio
+async def test_a_lesson_whose_content_cannot_be_read_is_not_started(instance: Path) -> None:
+    """The gate must fail CLOSED, and this is the branch that let it fail open.
+
+    `get_lesson_content` answers None for three different reasons, and one of them is
+    a store it could not read. The first version of this gate permitted None, so with
+    an unreadable database the lesson started, get_lesson_content then told the model
+    "we can work from what it is for", and finish_lesson wrote the improvised lesson
+    down as completed -- the exact behaviour this task exists to prevent, reached by
+    the guard meant to prevent it.
+
+    No test distinguished the two versions, which is how it survived review round 1.
+    """
+    deps = _deps(current_learner_id=SEEDED_LEARNER, instance_path=instance)
+
+    def unreadable(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    original = module.get_lesson_content
+    module.get_lesson_content = unreadable
+    try:
+        result = await StartLesson()(deps, language="Italian")
+    finally:
+        module.get_lesson_content = original
+
+    assert result["started"] is False, "an unreadable lesson must not start"
+    assert result["reason"] == "could_not_start"
+    assert deps.lesson_session.read_for(SEEDED_LEARNER) is None, "and nothing was pinned"

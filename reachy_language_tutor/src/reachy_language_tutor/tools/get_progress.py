@@ -44,7 +44,12 @@ class GetProgress(Tool):
         "many are left, and which lesson comes next. Name the language the person asked about. You cannot choose "
         "whose progress you read, and you must not ask anyone for a name or an id in order to call it. The listed "
         "languages are the ones this robot currently teaches; if someone asks about another one, this reports back "
-        "which are taught. If it returns an error, say plainly what it says and never invent a lesson or a figure."
+        "which are taught, split into 'languages_with_material' and 'languages_without_material_yet'. Offer the "
+        "first list: the second is a plan with nothing written in it. 'has_material' says whether the language "
+        "asked about has ANY written lesson -- it describes the language, and it is not permission to start: "
+        "start_lesson decides that for the particular lesson and may still refuse one that is empty. So do not "
+        "promise a lesson from this answer; call start_lesson and say what it tells you. If it returns an "
+        "error, say plainly what it says and never invent a lesson or a figure."
     )
     # One property, and nothing identity-shaped may ever join it. The learner's
     # identity comes from application state; anything declared here is something the
@@ -121,9 +126,16 @@ class GetProgress(Tool):
         matched = resolve_language(catalog, spoken)
         if matched is None:
             logger.warning("get_progress: the requested language is not in the catalog")
+            # Split, not flattened. Listing all five as one set told a learner the
+            # robot could teach five languages when it can teach two -- and the one
+            # they just asked for was refused, so the list is the whole answer they
+            # get. Both keys are always present, so the model cannot read an absent
+            # key as "none of those".
             return {
                 "error": "I do not teach that language.",
                 "languages_taught": [entry.name for entry in catalog],
+                "languages_with_material": [entry.name for entry in catalog if entry.has_material],
+                "languages_without_material_yet": [entry.name for entry in catalog if not entry.has_material],
             }
 
         progress = get_progress(learner_id, matched.code, instance_path=deps.instance_path)
@@ -148,6 +160,10 @@ class GetProgress(Tool):
         return {
             "language": progress.language_name,
             "language_code": progress.language_code,
+            # Derived from the content tables on every read, so it flips on its own
+            # the day this language is converted. False means the lessons below are a
+            # syllabus with nothing written in them yet.
+            "has_material": matched.has_material,
             "completed_count": len(progress.completed),
             "remaining_count": len(progress.remaining),
             "total_lessons": len(progress.completed) + len(progress.remaining),

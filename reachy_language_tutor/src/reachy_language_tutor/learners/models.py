@@ -202,10 +202,24 @@ class CatalogLanguage:
     A caller holding the whole catalog can say "I do not teach that" from evidence --
     seeing the list and not finding the language in it -- rather than inferring it
     from a lookup that answers None for three different reasons.
+
+    `has_material` carries the second fact a caller needs and could not previously
+    get: whether any lesson in this language has anything written in it. A language
+    can be taught, have a full syllabus of lessons, and still have nothing to teach
+    from -- which was true of four of the five languages here and stays true of three
+    of them. Offering such a language beside one that has content states something
+    false, so the distinction travels with the language rather than being rediscovered
+    by whoever lists it.
+
+    It is DERIVED from the content tables on every read, never stored and never
+    configured. A conversion landing makes it flip on its own, with no code change and
+    nothing to remember to update -- which is the only version of this that survives
+    conversions arriving one at a time.
     """
 
     code: str
     name: str
+    has_material: bool
 
 
 @dataclass(frozen=True)

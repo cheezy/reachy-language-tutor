@@ -66,6 +66,23 @@ _DRILL_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
+def lesson_has_nothing_to_teach(content: Any) -> bool:
+    """Say whether this lesson would read back empty to a learner.
+
+    Exported because start_lesson gates on it and this module acts on it, and a guard
+    that means something different from the code it protects is the D19 family this
+    repository has already paid for. The difference is real rather than theoretical:
+    the obvious test, `not content.drills`, counts the STORE's rows, while what a
+    learner is read is the RENDERED list, which drops any drill whose kind
+    _DRILL_FIELDS does not know. A lesson holding only a drill of an unknown kind is
+    therefore not-empty by the raw test and empty by the rendered one -- so a gate
+    using the raw test would start a lesson this module then reports as having no
+    material, which is the improvisation path. Unreachable while schema.sql CHECKs the
+    two known kinds, and reachable the day a third is added on one side only.
+    """
+    return not (content.turns or content.notes or any(_drill(drill) for drill in content.drills))
+
+
 def _drill(drill: Any) -> dict[str, Any] | None:
     """Render one drill as only the fields its kind fills, or nothing if unknown."""
     fields = _DRILL_FIELDS.get(drill.kind)

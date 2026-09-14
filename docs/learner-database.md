@@ -688,7 +688,7 @@ learner progress` — so a caller watching only the last of those misses breakag
 other two. `record_result` needs none of this: it already reports `storage_unavailable`
 explicitly.
 
-### The three empty answers, which are not the same thing
+### The four empty answers, which are not the same thing
 
 This distinction is the reason `get_progress` returns an optional value rather than an
 always-populated one:
@@ -698,6 +698,7 @@ always-populated one:
 | Language taught, never practised | populated; `completed` empty, `next_lesson` is lesson 1 | "You haven't started French — shall we?" |
 | Language not taught here | `None`, **and nothing logged** | "I don't teach that language yet." |
 | Language taught, no lessons written | populated; `remaining` empty, `next_lesson` is `None` | "I teach it, but I have nothing prepared." |
+| Language taught, lessons written, **none of them filled in** | populated; `next_lesson` is a real lesson, `has_material` is `False` | "I have the plan for French but nothing written to teach from yet." |
 | Every lesson completed | `remaining` empty, `completed` full | "You've finished Spanish." |
 
 The "nothing logged" in the second row is load-bearing, not decoration: `None` also
@@ -726,6 +727,105 @@ An **unknown learner** gets a populated fresh start rather than an error — the
 catalog is not personal data, so there is nothing to withhold. Recording a result is
 where an unknown learner is caught and reported, because that is the operation that
 must not silently appear to succeed.
+
+### Why a language can be taught and still have nothing to teach
+
+**The decision: a language with no written material stays in the catalog and is marked,
+rather than being hidden.** `CatalogLanguage.has_material` carries the mark, and both
+learner-facing tools act on it — `get_progress` and `start_lesson` both split their
+catalog answer into `languages_with_material` and `languages_without_material_yet`.
+
+**Presentation is per LANGUAGE; refusing to start is per LESSON.** These are different
+questions and an earlier version of this change answered both with the language-level
+flag, which was wrong in a way no legacy data was needed to reach. Italian and Spanish
+each carry six converted units in front of six empty placeholders, so the language has
+material and lesson seven does not: `start_lesson` opened it and `get_lesson_content`
+then said *"we can work from what it is for"* — the improvised lesson this whole section
+exists to prevent, invited by the next tool call, while `start_lesson`'s own description
+had just said not to make one up. `start_lesson` now asks whether the lesson that would
+actually start has anything written in it, which catches that case and the
+whole-language case with one rule.
+
+Two properties of that gate are load-bearing and were both got wrong first:
+
+- **It fails CLOSED.** `get_lesson_content` answers `None` for three different reasons,
+  one of which is a store it could not read, and the first version permitted `None`.
+  With an unreadable database the lesson started, the reader then said *"we can work
+  from what it is for"*, and the improvised lesson was written down as completed — the
+  behaviour this section exists to prevent, reached through the guard meant to prevent
+  it. A guard whose permitted set contains "whatever that was" is not a guard.
+- **It shares one definition of empty with the reader it protects.** The obvious test,
+  `not content.drills`, counts the store's rows, while a learner is read the RENDERED
+  drills, which drop any kind the reader does not know. Those disagree the day a third
+  drill kind is added on one side only, and the disagreement points the wrong way: the
+  gate would start a lesson the reader then calls empty. Both now call
+  `lesson_has_nothing_to_teach`.
+
+And `has_material` describes the LANGUAGE, not permission to start: `get_progress` can
+report a language as having material while `start_lesson` refuses the particular lesson
+that comes next. The tool descriptions say so, because a model reading `has_material:
+true` as "go ahead" will announce a lesson by name and then have it retracted.
+
+**Why marked rather than hidden.** The placeholder lessons are the syllabus a conversion
+fills in, and they are the plan of record for a language — deleting them, or pretending
+the language is not taught, would throw away the only statement of what that course is
+meant to cover. Hiding it also answers a different question from the one a learner asks:
+"can you teach me French" is honestly answered "not yet, and here is what I can teach",
+not "I do not teach French", which is false.
+
+**Why a fourth reason code rather than reusing one.** The four empty answers mean
+opposite things to the person listening. `language_not_taught` is *never*;
+`no_lessons_yet` is *no plan*; `lesson_not_written_yet` is *a plan with nothing written
+in it*; `all_lessons_finished` is *congratulations*. Collapsing any pair tells a learner
+something untrue about themselves or about the robot, and this change collapsed two
+different pairs before it stopped:
+
+- placed before the lesson counts, it turned `no_lessons_yet` into the new code, because
+  a language with no lessons also has no material;
+- moved after them, it turned `all_lessons_finished` into the new code, so somebody who
+  had finished every lesson of an unwritten course was told there was no course.
+
+The check now sits last, gated on the lesson that would start, and a test pins each of
+those two collisions separately.
+
+**The code is `lesson_not_written_yet`, deliberately not `no_material_yet`.**
+`get_lesson_content` already publishes `no_material` for a RUNNING lesson with nothing
+written, and it carries the opposite guidance — work from the objective. Two codes one
+suffix apart, handed to the same model, meaning different things, is exactly the
+indistinctness this section is about; the vocabulary the model sees is one vocabulary,
+not one per tool.
+
+**Why it is derived and never stored.** `has_material` is computed in the catalog query
+from the three content tables: a language has material when ANY of its lessons has a
+dialogue turn, a usage note or a drill. Nothing records it, nothing configures it, and
+there is no list of ready languages anywhere in the app or the profile. A conversion
+landing flips it on its own — which is the only version of this that survives
+conversions arriving one language at a time, as they are. It is ANY rather than ALL because Italian and Spanish each have six converted units in
+front of six placeholders, and a language part way through conversion should be offered
+for the material it does have — the per-lesson gate above is what stops that offer
+becoming an empty lesson.
+
+**Measured on 2026-09-14**: Italian and Spanish have material; French, German and
+Portuguese do not. The catalog advertises five languages and can teach two.
+
+**What this does NOT fix, observed live on 2026-09-14.** Driven through
+`tests/language_availability_session.py`, the refusal works and holds under pressure:
+asked for French the tutor said *"I have a French lesson plan, but no written material to
+teach from yet"*, and pushed to start it anyway said *"I can't start French without lesson
+material, because I'd have to make it up."* Italian started normally.
+
+But asked **"What languages can you teach me?"** the tutor answered *"I can teach Spanish,
+French, German, Italian, and Portuguese"* — all five, as equivalent — **without calling any
+tool**. `get_profile` returns only the languages a learner has practised, so that list came
+from nowhere the database controls. In one run the alternatives it offered after refusing
+French were *"Spanish, German, Italian, or Portuguese"*, two of which have no material
+either, while `languages_with_material` in the very result it was holding said
+`["Italian", "Spanish"]`.
+
+So the structured signal is right and is not consulted on the one question that asks for
+it directly. Closing that needs the tutor's standing instructions to require a lookup
+before naming languages, which is a change to the locked profile rather than to the store
+or the tools, and the profile belongs to another open defect. Tracked separately.
 
 ### Erasure is a count, never a name
 

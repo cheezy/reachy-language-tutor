@@ -1,11 +1,12 @@
 import logging
 from typing import Any
 
-from reachy_language_tutor.learners import get_progress, get_language_catalog
+from reachy_language_tutor.learners import get_progress, get_lesson_content, get_language_catalog
 from reachy_language_tutor.lesson_session import LessonSessionRefusedError
 from reachy_language_tutor.lesson_feedback import LessonEvent, react_to_lesson_event
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 from reachy_language_tutor.tools._language_choice import resolve_language
+from reachy_language_tutor.tools.get_lesson_content import lesson_has_nothing_to_teach
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,18 @@ _REFUSALS: dict[str, str] = {
     # about the same fact in the same conversation.
     "language_not_taught": "I do not teach that language.",
     "no_lessons_yet": "I do not have any lessons for that language yet, so there is nothing to start.",
+    # DISTINCT from no_lessons_yet above and from all_lessons_finished below, because
+    # all three are empty answers that mean opposite things to the person listening:
+    # nothing planned, nothing written, and everything done. This one is "the plan
+    # exists and the material does not", which is the state three of five languages
+    # are in and the only one where starting anyway would have the tutor improvise.
+    # NOT "no_material": get_lesson_content already publishes that code for a RUNNING
+    # lesson with nothing written, and it carries the opposite guidance -- work from
+    # the objective. Two codes one suffix apart, handed to the same model, meaning
+    # different things, is the distinctness this vocabulary is supposed to have.
+    "lesson_not_written_yet": (
+        "I have that lesson in the plan but nothing written to teach from, so I would only be making it up."
+    ),
     # Deliberately does NOT say "nothing is running": a refused open leaves whatever
     # was already pinned untouched, so that sentence could be false.
     "could_not_start": "I could not start that lesson just now, so I have not started it.",
@@ -46,7 +59,10 @@ class StartLesson(Tool):
         "cannot choose WHICH lesson they do -- the database decides that from what they have already finished -- "
         "and you must not ask anyone for a name or an id in order to call it. Read 'started': when it is false, "
         "'reason' says why. A reason of 'all_lessons_finished' is good news, not a failure -- say they have "
-        "finished everything you have in that language. Never invent a lesson, a title or a figure."
+        "finished everything you have in that language. A reason of 'lesson_not_written_yet' is different and "
+        "is not good news: that lesson is in the plan with nothing written in it, so say plainly that you "
+        "cannot teach it yet, name the languages in 'languages_with_material' as the ones you can, and do "
+        "not offer to make one up. Never invent a lesson, a title or a figure."
     )
     # One property, and nothing identity-shaped may ever join it -- not a learner, and
     # not a lesson either. The learner's identity comes from application state, and the
@@ -100,7 +116,15 @@ class StartLesson(Tool):
         matched = resolve_language(catalog, spoken)
         if matched is None:
             logger.warning("start_lesson: the requested language is not in the catalog")
-            return _refused("language_not_taught", languages_taught=[entry.name for entry in catalog])
+            return _refused(
+                "language_not_taught",
+                languages_taught=[entry.name for entry in catalog],
+                # Split the same way get_progress splits it. Listing five names flat
+                # said the robot could teach five languages when it can teach two, and
+                # this is the answer a learner gets at the moment they were refused.
+                languages_with_material=[entry.name for entry in catalog if entry.has_material],
+                languages_without_material_yet=[entry.name for entry in catalog if not entry.has_material],
+            )
 
         progress = get_progress(learner_id, matched.code, instance_path=deps.instance_path)
         if progress is None:
@@ -113,6 +137,7 @@ class StartLesson(Tool):
 
         completed_count = len(progress.completed)
         remaining_count = len(progress.remaining)
+
         if progress.next_lesson is None:
             # Two different silences, and telling them apart matters to the learner.
             # A language with lessons, all of them done, is an achievement. A language
@@ -142,6 +167,41 @@ class StartLesson(Tool):
             return _refused("no_lessons_yet")
 
         lesson = progress.next_lesson
+
+        # LAST of the four empty answers, and gated on the LESSON rather than on the
+        # language. The language-level test was wrong in both directions and the tests
+        # found each one: placed before the counts it turned `no_lessons_yet` into this
+        # code for a language with no lessons, and placed before the next_lesson branch
+        # it turned `all_lessons_finished` into this code for someone who had finished
+        # an unwritten course.
+        #
+        # Worse, a per-LANGUAGE gate cannot catch the case that is reachable today with
+        # no legacy data at all. Italian and Spanish each have six converted units in
+        # front of six empty placeholders, so the language has material and lesson
+        # seven does not: start_lesson would open it and get_lesson_content would then
+        # say "we can work from what it is for" -- the improvised lesson this task
+        # exists to prevent, invited by the tool one call later. Asking about the
+        # lesson that would actually start covers both shapes with one rule.
+        content = get_lesson_content(lesson.id, instance_path=deps.instance_path)
+        if content is None:
+            # FAIL CLOSED. `None` means the store named three different things -- an id
+            # it will not accept, no such lesson, or a store it could not read -- and
+            # the first two are caught downstream by the session pin. The third was
+            # not: with an unreadable database at this moment the gate waved the lesson
+            # through, get_lesson_content then said "we can work from what it is for",
+            # and finish_lesson wrote the improvised lesson down as completed. A guard
+            # whose permitted set contains "whatever this was" is not a guard.
+            logger.error("start_lesson: could not read the lesson's content, so it was not started")
+            return _refused("could_not_start")
+        if lesson_has_nothing_to_teach(content):
+            logger.info("start_lesson: refused a lesson with nothing written in it")
+            return _refused(
+                "lesson_not_written_yet",
+                language=matched.name,
+                language_code=matched.code,
+                languages_with_material=[entry.name for entry in catalog if entry.has_material],
+            )
+
         try:
             # Pinned BEFORE anything is returned, so a failed pin can never be
             # reported as a lesson that started. The narrow except is deliberate: a

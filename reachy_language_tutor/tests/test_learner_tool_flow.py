@@ -34,6 +34,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from untaught_language import UNTAUGHT_NAME
 
 # Bound at module scope. That is the whole point of D28: until test_external_loading.py,
 # test_tool_space_runtime.py and test_profile_load_resilience.py stopped re-importing the
@@ -123,10 +124,12 @@ async def test_a_recorded_result_survives_a_restart(instance: Path) -> None:
     outlived the process that wrote it.
     """
     deps = _deps(instance)
-    lesson = (await _call("get_progress", {"language": "French"}, deps))["next_lesson"]
+    # Italian, not French: French now refuses for want of written material, and this
+    # test is about a recorded result outliving the process that wrote it.
+    lesson = (await _call("get_progress", {"language": "Italian"}, deps))["next_lesson"]
     assert lesson is not None
 
-    started = await _call("start_lesson", {"language": "French"}, deps)
+    started = await _call("start_lesson", {"language": "Italian"}, deps)
     assert started["started"] is True
     saved = await _call("finish_lesson", {"outcome": "completed"}, deps)
     assert saved["recorded"] is True
@@ -142,7 +145,7 @@ deps = ToolDependencies(
     reachy_mini=MagicMock(), movement_manager=MagicMock(),
     instance_path=sys.argv[1], current_learner_id=sys.argv[2],
 )
-answer = asyncio.run(core_tools.dispatch_tool_call("get_progress", json.dumps({"language": "French"}), deps))
+answer = asyncio.run(core_tools.dispatch_tool_call("get_progress", json.dumps({"language": "Italian"}), deps))
 print("RESULT:" + json.dumps(answer))
 """
     finished = subprocess.run(
@@ -259,3 +262,41 @@ async def test_calling_start_lesson_twice_leaves_exactly_one_lesson_pinned(insta
     pinned = deps.lesson_session.read_for(SEEDED_LEARNER)
     assert pinned is not None
     assert pinned.lesson_id == expected.next_lesson.id
+
+
+@pytest.mark.asyncio
+async def test_the_empty_language_signal_survives_the_real_dispatch_path(instance: Path) -> None:
+    """The structured signal has to reach the model, not just exist in the store.
+
+    Everything between the catalog query and the model is JSON going through
+    `dispatch_tool_call`, and a field that is computed correctly and then dropped on
+    the way out is the same to a learner as one that was never computed. So this asks
+    both tools the way the realtime layer does -- a name and a JSON string -- and
+    checks the answer a model would actually receive.
+
+    French, German and Portuguese carry a full syllabus and nothing written in it;
+    Italian and Spanish carry six converted units each. A learner must not be offered
+    those two sets as if they were the same thing.
+    """
+    deps = _deps(instance)
+
+    empty = await _call("start_lesson", {"language": "French"}, deps)
+    assert empty["started"] is False
+    assert empty["reason"] == "lesson_not_written_yet"
+    assert set(empty["languages_with_material"]) == {"Italian", "Spanish"}
+    # Nothing was pinned, so the tutor cannot then record a lesson it never started.
+    assert deps.lesson_session.read_for(SEEDED_LEARNER) is None
+
+    ready = await _call("start_lesson", {"language": "Italian"}, deps)
+    assert ready["started"] is True, "a language with material is unaffected"
+
+    progress = await _call("get_progress", {"language": "French"}, deps)
+    assert progress["has_material"] is False
+    italian = await _call("get_progress", {"language": "Italian"}, deps)
+    assert italian["has_material"] is True
+
+    # And the not-taught answer splits the catalog rather than listing five names as
+    # if the robot could teach five languages.
+    unknown = await _call("get_progress", {"language": UNTAUGHT_NAME}, deps)
+    assert set(unknown["languages_with_material"]) == {"Italian", "Spanish"}
+    assert set(unknown["languages_without_material_yet"]) == {"French", "German", "Portuguese"}
