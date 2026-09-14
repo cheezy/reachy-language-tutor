@@ -268,18 +268,78 @@ handful of samples, not a proof, and the failure it replaces was itself intermit
 one run in three — the rate matters as much as the verdict, which is why
 `tests/lesson_opening_probe.py` defaults to four runs rather than one.
 
-**The contradiction is only half fixed**, and the two halves are not equally strong.
-`get_lesson_content.py:91` reads "if it says the lesson has no material written down, work
-from what the lesson is for and claim nothing you cannot see" — a tension rather than a
-contradiction, because the same sentence carries a counter-clause. That counter-clause
-is weaker than it looks, though: line 89 reads "do not invent vocabulary, examples or
-drills **alongside it**" — the identical scoping W38's session proved the model routes
-around in the profile, where a word asked for out of the blue is alongside nothing. So
-line 89 is part of what D33 has to fix rather than the reason line 91 is tolerable. The blunter half is the message the model actually
-receives at runtime: `get_lesson_content.py:184`, "so we can work from what it is for",
-with no counter-clause at all. The profile half is fixed here; the tool half is filed as
-**D33**, because those are not lines D32 changed and a tool-contract wording defect is a
-different class from an opening-turn orientation defect.
+**The contradiction was only half fixed here, and D33 closed the other half.** When D32
+shipped, `get_lesson_content.py` still aimed the model the opposite way in three places:
+"do not invent vocabulary, examples or drills **alongside it**" (the identical scoping
+W38's session proved the model routes around, since a word asked for out of the blue is
+alongside nothing); "if it says the lesson has no material written down, work from what
+the lesson is for and claim nothing you cannot see" — a tension rather than a
+contradiction, because that sentence at least carried a counter-clause; and the blunter
+one, the message the model actually receives at runtime, "so we can work from what it is
+for", with no counter-clause at all. Those were not lines D32 changed and a tool-contract
+wording defect is a different class from an opening-turn orientation defect, so they were
+filed as **D33** rather than fixed here.
+
+D33 has since rewritten all three, together with the profile's SCOPE sentence, which
+carried the same scoping and is the site the live session actually broke — asked for a
+word outside a Spanish lesson that HAS material, the tutor answered "aeroplano" in two
+runs of three. The ban is unconditional in both files now and names what the tutor may
+say instead. `tests/test_get_lesson_content.py` and `tests/test_locked_profile.py` pin
+the new wording, and `docs/curation-log-spanish.md` carries the Spanish counts.
+
+**What D33 measured on the opening path, 2026-09-14.** `tests/lesson_opening_probe.py`
+had stopped testing the thing it is named for: its third leg asked for Spanish because
+Spanish was an empty plan when D32 wrote it, and W38 then curated six Spanish units, so
+the leg quietly became a second has-material leg and the probe went on reporting that it
+had covered the no-material one. D33 moved that leg to **French**, which still has six
+placeholders and nothing written.
+
+Four runs afterwards: every one stayed in English, said it cannot teach French yet, and
+offered another language. **No run produced a French word, an example or a drill.**
+
+One thing those runs show that is worth keeping: on the French leg the model never calls
+`get_lesson_content` at all. `start_lesson` refuses first with `lesson_not_written_yet`
+(the W39 gate), so the `no_material` message this task rewrote is **not reached through a
+live conversation on that path**. It is covered instead by
+`test_the_no_material_message_does_not_invite_working_from_the_objective`, which calls
+the tool directly and asserts against the result dict the model would have received.
+
+**And not only on that path.** W39's gate calls `lesson_has_nothing_to_teach` on the
+lesson that would actually start, not on the language, so the empty placeholder at
+position 7 is refused exactly as French is — the two guards use the same predicate on
+the same rendered content. There is therefore no ordinary conversation that reaches the
+`no_material` branch at all: `start_lesson` turns every such lesson away one call
+earlier. What is left for that branch is the case the two calls disagree about, which is
+the lesson whose content changes between the gate and the read. Keeping it correct is
+defence in depth rather than a live path, and that is the honest description of its
+coverage — a unit test against the result dict, and no live run behind it.
+
+Three of the four runs also offered "German, or Portuguese" — languages with no material
+at all. That is not this defect and it is already filed as **D35**.
+
+**One more thing D33 changed on this branch, after the specialist security review.** The
+rewritten wording tells the model to offer another language, and the `no_material` result
+did not return one — so "offer another language" was a claim about the catalog that no
+tool had grounded, and the names could only come from the model's own weights. It now
+reads the catalog and returns **`languages_with_material`**, derived exactly as
+`start_lesson`'s refusal derives it, and the description points at that field in
+`start_lesson`'s own words. The profile's sentence changed with it, from "offer another
+language" to "offer the languages it lists".
+
+Empty needs saying separately, because `get_language_catalog` returns nothing both for a
+store it could not read and for a catalog with no rows, and its contract is that a caller
+must treat those the same: neither supports telling anyone which languages are taught.
+The two sibling callers refuse outright; this one cannot, since the lesson-level news is
+true either way. So the description carries it — an empty list means name no language at
+all and say the records are unreachable. The first draft of the fix omitted that and left
+the model directed to make an exhaustive claim over an empty list, which is the same
+defect one path along.
+
+None of this is covered by a live run: the branch is unreachable through an ordinary
+conversation, as above, and the four probe runs predate the field. It is pinned against
+the result dict instead, by
+`test_an_unreadable_catalog_offers_no_language_rather_than_an_empty_claim` and its two
+siblings in `tests/test_get_lesson_content.py`.
 
 ## What was not verified
 
@@ -322,8 +382,10 @@ not contain, the tutor answered `aeroplano` in two sessions out of three — unr
 vocabulary reaching a child, and not the word a Spanish speaker uses. The cause is
 SCOPE's ban being scoped *"alongside the lesson's own material"*. `profile.md` belongs to
 the open defect **D33**, and this task's fourth pitfall forbids fixing code found broken
-here, so the finding and the wording that fixes it are recorded on D33 instead. It is
-live until D33 lands. `docs/curation-log-spanish.md` carries the full account.
+here, so the finding and the wording that fixes it are recorded on D33 instead.
+`docs/curation-log-spanish.md` carries the full account. **D33 has since landed** — see
+the D33 section above for the rewritten wording and the four post-fix runs that produced
+no invention; this paragraph records the state at the time of W38, not today's.
 
 ### Not verified, and named rather than assumed
 

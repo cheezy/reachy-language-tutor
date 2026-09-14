@@ -32,9 +32,11 @@ _REFUSALS: dict[str, str] = {
     # exists and the material does not", which is the state three of five languages
     # are in and the only one where starting anyway would have the tutor improvise.
     # NOT "no_material": get_lesson_content already publishes that code for a RUNNING
-    # lesson with nothing written, and it carries the opposite guidance -- work from
-    # the objective. Two codes one suffix apart, handed to the same model, meaning
-    # different things, is the distinctness this vocabulary is supposed to have.
+    # lesson with nothing written. When this comment was written that code carried the
+    # opposite guidance -- work from the objective -- which D33 removed; the two still
+    # answer different questions ("should this lesson start" against "what is in the
+    # lesson that did"), and two codes one suffix apart, handed to the same model,
+    # meaning different things, is the distinctness this vocabulary is supposed to have.
     "lesson_not_written_yet": (
         "I have that lesson in the plan but nothing written to teach from, so I would only be making it up."
     ),
@@ -178,10 +180,12 @@ class StartLesson(Tool):
         # Worse, a per-LANGUAGE gate cannot catch the case that is reachable today with
         # no legacy data at all. Italian and Spanish each have six converted units in
         # front of six empty placeholders, so the language has material and lesson
-        # seven does not: start_lesson would open it and get_lesson_content would then
-        # say "we can work from what it is for" -- the improvised lesson this task
-        # exists to prevent, invited by the tool one call later. Asking about the
-        # lesson that would actually start covers both shapes with one rule.
+        # seven does not: start_lesson would open it and get_lesson_content then said
+        # "we can work from what it is for" -- the improvised lesson this task exists
+        # to prevent, invited by the tool one call later. D33 has since rewritten that
+        # message, so the invitation is gone and this gate is the remaining reason the
+        # lesson never opens. Asking about the lesson that would actually start covers
+        # both shapes with one rule.
         content = get_lesson_content(lesson.id, instance_path=deps.instance_path)
         if content is None:
             # FAIL CLOSED. `None` means the store named three different things -- an id

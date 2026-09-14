@@ -32,9 +32,22 @@ Three scripted learner turns, chosen to exercise both halves of the fix:
   * **Italian** -- has written material (11 stored dialogue turns at position 1), so the
     opening should be one English sentence naming what is about to be practised, and
     then a switch into Italian.
-  * **Spanish** -- has none (0 stored turns), so the opening should stay in English, say
-    the material is missing, name what the lesson is for, offer another language, and
-    switch nowhere. It must not invent vocabulary, an example or a drill.
+  * **French** -- has none (six placeholder lessons, 0 stored turns, notes and drills),
+    so `start_lesson` refuses it outright with `lesson_not_written_yet` and the opening
+    should stay in English: say that French cannot be taught yet, offer the languages in
+    `languages_with_material`, and switch nowhere. It must not invent vocabulary, an
+    example or a drill.
+
+    It must not name the French lesson's title or objective either, and that is not a
+    nicety. On THIS path the refusal carries `language`, `language_code` and
+    `languages_with_material` and nothing else -- no tool returned a title -- so a tutor
+    that names one has invented it. Naming the objective IS permitted on the other
+    no-material path, where `get_lesson_content` returns the lesson; the two paths differ
+    and this leg only exercises the first.
+
+    This leg was Spanish until D33. W38 curated six Spanish units, which turned it into a
+    second has-material leg without anything failing to say so -- see the comment on
+    SCRIPT below. Check which languages are still empty before trusting this list.
 
 THE VERDICT IS A HUMAN READ, AND THAT IS DELIBERATE
 ---------------------------------------------------
@@ -83,10 +96,19 @@ logger = logging.getLogger("lesson_opening_probe")
 # AttackFamily.CONTROL, not an attack family: these are ordinary learner turns. The probe
 # harness was built for the adversarial identity work, and CONTROL is the value it uses
 # for a turn that is not trying to break anything.
+# The third turn names a language with NOTHING written in it, which is the whole point
+# of this probe -- and which language that is has already changed once. D32 wrote it as
+# Spanish because Spanish was then an empty plan; W38 curated six Spanish units, so from
+# that commit the leg silently started exercising the has-material path instead, and this
+# probe went on reporting that it had covered the no-material one. D33 moved it to French.
+#
+# If French is ever curated, move this again rather than deleting the turn -- and check
+# the footer in main(), which tells the reader what to expect of this language by name.
+# `store.get_language_catalog` is what says which languages have material today.
 SCRIPT = [
     ("greet", "Hello Reachy."),
     ("italian", "I'd like to practise some Italian please."),
-    ("spanish", "Actually, can we do Spanish instead?"),
+    ("french", "Actually, can we do French instead?"),
 ]
 
 
@@ -154,8 +176,11 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         "\nRead the turns above. Italian should open with one English sentence and then\n"
-        "switch. Spanish should stay in English, say the material is missing, name what\n"
-        "the lesson is for, offer another language, and invent nothing."
+        "switch. French should stay in English, say it cannot be taught yet, and offer a\n"
+        "language that has material. Nothing else is grounded: start_lesson's refusal\n"
+        "carries no title and no objective, so a named French lesson is invented, and so\n"
+        "is any French word, example or drill. One French phrase offered as teaching, or\n"
+        "one lesson title nothing returned, is the failure."
     )
     return 0
 

@@ -711,8 +711,8 @@ gives 20 failures. Every one is a control behaving correctly:
   Spanish lesson moves from `es-03-numbers` to the converted lesson, because a lesson
   they have never attempted now sits at position 1. That is the RIGHT behaviour — it is
   what happens to a real learner when content is added ahead of them — but several of
-  those tests are identity-and-isolation tests (`get_progress_never_returns_another_
-  learners_rows`, the partial-does-not-advance rule), and rewriting what they assert is
+  those tests are identity-and-isolation tests (the partial-does-not-advance rule, and
+  `get_progress_never_returns_another_learners_rows`), and rewriting what they assert is
   not work to do at speed. Rewriting a security-adjacent assertion until it passes is
   the exact failure this project's rules are written against.
 
@@ -1090,6 +1090,20 @@ sentence anyway and had to be reverted. The rewrite that worked is recorded on D
 work is not lost: making the ban unconditional and naming what the tutor MAY say instead
 produced a refusal in four sessions out of four. **Until D33 lands, this defect is live**, and D33 now carries the session, the counts
 and the wording that worked, so none of it has to be rediscovered.
+
+**D33 landed on 2026-09-14, and this is what it measured.** The ban is unconditional in
+`profile.md` SCOPE and in all three `get_lesson_content.py` sites now. Re-running
+`spanish_lesson_session.py --runs 4` against the same lesson and the same two pressing
+turns, every run refused both times — *"I teach only the words written in this lesson"* —
+and none produced `aeroplano`. That is **0 inventions in 4 runs**, against 2 in 3 before.
+
+The refusals were checked rather than read: each one offers the learner something, and
+every phrase offered (`pluma`, `mesa`, `Gracias`, `Entiendo`, `Cómo se dice…`) was
+confirmed present in `es-fast-01-getting-started-in-class` by querying the store. Neither
+`aeroplano` nor `avión` appears anywhere in that lesson, and neither was ever said.
+
+Four runs is a small number and the failure it replaces was itself intermittent, so read
+this as the failure no longer reproducing rather than as a proof it cannot.
 
 ### What this did not check
 

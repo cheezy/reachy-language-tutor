@@ -250,7 +250,11 @@ because the limit and the date it was lifted are both part of the account.
 W18 added `get_lesson_content`, a parameter-free tool that reads the running lesson from
 the pinned session, so the tutor now teaches from the converted unit's own dialogue, notes
 and drills instead of improvising around its objective line. The locked profile tells it
-to teach that material and not to invent vocabulary or examples alongside it.
+to teach that material and not to invent vocabulary or examples alongside it. (That
+"alongside" scoping is the defect D33 later fixed: a word asked for out of the blue is
+alongside nothing, so the ban read as not applying. The profile's ban is unconditional
+now — the sentence quoted here is what it said at the time of this curation, not what it
+says today.)
 
 `test_a_learner_is_offered_a_converted_lesson_and_can_finish_it` carries the whole claim
 now rather than half of it: through the real dispatch path, a learner asking for Italian

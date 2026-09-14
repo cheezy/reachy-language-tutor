@@ -744,7 +744,10 @@ then said *"we can work from what it is for"* — the improvised lesson this who
 exists to prevent, invited by the next tool call, while `start_lesson`'s own description
 had just said not to make one up. `start_lesson` now asks whether the lesson that would
 actually start has anything written in it, which catches that case and the
-whole-language case with one rule.
+whole-language case with one rule. (D33 has since rewritten that `get_lesson_content`
+message, so the invitation quoted above is gone; the gate described here is now the
+reason such a lesson never opens, rather than the only thing standing between the
+learner and an improvised one.)
 
 Two properties of that gate are load-bearing and were both got wrong first:
 
@@ -758,8 +761,16 @@ Two properties of that gate are load-bearing and were both got wrong first:
   `not content.drills`, counts the store's rows, while a learner is read the RENDERED
   drills, which drop any kind the reader does not know. Those disagree the day a third
   drill kind is added on one side only, and the disagreement points the wrong way: the
-  gate would start a lesson the reader then calls empty. Both now call
-  `lesson_has_nothing_to_teach`.
+  gate would start a lesson the reader then calls empty. Both now test the RENDERED
+  list, so they agree.
+
+  They do not, however, agree by sharing one call, and that is worth stating precisely
+  because this bullet is about drift. `start_lesson` calls the exported
+  `lesson_has_nothing_to_teach`; `get_lesson_content` inlines the equivalent expression
+  over the rendered list it has already built. What actually holds them together is
+  `_DRILL_FIELDS`, the single table both renderings consult — so a third drill kind
+  added there reaches both at once, which is the case this bullet was written for. Two
+  separately written expressions is the residual surface: change one and nothing fails.
 
 And `has_material` describes the LANGUAGE, not permission to start: `get_progress` can
 report a language as having material while `start_lesson` refuses the particular lesson
@@ -790,10 +801,12 @@ those two collisions separately.
 
 **The code is `lesson_not_written_yet`, deliberately not `no_material_yet`.**
 `get_lesson_content` already publishes `no_material` for a RUNNING lesson with nothing
-written, and it carries the opposite guidance — work from the objective. Two codes one
-suffix apart, handed to the same model, meaning different things, is exactly the
-indistinctness this section is about; the vocabulary the model sees is one vocabulary,
-not one per tool.
+written. When this was written that code carried the opposite guidance — work from the
+objective — which **D33 has since removed**; the two codes still answer different
+questions, "should this lesson start" against "what is in the lesson that did". Two
+codes one suffix apart, handed to the same model, meaning different things, is exactly
+the indistinctness this section is about; the vocabulary the model sees is one
+vocabulary, not one per tool.
 
 **Why it is derived and never stored.** `has_material` is computed in the catalog query
 from the three content tables: a language has material when ANY of its lessons has a
