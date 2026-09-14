@@ -45,7 +45,13 @@ from reachy_language_tutor.tools.finish_lesson import FinishLesson
 
 SEEDED_LEARNER = store.SEED_LEARNERS[0][0]
 OTHER_LEARNER = "somebody-else"
-SPANISH_NEXT = "es-03-numbers"
+# The seeded learner's actual next Spanish lesson, which is what this constant has
+# always claimed to be. It moved when the six converted Cycles of the Spanish FAST
+# took positions 1-6: es-03-numbers is now position 9 and sits behind six lessons
+# nobody has attempted, so pinning it here would have made the
+# partial-does-not-advance test below pass for the wrong reason -- the learner would
+# be held back by the NEW lessons rather than by their own partial.
+SPANISH_NEXT = "es-fast-01-getting-started-in-class"
 SPANISH = "es"
 
 # Identity-shaped keys, and LESSON-shaped keys beside them. The lesson half is new: as
@@ -188,8 +194,12 @@ async def test_it_records_the_lesson_the_app_pinned(instance: Path) -> None:
 
     assert result["recorded"] is True
     assert result["outcome"] == "completed"
-    attempts = _attempts_for(instance, SPANISH_NEXT)
-    assert [a.outcome for a in attempts] == ["partial", "completed"]
+    # One row, because the pinned lesson is now Cycle 10 and the seeded learner has
+    # never attempted it. The "partial" that used to head this list belonged to
+    # es-03-numbers, which is a different lesson -- and it must still be sitting
+    # there untouched, since this write names the pin and nothing else.
+    assert [a.outcome for a in _attempts_for(instance, SPANISH_NEXT)] == ["completed"]
+    assert [a.outcome for a in _attempts_for(instance, "es-03-numbers")] == ["partial"]
 
 
 @pytest.mark.asyncio
@@ -212,7 +222,7 @@ async def test_an_identity_in_kwargs_is_ignored_when_called_directly(instance: P
     result = await FinishLesson()(deps, outcome="completed", learner_id=OTHER_LEARNER, user_id=OTHER_LEARNER)
 
     assert result["recorded"] is True
-    assert [a.learner_id for a in _attempts_for(instance, SPANISH_NEXT)] == [SEEDED_LEARNER, SEEDED_LEARNER]
+    assert [a.learner_id for a in _attempts_for(instance, SPANISH_NEXT)] == [SEEDED_LEARNER]
 
 
 @pytest.mark.asyncio
@@ -277,7 +287,7 @@ async def test_a_partial_outcome_does_not_advance_the_next_lesson(instance: Path
     result = await FinishLesson()(deps, outcome="partial")
 
     assert result["next_lesson"] is not None
-    assert result["next_lesson"]["title"] == "Numbers one to twenty"
+    assert result["next_lesson"]["title"] == "Getting started"
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,32 @@ from reachy_language_tutor.tools._language_choice import resolve_language
 logger = logging.getLogger(__name__)
 
 
+def _most_recently_completed(progress: Any) -> str | None:
+    """Return the lesson this learner finished LAST, by when they finished it.
+
+    Not ``progress.completed[-1]``. That tuple is ordered by POSITION, so it names the
+    furthest-ALONG completed lesson rather than the most recent one. The two agree
+    only while a learner works straight through a fixed catalog in order, which is why
+    this read the way it did for as long as it did.
+
+    They diverge the moment content lands AHEAD of someone. Converting Cycle 10 of the
+    Spanish FAST put a new lesson at position 1 and pushed the placeholders to 2-7; a
+    learner who had already finished the first two and then completed the new lesson
+    got back the title of a placeholder they had finished days earlier, because that
+    placeholder sits at a higher position. The tutor says this field out loud, so the
+    learner would have been congratulated on the wrong lesson.
+
+    ``attempts`` is ordered ``recorded_at DESC, id DESC`` by the store, so the first
+    completed attempt in it is the most recent one. Only lessons in ``completed`` are
+    consulted, so a lesson that was later un-completed cannot be named.
+    """
+    titles = {lesson.id: lesson.title for lesson in progress.completed}
+    for attempt in progress.attempts:
+        if attempt.outcome == "completed" and attempt.lesson_id in titles:
+            return titles[attempt.lesson_id]
+    return None
+
+
 class GetProgress(Tool):
     """Look up how far the current learner has got in one language."""
 
@@ -125,7 +151,7 @@ class GetProgress(Tool):
             "completed_count": len(progress.completed),
             "remaining_count": len(progress.remaining),
             "total_lessons": len(progress.completed) + len(progress.remaining),
-            "last_completed": progress.completed[-1].title if progress.completed else None,
+            "last_completed": _most_recently_completed(progress),
             "next_lesson": (
                 {
                     "id": next_lesson.id,

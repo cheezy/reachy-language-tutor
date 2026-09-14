@@ -404,11 +404,23 @@ def test_lesson_positions_are_contiguous_and_unique(tmp_path: Path) -> None:
 
     connection = store.connect(tmp_path)
     try:
-        for code in ("es", "fr"):
+        # Derived from the row count rather than pinned at six. The literal [1..6]
+        # this used to assert named a COUNT while the test's title claims a SHAPE,
+        # so it excluded the two languages where the shape can actually break:
+        # Italian, whose six converted lessons pushed its placeholders to 7-12, and
+        # Spanish, whose one converted lesson pushed its placeholders to 2-7. Every
+        # catalogued language is checked now, which is the claim this test was
+        # always making.
+        codes = [row["code"] for row in connection.execute("SELECT code FROM languages ORDER BY code")]
+        assert codes, "the catalog is empty, so this test would pass vacuously"
+        for code in codes:
             rows = connection.execute(
                 "SELECT position FROM lessons WHERE language_code = ? ORDER BY position", (code,)
             ).fetchall()
-            assert [row["position"] for row in rows] == [1, 2, 3, 4, 5, 6]
+            positions = [row["position"] for row in rows]
+            assert positions == list(range(1, len(positions) + 1)), (
+                f"{code} positions are {positions}, which is not 1..n without a gap"
+            )
 
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
@@ -425,8 +437,26 @@ def test_next_lesson_is_unambiguous(tmp_path: Path) -> None:
 
     connection = store.connect(tmp_path)
     try:
+        # Position 1 is now Cycle 10, converted from the Spanish FAST, and the seeded
+        # learner has never attempted it -- so it is their next lesson, ahead of the
+        # placeholders they worked through. That is what happens to a real learner
+        # when content lands in front of them.
         spanish = connection.execute(store.NEXT_LESSON_SQL, ("es", "sample-learner")).fetchone()
-        assert spanish["id"] == "es-03-numbers", "a 'partial' result must not count as done"
+        assert spanish["id"] == "es-fast-01-getting-started-in-class"
+
+        # The partial rule still has to be TESTED, not merely still true. It used to
+        # be demonstrated by the line above, because the partial lesson happened to
+        # be the lowest incomplete one; it no longer is, so the demonstration moves
+        # here rather than disappearing. Finish the converted lesson and the learner
+        # must land back on their PARTIAL es-03, not skip past it to es-04.
+        for converted in ['es-fast-01-getting-started-in-class', 'es-fast-02-at-the-restaurant', 'es-fast-03-getting-around-inside', 'es-fast-04-the-familiar-form', 'es-fast-05-shopping-at-the-market', 'es-fast-06-household-repairs']:
+            connection.execute(
+                "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at)"
+                " VALUES (?, ?, 'completed', 90, 1)",
+                ("sample-learner", converted),
+            )
+        after = connection.execute(store.NEXT_LESSON_SQL, ("es", "sample-learner")).fetchone()
+        assert after["id"] == "es-03-numbers", "a 'partial' result must not count as done"
 
         french = connection.execute(store.NEXT_LESSON_SQL, ("fr", "sample-learner")).fetchone()
         assert french["id"] == "fr-01-greetings"
@@ -529,7 +559,7 @@ def test_fresh_instance_path_is_usable_on_first_start(tmp_path: Path) -> None:
     connection = store.connect(instance, create=False)
     try:
         row = connection.execute(store.NEXT_LESSON_SQL, ("es", "sample-learner")).fetchone()
-        assert row["id"] == "es-03-numbers"
+        assert row["id"] == "es-fast-01-getting-started-in-class"
     finally:
         connection.close()
 
@@ -915,6 +945,7 @@ SHIPPED_CATALOGS = {
     3: "71d42df41af603be5d9471571273c40bdb91168fc6b4b111951e87358c7651fb",  # + a provenance row for every lesson
     4: "1ae76c0c18e1843da97f71a42d0da66df41c39073e5bef06ffe6b2b36ab57b4f",  # + six Italian lessons converted from FSI Italian FAST
     5: "b76b35d14afd2c32237b82dd6469c877195019c06702b72bbe3b3574b4194158",  # those lessons regrouped under a courses list; no content changed
+    6: "88b65ed855be0929d8b374959e8e0444121852a7db6db0c090fdd4945cde455b",  # + six Spanish Cycles converted from the FSI Spanish FAST; the six Spanish placeholders moved 1-6 -> 7-12
 }
 
 

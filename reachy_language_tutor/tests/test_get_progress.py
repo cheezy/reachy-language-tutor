@@ -93,9 +93,14 @@ async def test_it_returns_counts_and_the_next_lesson_for_the_seeded_learner(inst
     assert result["language"] == "Spanish"
     assert result["language_code"] == "es"
     assert result["completed_count"] == 2
-    assert result["remaining_count"] == 4
-    assert result["total_lessons"] == 6
-    assert result["next_lesson"]["position"] == 3
+    # 10 and 12: the six converted Cycles of the Spanish FAST took positions 1-6
+    # and pushed the placeholders to 7-12, so the seeded learner has six more
+    # lessons left than they had before any of this landed.
+    assert result["remaining_count"] == 10
+    assert result["total_lessons"] == 12
+    # Position 1, the first converted Cycle, which they have never attempted --
+    # not the partial at what is now position 9.
+    assert result["next_lesson"]["position"] == 1
 
 
 @pytest.mark.asyncio
@@ -494,3 +499,62 @@ async def test_it_leaves_the_running_lesson_exactly_where_it_found_it(instance: 
     )
 
     assert holder.read_for(SEEDED_LEARNER) == before, "a read-only tool moved the running lesson"
+
+
+# --------------------------------------------------- which lesson was finished LAST
+#
+# _most_recently_completed exists because `progress.completed` is ordered by POSITION,
+# so `completed[-1]` names the furthest-ALONG completed lesson rather than the most
+# recent one. The two agree only while a learner works straight through a fixed
+# catalog in order, which is why the bug survived Italian and surfaced the moment six
+# converted Cycles landed at the front of Spanish.
+#
+# Its behaviour was revert-proofed end to end through test_learner_tool_flow, but that
+# is incidental protection from a flow test. These pin the ordering contract itself.
+
+
+def _fake_progress(completed: list[tuple[str, str]], attempts: list[tuple[str, str]]) -> Any:
+    """A progress object with just the two fields the helper reads."""
+    lesson = lambda lid, title: type("L", (), {"id": lid, "title": title})()
+    attempt = lambda lid, outcome: type("A", (), {"lesson_id": lid, "outcome": outcome})()
+    return type(
+        "P", (), {"completed": tuple(lesson(*c) for c in completed),
+                  "attempts": tuple(attempt(*a) for a in attempts)}
+    )()
+
+
+def test_the_last_completed_lesson_is_the_newest_attempt_not_the_highest_position() -> None:
+    """The whole point: attempts are newest-first, completed is by position."""
+    progress = _fake_progress(
+        # By POSITION: the converted lesson first, then a placeholder behind it.
+        completed=[("es-fast-01", "Getting started"), ("es-02", "Introducing yourself")],
+        # By TIME, newest first: the converted lesson was finished just now.
+        attempts=[("es-fast-01", "completed"), ("es-02", "completed")],
+    )
+
+    assert module._most_recently_completed(progress) == "Getting started"
+
+
+def test_a_partial_attempt_is_not_what_was_last_completed() -> None:
+    """A newer attempt that did not finish the lesson must not be reported as done."""
+    progress = _fake_progress(
+        completed=[("es-02", "Introducing yourself")],
+        attempts=[("es-03", "partial"), ("es-02", "completed")],
+    )
+
+    assert module._most_recently_completed(progress) == "Introducing yourself"
+
+
+def test_a_completed_attempt_for_a_lesson_no_longer_completed_is_skipped() -> None:
+    """Only lessons in `completed` may be named, so a stale attempt cannot surface."""
+    progress = _fake_progress(
+        completed=[("es-02", "Introducing yourself")],
+        attempts=[("es-99-withdrawn", "completed"), ("es-02", "completed")],
+    )
+
+    assert module._most_recently_completed(progress) == "Introducing yourself"
+
+
+def test_a_learner_who_has_completed_nothing_gets_none() -> None:
+    """Nothing finished is None, not an empty string and not a crash."""
+    assert module._most_recently_completed(_fake_progress(completed=[], attempts=[])) is None

@@ -43,6 +43,15 @@ from collections.abc import Mapping
 APPROVED_UNITS: Mapping[str, frozenset[str]] = MappingProxyType(
     {
         "FSI Italian FAST, Volume 1": frozenset({"IV", "VI", "IX", "XIII", "XV", "XVII"}),
+        # Six of 38 Cycles in the Spanish FAST. That volume screens far harder than
+        # Italian's did -- 29 of its 38 Cycles carry embassy, military, uniformed or
+        # border material, which is what a course written for diplomats arriving at
+        # post looks like -- and docs/curation-log-spanish.md says which and why.
+        # This list says what SHIPPED, not what passed a screen, so a seventh Cycle
+        # means curating it first.
+        "FSI Spanish Familiarization and Short-Term Training": frozenset(
+            {"2", "5", "10", "14", "25", "38"}
+        ),
     }
 )
 

@@ -80,7 +80,14 @@ SCHEMA_VERSION = 3
 # first six Italian lessons with units converted from a published course; version 5
 # regrouped those lessons under a list of courses so a second language can be added,
 # changing no lesson content at all.
-SEED_VERSION = 5
+# Version 6 carries the six converted Spanish Cycles and moves the six Spanish
+# placeholders from 1-6 to 7-12 to make room for them, which is the same shape version
+# 4 gave Italian. The tree passed through a 7 while those six landed one at a time;
+# nothing shipped it -- HEAD was at 5 throughout -- so it was collapsed rather than
+# recorded in SHIPPED_CATALOGS as a catalog some robot received. The only upgrade an
+# installed robot takes is 5 to 6, and it is exercised end to end by
+# test_converted_lessons.py::test_the_upgrade_every_installed_robot_will_actually_take.
+SEED_VERSION = 6
 LEARNER_DB_FILENAME = "learners.v1.sqlite3"
 # The converted course material, beside this module and shipped as package data. Its
 # bytes are part of the seeded catalog, so the shipped-catalog fingerprint covers the
@@ -138,42 +145,42 @@ SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
     (
         "es-01-greetings",
         "es",
-        1,
+        7,
         "Greetings and goodbyes",
         "Greet someone, ask how they are, and say goodbye: hola, buenos días, ¿cómo estás?, adiós.",
     ),
     (
         "es-02-introductions",
         "es",
-        2,
+        8,
         "Introducing yourself",
         "Give your name and where you are from, and ask the same back: me llamo…, soy de…, ¿y tú?",
     ),
     (
         "es-03-numbers",
         "es",
-        3,
+        9,
         "Numbers one to twenty",
         "Count to twenty out loud and say your age and a phone number.",
     ),
     (
         "es-04-ordering-food",
         "es",
-        4,
+        10,
         "Ordering food and drink",
         "Order in a café and ask what something costs: quisiera…, ¿cuánto cuesta?",
     ),
     (
         "es-05-directions",
         "es",
-        5,
+        11,
         "Asking for directions",
         "Ask where a place is and follow a simple answer: ¿dónde está…?, a la derecha, a la izquierda.",
     ),
     (
         "es-06-daily-routine",
         "es",
-        6,
+        12,
         "Talking about your day",
         "Describe a typical day using present-tense verbs and times of day.",
     ),

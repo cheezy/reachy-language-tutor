@@ -40,6 +40,23 @@ from reachy_language_tutor.learners.models import DRILL_KINDS
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 CURATION_LOG = DOCS / "curation-log-italian-fast.md"
+
+# One log per course, because the judgement recorded in a log is about a particular
+# volume. Keyed by the course name in converted_lessons.json, the same key
+# approved_units.py uses, so a course cannot be half-registered: a course with no
+# entry here fails the accounting test below rather than being skipped by it.
+CURATION_LOGS = {
+    "FSI Italian FAST, Volume 1": DOCS / "curation-log-italian-fast.md",
+    "FSI Spanish Familiarization and Short-Term Training": DOCS / "curation-log-spanish.md",
+}
+
+# What each course has actually CONVERTED, pinned so a lesson cannot appear or vanish
+# without someone saying so here. Not derived from the file -- deriving it would make
+# the assertion a tautology.
+CONVERTED_PER_COURSE = {
+    "FSI Italian FAST, Volume 1": 6,
+    "FSI Spanish Familiarization and Short-Term Training": 6,
+}
 METHOD = DOCS / "converting-a-course.md"
 
 
@@ -50,26 +67,50 @@ def instance(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _converted_ids() -> list[str]:
-    return [str(lesson["id"]) for lesson in store._converted_lessons()]
+def _converted_ids(language_code: str | None = None) -> list[str]:
+    """Ids of converted lessons, for one language or for every course.
+
+    The unscoped form is right for the screens -- model-directed phrasing, vocabulary
+    -- which must cover every shipped line whatever course it came from. The scoped
+    form is for the assertions that are ABOUT a course: its ordering, its digest, its
+    unit count. Those read as global claims while the file held one course, and a
+    second course is what tells them apart.
+    """
+    if language_code is None:
+        return [str(lesson["id"]) for lesson in store._converted_lessons()]
+    return [
+        str(lesson["id"])
+        for course in store._converted_courses()
+        if course["language_code"] == language_code
+        for lesson in course["lessons"]
+    ]
 
 
-def _rows_per_table(instance_path: Path) -> tuple[int, int, int]:
-    """How many turns, notes and drills the converted lessons actually seeded."""
+def _rows_per_table(instance_path: Path, language_code: str | None = None) -> tuple[int, int, int]:
+    """How many turns, notes and drills the converted lessons actually seeded.
+
+    Scopable by language for the same reason _converted_ids is: an unqualified count
+    is a claim about every course at once, which stops being a witness for any one of
+    them as soon as there are two.
+    """
+    scope = (
+        "SELECT lesson_id FROM lesson_sources WHERE origin = 'converted_from_course'"
+        if language_code is None
+        else "SELECT s.lesson_id FROM lesson_sources AS s JOIN lessons AS l ON l.id = s.lesson_id "
+        "WHERE s.origin = 'converted_from_course' AND l.language_code = ?"
+    )
+    args = () if language_code is None else (language_code,)
     connection = store.connect(instance_path)
     try:
         return tuple(  # type: ignore[return-value]
-            connection.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE lesson_id IN "
-                "(SELECT lesson_id FROM lesson_sources WHERE origin = 'converted_from_course')"
-            ).fetchone()[0]
+            connection.execute(f"SELECT COUNT(*) FROM {table} WHERE lesson_id IN ({scope})", args).fetchone()[0]
             for table in ("lesson_dialogue_turns", "lesson_notes", "lesson_drills")
         )
     finally:
         connection.close()
 
 
-def _shipped_text(instance_path: Path) -> str:
+def _shipped_text(instance_path: Path, language_code: str | None = None) -> str:
     """Every string a learner could hear from a converted lesson, read back from disk.
 
     From the DATABASE rather than from the JSON file, because the database is what the
@@ -77,7 +118,7 @@ def _shipped_text(instance_path: Path) -> str:
     to a test that checked the file.
     """
     pieces: list[str] = []
-    for lesson_id in _converted_ids():
+    for lesson_id in _converted_ids(language_code):
         content = store.get_lesson_content(lesson_id, instance_path=instance_path)
         assert content is not None
         pieces.append(content.lesson.title)
@@ -98,13 +139,18 @@ def _shipped_text(instance_path: Path) -> str:
 def test_the_converted_lessons_reach_the_database(instance: Path) -> None:
     """The whole point, asserted end to end: six units, in order, with their content."""
     ids = _converted_ids()
-    assert len(ids) == 6, "six units were converted; the file should still hold six"
+    by_course = {course["name"]: len(course["lessons"]) for course in store._converted_courses()}
+    assert by_course == CONVERTED_PER_COURSE, (
+        "a course gained or lost a converted lesson; update CONVERTED_PER_COURSE in the "
+        "same change, and its curation log with it"
+    )
+    assert len(ids) == sum(CONVERTED_PER_COURSE.values())
 
     for lesson_id in ids:
         content = store.get_lesson_content(lesson_id, instance_path=instance)
 
         assert content is not None, f"{lesson_id} did not reach the database"
-        assert content.lesson.language_code == "it"
+        assert content.lesson.language_code in {c["language_code"] for c in store._converted_courses()}
         assert content.turns, f"{lesson_id} has no dialogue"
         assert content.notes, f"{lesson_id} has no usage notes"
         assert content.drills, f"{lesson_id} has no drills"
@@ -226,6 +272,39 @@ def test_every_drill_is_of_a_kind_the_tutor_can_run(instance: Path) -> None:
 # named beside it. An accent is not a typo in a language course: "e" is "and" and "è"
 # is "is", so a lost one teaches a child a different sentence.
 ACCENTED_LINES = [
+    # Spanish. The scan this course came from is 47.9% accent-damaged -- worse than
+    # Italian's -- and Spanish is where it bites hardest: año and ano are different
+    # words, and sí/si, él/el, tú/tu, más/mas each turn on one acute.
+    ("es-fast-01-getting-started-in-class", "Buenos días, señora.", "Cycle 2, printed page 7"),
+    ("es-fast-02-at-the-restaurant", "¿Dónde quiere sentarse?", "Cycle 5, printed page 57"),
+    ("es-fast-02-at-the-restaurant", "¿Cómo quiere su bistec?", "Cycle 5, printed page 57"),
+    (
+        "es-fast-03-getting-around-inside",
+        "No, éste es el quinto piso y el consultorio del Doctor Cardona está en el cuarto piso.",
+        "Cycle 10, printed page 120",
+    ),
+    (
+        "es-fast-03-getting-around-inside",
+        "Está en el séptimo piso, número 718. Doble a la derecha al salir del ascensor.",
+        "Cycle 10, printed page 121",
+    ),
+    (
+        "es-fast-04-the-familiar-form",
+        "Es muy fácil; sólo tienes que decir estás en vez de está.",
+        "Cycle 14, printed page 177",
+    ),
+    ("es-fast-04-the-familiar-form", "Porque nunca aprendí a tutear en español.", "Cycle 14, printed page 177"),
+    (
+        "es-fast-05-shopping-at-the-market",
+        "Sí, quiero comprar algunas artesanías. ¿Adónde me aconsejas que vaya?",
+        "Cycle 25, printed page 342",
+    ),
+    (
+        "es-fast-06-household-repairs",
+        "Es que tuvimos una avería eléctrica en casa. A la hora que iba a salir se fundieron los fusibles "
+        "y fue necesario que llamáramos a un electricista.",
+        "Cycle 38, printed page 526",
+    ),
     ("it-fast-01-what-time-is-it", "No, da Boston. A proposito, che ora è?", "unit IV, printed page 84"),
     (
         "it-fast-01-what-time-is-it",
@@ -397,16 +476,35 @@ def test_nothing_military_or_official_survived_the_curation(instance: Path) -> N
     It is here because it is cheap and it catches the realistic failure: somebody edits
     one line of an approved unit and puts a customs officer back into it.
 
-    The terms are the ones the task names, plus the Italian for each, since the content
-    is Italian and an English-only screen would see none of it.
+    The terms are the ones the task names, plus the Italian AND Spanish for each. The
+    Spanish half was missing while six Spanish Cycles shipped, which is the same
+    one-language blindness this docstring already warned about for English -- and it
+    mattered more here, because the Spanish volume is the one where 29 of 38 Cycles
+    carry embassy, military, uniformed or border material.
+
+    "general" and "oficial" are deliberately NOT on this list. W35 measured them:
+    widening to them matched "generalmente" and made the screen worse, which is the
+    standing argument for why a deny-list is a backstop and never the control.
     """
     text = _shipped_text(instance).lower()
 
     forbidden = {
-        "military": ["militare", "esercito", "caserma", "generale", "ammiraglio", "colonnello", "sergente"],
-        "embassy": ["ambasciata", "ambassador", "consolato", "embassy", "consulate", "diplomatic"],
-        "uniformed authority": ["polizia", "poliziotto", "carabinier", "questura", "police"],
-        "border": ["dogana", "doganiere", "customs", "frontiera", "passaporto", "passport", "guardia di finanza"],
+        "military": [
+            "militare", "esercito", "caserma", "generale", "ammiraglio", "colonnello", "sergente",
+            "militar", "ejército", "cuartel", "soldado", "coronel", "sargento",
+        ],
+        "embassy": [
+            "ambasciata", "ambassador", "consolato", "embassy", "consulate", "diplomatic",
+            "embajada", "embajador", "consulado", "cónsul", "vicecónsul", "sección consular",
+        ],
+        "uniformed authority": [
+            "polizia", "poliziotto", "carabinier", "questura", "police",
+            "policía", "policia", "comisaría",
+        ],
+        "border": [
+            "dogana", "doganiere", "customs", "frontiera", "passaporto", "passport", "guardia di finanza",
+            "aduana", "aduanero", "pasaporte", "frontera", "inmigración",
+        ],
     }
     for category, terms in forbidden.items():
         found = [term for term in terms if term in text]
@@ -534,7 +632,7 @@ def test_the_italian_catalog_is_ordered_and_leads_with_the_converted_units(insta
     """A learner meets the reviewed material first, and the order has no holes."""
     progress = store.get_progress("sample-learner", "it", instance_path=instance)
     positions = [lesson.position for lesson in progress.remaining]
-    converted = set(_converted_ids())
+    converted = set(_converted_ids("it"))
 
     assert positions == list(range(1, len(positions) + 1)), "contiguous, so 'the next lesson' is unambiguous"
     leading = [lesson.id for lesson in progress.remaining[: len(converted)]]
@@ -556,7 +654,7 @@ def test_the_italian_course_reads_back_exactly_as_it_shipped(instance: Path) -> 
     """
     assert [
         (lesson_id, content.lesson.position, content.source.module, content.source.unit, content.source.page)
-        for lesson_id in sorted(_converted_ids())
+        for lesson_id in sorted(_converted_ids("it"))
         for content in [store.get_lesson_content(lesson_id, instance_path=instance)]
     ] == [
         ("it-fast-01-what-time-is-it", 1, "Volume 1", "IV", 83),
@@ -567,9 +665,9 @@ def test_the_italian_course_reads_back_exactly_as_it_shipped(instance: Path) -> 
         ("it-fast-06-phone-call-about-a-flat", 6, "Volume 1", "XVII", 408),
     ]
 
-    assert _rows_per_table(instance) == (82, 42, 113), "the six units' turns, notes and drills, as curated"
+    assert _rows_per_table(instance, "it") == (82, 42, 113), "the six units' turns, notes and drills, as curated"
 
-    digest = hashlib.sha256(_shipped_text(instance).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(_shipped_text(instance, "it").encode("utf-8")).hexdigest()
     assert digest == "d14f06db92fb34b2a383198309238ea65cb6736e43b7b5d3c11381b5568286af", (
         "every spoken string of the Italian course, and one of them has changed"
     )
@@ -605,7 +703,18 @@ def test_the_converted_content_reaches_a_robot_that_already_has_a_database(tmp_p
     )
 
 
-def test_the_upgrade_every_installed_robot_will_actually_take(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("code", "placeholders", "finished"),
+    [
+        ("it", ["it-01-greetings", "it-02-introductions", "it-03-numbers",
+                "it-04-ordering-food", "it-05-directions", "it-06-daily-routine"], "it-02-introductions"),
+        ("es", ["es-01-greetings", "es-02-introductions", "es-03-numbers",
+                "es-04-ordering-food", "es-05-directions", "es-06-daily-routine"], "es-02-introductions"),
+    ],
+)
+def test_the_upgrade_every_installed_robot_will_actually_take(
+    tmp_path: Path, code: str, placeholders: list[str], finished: str
+) -> None:
     """The one upgrade path nothing else here constructs, and the only one that is real.
 
     Every other "already seeded" test in this suite rewinds the version marker on a
@@ -621,14 +730,19 @@ def test_the_upgrade_every_installed_robot_will_actually_take(tmp_path: Path) ->
     worth executing rather than reasoning about.
     """
     assert store.ensure_learner_database(tmp_path).ready is True
-    converted = _converted_ids()
+    # SCOPED to this language. Unscoped, the rewind deleted every converted lesson in
+    # the file and then moved only one language's placeholders back, leaving the other
+    # language with six vacant positions at the front -- a layout no robot has ever
+    # been in, which is the exact unreality this docstring condemns.
+    converted = _converted_ids(code)
+    assert len(converted) == 6, f"{code} should have six converted units"
 
     connection = store.connect(tmp_path)
     try:
         # Wind the catalog back to what shipped before this change: the six placeholders
         # on 1 to 6, and no converted lessons at all.
         connection.execute("DELETE FROM lessons WHERE id IN (%s)" % ",".join("?" * len(converted)), converted)
-        connection.execute("UPDATE lessons SET position = position - 6 WHERE language_code = 'it'")
+        connection.execute("UPDATE lessons SET position = position - 6 WHERE language_code = ?", (code,))
         connection.execute(
             "UPDATE schema_meta SET value = ? WHERE key = ?", (str(store.SEED_VERSION - 1), store.SEED_VERSION_KEY)
         )
@@ -636,31 +750,34 @@ def test_the_upgrade_every_installed_robot_will_actually_take(tmp_path: Path) ->
 
         before = {
             str(row["id"]): int(row["position"])
-            for row in connection.execute("SELECT id, position FROM lessons WHERE language_code = 'it'").fetchall()
+            for row in connection.execute(
+                "SELECT id, position FROM lessons WHERE language_code = ?", (code,)
+            ).fetchall()
         }
     finally:
         connection.close()
 
-    assert before == {
-        "it-01-greetings": 1,
-        "it-02-introductions": 2,
-        "it-03-numbers": 3,
-        "it-04-ordering-food": 4,
-        "it-05-directions": 5,
-        "it-06-daily-routine": 6,
-    }, "the rewind has to produce the real pre-conversion layout, or this test proves nothing"
+    assert before == dict(zip(placeholders, range(1, 7))), (
+        "the rewind has to produce the real pre-conversion layout, or this test proves nothing"
+    )
 
     # A learner who had finished a lesson before the upgrade, to prove the renumbering
     # does not disturb what they did.
-    assert store.record_result("sample-learner", "it-02-introductions", "completed", instance_path=tmp_path).recorded
+    assert store.record_result("sample-learner", finished, "completed", instance_path=tmp_path).recorded
+
+    # Read what this learner had finished BEFORE the upgrade rather than pinning a
+    # literal: Spanish carries seeded history that Italian does not, and the claim
+    # being made is that the renumbering disturbs nothing, not that any one list holds.
+    done_before = [lesson.id for lesson in store.get_progress("sample-learner", code, instance_path=tmp_path).completed]
+    assert finished in done_before
 
     result = store.ensure_learner_database(tmp_path)
 
     assert result.ready is True, f"the upgrade aborted: {result.error}"
     assert result.seeded is True
 
-    progress = store.get_progress("sample-learner", "it", instance_path=tmp_path)
-    assert [lesson.id for lesson in progress.completed] == ["it-02-introductions"], "history survived"
+    progress = store.get_progress("sample-learner", code, instance_path=tmp_path)
+    assert [lesson.id for lesson in progress.completed] == done_before, "history survived"
     assert progress.next_lesson.id == converted[0], "and the converted units now lead the catalog"
 
     # Over the WHOLE catalog, not just what is left to do: the finished lesson is not in
@@ -668,6 +785,60 @@ def test_the_upgrade_every_installed_robot_will_actually_take(tmp_path: Path) ->
     # learner's own progress is.
     catalog = sorted(lesson.position for lesson in progress.completed + progress.remaining)
     assert catalog == list(range(1, len(catalog) + 1)), "no position was left doubled or vacant"
+
+
+def test_the_spanish_catalog_is_ordered_and_leads_with_the_converted_units(instance: Path) -> None:
+    """The Italian assertion's missing sibling.
+
+    Italian had this check, a shipped-text digest and a row-count pin; Spanish shipped
+    six lessons with none of the three. The catalog fingerprint notices an UNANNOUNCED
+    edit to the seed constants; none of these notices a WRONG one, which is a different
+    question and the one a learner is exposed to.
+    """
+    # Over the WHOLE catalog, not just what is left. Unlike Italian, the seeded learner
+    # HAS Spanish history -- two placeholders completed -- so `remaining` has holes in
+    # it where their own progress is, and a contiguity check over it would be checking
+    # the fixture rather than the catalog.
+    progress = store.get_progress("sample-learner", "es", instance_path=instance)
+    catalog = sorted(progress.completed + progress.remaining, key=lambda lesson: lesson.position)
+    converted = set(_converted_ids("es"))
+
+    assert [lesson.position for lesson in catalog] == list(range(1, len(catalog) + 1)), (
+        "contiguous, so 'the next lesson' is unambiguous"
+    )
+    assert {lesson.id for lesson in catalog[: len(converted)]} == converted, (
+        "the converted units are the first thing a learner is offered"
+    )
+
+
+def test_the_spanish_course_reads_back_exactly_as_it_shipped(instance: Path) -> None:
+    """What a learner hears in Spanish, pinned so a refactor cannot quietly move it.
+
+    A failure here is not a formatting nit. It means the seeded Spanish content differs
+    from what was read against the page images, and the right response is to find out
+    what moved rather than to update the constant. The scan behind this course is 47.9%
+    accent-damaged, so a lost accent is the likeliest thing to move and the hardest to
+    see by eye.
+    """
+    assert [
+        (lesson_id, content.lesson.position, content.source.module, content.source.unit, content.source.page)
+        for lesson_id in sorted(_converted_ids("es"))
+        for content in [store.get_lesson_content(lesson_id, instance_path=instance)]
+    ] == [
+        ("es-fast-01-getting-started-in-class", 1, "Single volume", "2", 7),
+        ("es-fast-02-at-the-restaurant", 2, "Single volume", "5", 57),
+        ("es-fast-03-getting-around-inside", 3, "Single volume", "10", 120),
+        ("es-fast-04-the-familiar-form", 4, "Single volume", "14", 177),
+        ("es-fast-05-shopping-at-the-market", 5, "Single volume", "25", 342),
+        ("es-fast-06-household-repairs", 6, "Single volume", "38", 526),
+    ]
+
+    assert _rows_per_table(instance, "es") == (58, 47, 91), "the six Cycles' turns, notes and drills, as curated"
+
+    digest = hashlib.sha256(_shipped_text(instance, "es").encode("utf-8")).hexdigest()
+    assert digest == "3b0b767dce156ef18b245f361518b77715860e1c2659a9f18aac70391849338e", (
+        "the Spanish a learner hears has changed; find out what moved before touching this line"
+    )
 
 
 def test_renumbering_a_placeholder_downwards_is_the_hazard_to_watch(tmp_path: Path) -> None:
@@ -845,10 +1016,15 @@ def test_the_curation_log_accounts_for_every_lesson_that_shipped(instance: Path)
     Every shipped lesson has to appear in the log by id, so a reader can find what was
     replaced in it and why.
     """
-    log = CURATION_LOG.read_text(encoding="utf-8")
-
-    for lesson_id in _converted_ids():
-        assert lesson_id in log, f"{lesson_id} shipped with no curation record"
+    for course in store._converted_courses():
+        name = course["name"]
+        assert name in CURATION_LOGS, f"{name!r} shipped with no curation log registered"
+        log = CURATION_LOGS[name].read_text(encoding="utf-8")
+        for lesson in course["lessons"]:
+            lesson_id = str(lesson["id"])
+            assert lesson_id in log, (
+                f"{lesson_id} shipped with no curation record in {CURATION_LOGS[name].name}"
+            )
 
 
 def test_the_curation_log_accounts_for_the_units_that_did_not_ship(instance: Path) -> None:

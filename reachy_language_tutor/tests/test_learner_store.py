@@ -98,13 +98,19 @@ def test_get_progress_reflects_seeded_spanish_history(instance: Path) -> None:
         "es-02-introductions",
     )
     assert tuple(lesson.id for lesson in progress.remaining) == (
+        "es-fast-01-getting-started-in-class",
+        "es-fast-02-at-the-restaurant",
+        "es-fast-03-getting-around-inside",
+        "es-fast-04-the-familiar-form",
+        "es-fast-05-shopping-at-the-market",
+        "es-fast-06-household-repairs",
         "es-03-numbers",
         "es-04-ordering-food",
         "es-05-directions",
         "es-06-daily-routine",
     )
     assert progress.next_lesson is not None
-    assert progress.next_lesson.id == "es-03-numbers"
+    assert progress.next_lesson.id == "es-fast-01-getting-started-in-class"
     assert len(progress.attempts) == 3
     assert progress.attempts[0].lesson_id == "es-03-numbers", "newest attempt first"
     assert progress.attempts[0].outcome == "partial"
@@ -140,13 +146,19 @@ def test_get_progress_unknown_learner_gets_a_fresh_start(instance: Path) -> None
     assert progress.completed == ()
     assert progress.attempts == ()
     assert progress.next_lesson is not None
-    assert progress.next_lesson.id == "es-01-greetings"
+    assert progress.next_lesson.id == "es-fast-01-getting-started-in-class"
 
 
 def test_get_progress_never_returns_another_learners_rows(instance: Path) -> None:
     """The scoping boundary: one household member's history must not reach another."""
     _add_learner(instance, "other-learner", "Other Learner")
     for lesson_id in (
+        "es-fast-01-getting-started-in-class",
+        "es-fast-02-at-the-restaurant",
+        "es-fast-03-getting-around-inside",
+        "es-fast-04-the-familiar-form",
+        "es-fast-05-shopping-at-the-market",
+        "es-fast-06-household-repairs",
         "es-01-greetings",
         "es-02-introductions",
         "es-03-numbers",
@@ -160,7 +172,9 @@ def test_get_progress_never_returns_another_learners_rows(instance: Path) -> Non
     mine = store.get_progress("sample-learner", "es", instance_path=instance)
     assert mine is not None
     assert mine.next_lesson is not None
-    assert mine.next_lesson.id == "es-03-numbers", "another learner's completions must not advance me"
+    # Stronger than it was: they have now finished all TWELVE Spanish lessons and
+    # I am still on the first one, which I have never attempted.
+    assert mine.next_lesson.id == "es-fast-01-getting-started-in-class", "another learner's completions must not advance me"
     assert len(mine.attempts) == 3
     assert all(attempt.learner_id == "sample-learner" for attempt in mine.attempts)
 
@@ -195,13 +209,24 @@ def test_get_progress_language_without_lessons_is_not_unknown(instance: Path) ->
 
 def test_get_progress_finished_language_has_no_next_lesson(instance: Path) -> None:
     """Finishing a language is distinguishable from never starting it."""
-    for lesson_id in ("es-03-numbers", "es-04-ordering-food", "es-05-directions", "es-06-daily-routine"):
+    for lesson_id in (
+        "es-fast-01-getting-started-in-class",
+        "es-fast-02-at-the-restaurant",
+        "es-fast-03-getting-around-inside",
+        "es-fast-04-the-familiar-form",
+        "es-fast-05-shopping-at-the-market",
+        "es-fast-06-household-repairs",
+        "es-03-numbers",
+        "es-04-ordering-food",
+        "es-05-directions",
+        "es-06-daily-routine",
+    ):
         _add_result(instance, "sample-learner", lesson_id, "completed")
 
     progress = store.get_progress("sample-learner", "es", instance_path=instance)
 
     assert progress is not None
-    assert len(progress.completed) == 6
+    assert len(progress.completed) == 12
     assert progress.remaining == ()
     assert progress.next_lesson is None
 
@@ -254,7 +279,8 @@ def test_record_result_appends_an_attempt(instance: Path) -> None:
     progress = store.get_progress("sample-learner", "es", instance_path=instance)
     assert progress is not None
     assert progress.next_lesson is not None
-    assert progress.next_lesson.id == "es-04-ordering-food"
+    # es-03 is done, but Cycle 10 at position 1 was never attempted and comes first.
+    assert progress.next_lesson.id == "es-fast-01-getting-started-in-class"
     assert len(progress.attempts) == 4
 
 
@@ -2964,7 +2990,9 @@ def test_a_lesson_can_be_looked_up_by_id(instance: Path) -> None:
 
     assert lesson is not None
     assert lesson.language_code == "es"
-    assert lesson.position == 3
+    # 9, not 3: the six Spanish placeholders shifted to 7-12 when the six converted
+    # Cycles of the Spanish FAST took positions 1-6.
+    assert lesson.position == 9
 
 
 def test_an_unknown_lesson_id_is_none(instance: Path) -> None:
@@ -3157,7 +3185,7 @@ def test_fresh_instance_path_is_queryable_in_one_call(tmp_path: Path) -> None:
     progress = learners.get_progress("sample-learner", "es", instance_path=fresh)
     assert progress is not None
     assert progress.next_lesson is not None
-    assert progress.next_lesson.id == "es-03-numbers"
+    assert progress.next_lesson.id == "es-fast-01-getting-started-in-class"
     assert isinstance(progress.next_lesson, Lesson)
     assert isinstance(progress.attempts[0], LessonAttempt)
 

@@ -1068,6 +1068,856 @@
           ]
         }
       ]
+    },
+    {
+      "name": "FSI Spanish Familiarization and Short-Term Training",
+      "language_code": "es",
+      "rights": "Work of the U.S. Foreign Service Institute, Department of State, 1983. No copyright notice was found by a search built to tolerate a badly damaged OCR layer, nor on the title page, its verso or the back cover, each read as an image. Unlike the Spanish Basic course there is no GPO imprint anywhere that was looked. The preface names its contributors and reads as placing them inside FSI, though the title page labels Leonor Paine and Stephen Zappala Principal Consultants. See docs/curation-log-spanish.md for exactly what was checked and what was not.",
+      "source_sha256": "cd603ff9aa799acce2296c1bff1a0e36bc0816750cbad4cd7f5236881e8fd050",
+      "lessons": [
+        {
+          "id": "es-fast-01-getting-started-in-class",
+          "position": 1,
+          "title": "Getting started",
+          "objective": "Greet someone, give your name, ask how they are, and say when you have not understood: buenos días, ¿cómo se llama usted?, no entiendo, ¿cómo se dice…?",
+          "source": {
+            "module": "Single volume",
+            "unit": "2",
+            "page": 7
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Usted",
+              "text": "Buenos días, señora."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Buenos días. ¿Cómo está?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Bien, gracias. ¿Y usted?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Muy bien, gracias."
+            },
+            {
+              "speaker": "Usted",
+              "text": "¿Qué es esto?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Es una pluma."
+            },
+            {
+              "speaker": "Usted",
+              "text": "¿Cómo?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Pluma. Plu-ma."
+            },
+            {
+              "speaker": "Usted",
+              "text": "Por favor. Repita."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Pluma. Pluma."
+            },
+            {
+              "speaker": "Usted",
+              "text": "Gracias. Entiendo. Pluma."
+            }
+          ],
+          "notes": [
+            "Three greetings by time of day, and they are not interchangeable: buenos días in the morning, buenas tardes in the afternoon, buenas noches in the evening.",
+            "You can add who you are speaking to: buenos días, señor; buenos días, señora; buenos días, señorita.",
+            "¿Cómo está? asks how someone is. The answers run bien, gracias — muy bien, gracias — bastante bien, gracias, and ¿y usted? sends the question back.",
+            "No entiendo is the most useful sentence in this lesson: it means I don't understand. Perdone in front of it makes it excuse me, I don't understand.",
+            "¿Cómo? on its own asks for something to be said again, and por favor, repita asks for it directly.",
+            "¿Cómo se dice…? is how you ask for a word you do not have: ¿cómo se dice \"table\" en español? The answer comes back se dice mesa.",
+            "The answer to ¿cómo se llama usted? starts me llamo — literally I call myself — and then your own name.",
+            "Who you are speaking to can follow the greeting: buenos días, señorita; buenos días, señora; buenos días, señor — the same three that follow a name."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "Buenos días.",
+              "english_gloss": "Good morning."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Buenas tardes.",
+              "english_gloss": "Good afternoon."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Buenas noches.",
+              "english_gloss": "Good evening."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Cómo se llama usted?",
+              "english_gloss": "What is your name?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Cómo está?",
+              "english_gloss": "How are you?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Bien, gracias. ¿Y usted?",
+              "english_gloss": "Fine, thank you. And you?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Muy bien, gracias.",
+              "english_gloss": "Very well, thank you."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "No entiendo.",
+              "english_gloss": "I don't understand."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Perdone. No entiendo.",
+              "english_gloss": "Excuse me. I don't understand."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Por favor. Repita.",
+              "english_gloss": "Please repeat."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Cómo se dice \"table\" en español?",
+              "english_gloss": "How do you say \"table\" in Spanish?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "En español se dice mesa.",
+              "english_gloss": "In Spanish you say mesa."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Qué es esto?",
+              "english_gloss": "What is this?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Es una pluma.",
+              "english_gloss": "It's a pen."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "Buenos días.",
+              "expected_response": "Buenos días."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "¿Qué es esto?",
+              "expected_response": "Es una pluma."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "¿Cómo se dice \"table\" en español?",
+              "expected_response": "En español se dice mesa."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Bastante bien, gracias.",
+              "english_gloss": "Pretty good, thanks."
+            }
+          ]
+        },
+        {
+          "id": "es-fast-02-at-the-restaurant",
+          "position": 2,
+          "title": "At the restaurant",
+          "objective": "Be seated, order a drink and a meal, say how you want it, and ask for the bill: ¿dónde quiere sentarse?, tráigame…, por favor, la cuenta.",
+          "source": {
+            "module": "Single volume",
+            "unit": "5",
+            "page": 57
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Camarero",
+              "text": "¿Espera a alguien?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "No, estoy solo."
+            },
+            {
+              "speaker": "Camarero",
+              "text": "¿Dónde quiere sentarse?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Cerca de la ventana."
+            },
+            {
+              "speaker": "Camarero",
+              "text": "¿Quiere tomar algo antes de pedir?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Sí, tráigame una limonada fría, por favor."
+            },
+            {
+              "speaker": "Camarero",
+              "text": "¿Qué desea comer?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Sopa de legumbres. Un bistec con puré de papas y ensalada de lechuga y tomate. Pan y mantequilla."
+            },
+            {
+              "speaker": "Camarero",
+              "text": "¿Cómo quiere su bistec?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Medio crudo."
+            },
+            {
+              "speaker": "Camarero",
+              "text": "De postre, ¿qué quiere?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Nada, pero tráigame otra limonada y la cuenta, por favor."
+            }
+          ],
+          "notes": [
+            "Quiere is want. The course gives quisiera beside it and says the softer form makes a request warmer — but that quiere is not abrupt or cold either, so use whichever you like.",
+            "Desea is the waiter's politer word for the same thing: ¿quiere tomar algo? and ¿desea tomar algo? both offer you a drink.",
+            "Tráigame is bring me — the command traiga with me attached to the end, which is where Spanish puts it.",
+            "A steak comes four ways, and these are the words for them: medio crudo is rare, jugoso is juicy, término medio is medium, medio hecho is medium well.",
+            "The same thing has different names in different countries, and this page gives three: a bistec is also a filete, a cold drink is fría or helada, and in Mexico a tomate is a jitomate.",
+            "La cuenta is the bill. Asking for it is tráigame la cuenta, por favor.",
+            "Estoy solo means I'm on my own; a girl or a woman says estoy sola. Spanish adjectives change their ending to match who is speaking."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "¿Espera a alguien?",
+              "english_gloss": "Are you waiting for someone?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "No, estoy solo.",
+              "english_gloss": "No, I'm on my own."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Dónde quiere sentarse?",
+              "english_gloss": "Where would you like to sit?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Cerca de la ventana.",
+              "english_gloss": "Near the window."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Quiere tomar algo antes de pedir?",
+              "english_gloss": "Would you like something to drink before you order?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Tráigame una limonada fría, por favor.",
+              "english_gloss": "Bring me a cold lemonade, please."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Qué desea comer?",
+              "english_gloss": "What would you like to eat?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Sopa de legumbres.",
+              "english_gloss": "Vegetable soup."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Pan y mantequilla.",
+              "english_gloss": "Bread and butter."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Cómo quiere su bistec?",
+              "english_gloss": "How do you want your steak?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Medio crudo.",
+              "english_gloss": "Rare."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Término medio.",
+              "english_gloss": "Medium."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Tráigame la cuenta, por favor.",
+              "english_gloss": "Bring me the bill, please."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "¿Dónde quiere sentarse?",
+              "expected_response": "Cerca de la ventana."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Jugoso.",
+              "english_gloss": "Juicy."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Medio hecho.",
+              "english_gloss": "Medium well."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "No, estoy sola.",
+              "english_gloss": "No, I'm on my own. (a girl or woman speaking)"
+            }
+          ]
+        },
+        {
+          "id": "es-fast-03-getting-around-inside",
+          "position": 3,
+          "title": "Getting around inside",
+          "objective": "Find your way inside a building: the ordinal floors, ¿dónde están las escaleras?, doble a la derecha, and asking what floor something is on.",
+          "source": {
+            "module": "Single volume",
+            "unit": "10",
+            "page": 120
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Usted",
+              "text": "¿El consultorio del Dr. Cardona está en este piso?"
+            },
+            {
+              "speaker": "Recepcionista",
+              "text": "No, éste es el quinto piso y el consultorio del Doctor Cardona está en el cuarto piso."
+            },
+            {
+              "speaker": "Usted",
+              "text": "¿Dónde están las escaleras?"
+            },
+            {
+              "speaker": "Recepcionista",
+              "text": "Vaya al final del pasillo y doble a la derecha."
+            },
+            {
+              "speaker": "Usted",
+              "text": "Éste es el Edificio Santa Fe, ¿verdad?"
+            },
+            {
+              "speaker": "Recepcionista",
+              "text": "Sí, éste es. ¿Puedo ayudarle en algo?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Busco la Óptica Alemana y no sé en qué piso está."
+            },
+            {
+              "speaker": "Recepcionista",
+              "text": "Está en el séptimo piso, número 718. Doble a la derecha al salir del ascensor."
+            },
+            {
+              "speaker": "Usted",
+              "text": "Gracias, usted es muy amable."
+            },
+            {
+              "speaker": "Recepcionista",
+              "text": "No hay de qué."
+            }
+          ],
+          "notes": [
+            "Floors are counted with ordinals, and they behave like adjectives: el cuarto piso is the fourth floor, el quinto piso the fifth, el séptimo piso the seventh.",
+            "There are two everyday words for a hallway and the course gives both: el pasillo and el corredor.",
+            "The elevator is el ascensor in most of the Spanish-speaking world and el elevador in Mexico.",
+            "Doble a la derecha is turn right, and al salir del ascensor is on leaving the elevator — al followed by an infinitive is how Spanish says on doing something.",
+            "Sé carries an accent because it means I know; without it, se is a different word altogether. No sé en qué piso está is I don't know what floor it's on.",
+            "Está, not es, for where something is: está en el cuarto piso. Es answers what or who something is.",
+            "Two ways to say you are welcome, both in this dialogue's family: no hay de qué and de nada.",
+            "Éste es el quinto piso means this is the fifth floor. Spanish often drops the noun once it is obvious, so éste stands on its own for this one."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "¿El consultorio del Dr. Cardona está en este piso?",
+              "english_gloss": "Is Dr. Cardona's office on this floor?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Dónde están las escaleras?",
+              "english_gloss": "Where are the stairs?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Vaya al final del pasillo y doble a la derecha.",
+              "english_gloss": "Go to the end of the hall and turn right."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Puedo ayudarle en algo?",
+              "english_gloss": "May I help you?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Busco la Óptica Alemana.",
+              "english_gloss": "I'm looking for the German Optical Center."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "No sé en qué piso está.",
+              "english_gloss": "I don't know what floor it's on."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Está en el séptimo piso, número 718.",
+              "english_gloss": "It's on the seventh floor, number 718."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Doble a la derecha al salir del ascensor.",
+              "english_gloss": "Turn right on leaving the elevator."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Gracias, usted es muy amable.",
+              "english_gloss": "Thank you, you are very kind."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "No hay de qué.",
+              "english_gloss": "You're welcome."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Éste es el Edificio Santa Fe, ¿verdad?",
+              "english_gloss": "This is the Santa Fe Building, isn't it?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Está al final del pasillo.",
+              "english_gloss": "It's at the end of the hall."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "¿El consultorio del Dr. Cardona está en este piso?",
+              "expected_response": "No, éste es el quinto piso y el consultorio del Doctor Cardona está en el cuarto piso."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "Éste es el Edificio Santa Fe, ¿verdad?",
+              "expected_response": "Sí, éste es."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "¿En qué piso está la óptica?",
+              "expected_response": "Está en el séptimo piso, número 718."
+            }
+          ]
+        },
+        {
+          "id": "es-fast-04-the-familiar-form",
+          "position": 4,
+          "title": "Saying tú",
+          "objective": "Switch from usted to tú with someone you know, and ask to be corrected: ¿por qué no nos tratamos de tú?, corrígeme si me equivoco.",
+          "source": {
+            "module": "Single volume",
+            "unit": "14",
+            "page": 177
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Usted",
+              "text": "Hola, Manuel. ¿Cómo está?"
+            },
+            {
+              "speaker": "Manuel",
+              "text": "Bien, pero ¿por qué no nos tratamos de tú?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "De acuerdo, pero tiene que ayudarme."
+            },
+            {
+              "speaker": "Manuel",
+              "text": "¿Por qué?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Porque nunca aprendí a tutear en español."
+            },
+            {
+              "speaker": "Manuel",
+              "text": "Es muy fácil; sólo tienes que decir estás en vez de está."
+            },
+            {
+              "speaker": "Usted",
+              "text": "Voy a tratar de hacerlo. Corríjame si me equivoco."
+            },
+            {
+              "speaker": "Manuel",
+              "text": "Sí, tienes que practicarlo con todos tus amigos."
+            },
+            {
+              "speaker": "Usted",
+              "text": "Bueno, pero no se ría de mí si me equivoco."
+            }
+          ],
+          "notes": [
+            "Spanish has two ways of saying you. Usted is the polite one you use with a stranger; tú is the familiar one for friends, family and children.",
+            "Tutear is a verb that means to address someone as tú — English has no single word for it.",
+            "The difference shows up on the end of the verb: ¿cómo está? is the polite form and ¿cómo estás? the familiar one, and that final s is the whole change.",
+            "The course's own example of switching: corríjame si me equivoco is the polite way to ask to be corrected, and corrígeme si me equivoco is the familiar one.",
+            "The same swap again: no se ría de mí is polite, no te rías de mí is familiar. Both mean don't laugh at me.",
+            "Nos tratamos de tú is how you propose the switch — literally we treat each other as tú.",
+            "A child answering an adult stays polite: ¿cómo está usted?, and the adult uses tú back — ¿cómo estás?, ¿está tu papá en casa?",
+            "Either parent, and you choose the one you mean: ¿está tu papá en casa? or ¿está tu mamá en casa?",
+            "Adelante and pase usted both invite someone in, and siéntese asks them to sit down."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "¿Por qué no nos tratamos de tú?",
+              "english_gloss": "Why don't we address each other as tú?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "De acuerdo.",
+              "english_gloss": "Agreed."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Nunca aprendí a tutear en español.",
+              "english_gloss": "I never learned to use the familiar form in Spanish."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Es muy fácil.",
+              "english_gloss": "It's very easy."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Corríjame si me equivoco.",
+              "english_gloss": "Correct me if I make a mistake."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Corrígeme si me equivoco.",
+              "english_gloss": "Correct me if I make a mistake. (familiar)"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "No se ría de mí.",
+              "english_gloss": "Don't laugh at me."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "No te rías de mí.",
+              "english_gloss": "Don't laugh at me. (familiar)"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Tienes que practicarlo con todos tus amigos.",
+              "english_gloss": "You have to practise it with all your friends."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Buenos días, Pablo. ¿Cómo estás?",
+              "english_gloss": "Good morning, Pablo. How are you?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Bien gracias. ¿Cómo está usted?",
+              "english_gloss": "Fine thanks. How are you?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Está tu papá en casa?",
+              "english_gloss": "Is your dad at home?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Sí, ¡claro! Adelante y siéntese.",
+              "english_gloss": "Yes, of course! Come in and sit down."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Muchas gracias.",
+              "english_gloss": "Thank you very much."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "De nada.",
+              "english_gloss": "You're welcome."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "Buenos días, Pablo. ¿Cómo estás?",
+              "expected_response": "Bien gracias. ¿Cómo está usted?"
+            },
+            {
+              "kind": "cue_response",
+              "cue": "Muchas gracias.",
+              "expected_response": "De nada."
+            }
+          ]
+        },
+        {
+          "id": "es-fast-05-shopping-at-the-market",
+          "position": 5,
+          "title": "Shopping at the market",
+          "objective": "Say what you want to buy, ask where to go and whether it is cheaper, and ask someone to come with you: quiero comprar…, ¿son más baratas?, ¿quieres ir conmigo?",
+          "source": {
+            "module": "Single volume",
+            "unit": "25",
+            "page": 342
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Usted",
+              "text": "¿Qué tal, María?"
+            },
+            {
+              "speaker": "María",
+              "text": "Muy bien. ¿Vas de compras?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Sí, quiero comprar algunas artesanías. ¿Adónde me aconsejas que vaya?"
+            },
+            {
+              "speaker": "María",
+              "text": "Bueno, en el mercado central hay una gran variedad de artesanías."
+            },
+            {
+              "speaker": "Usted",
+              "text": "¿Son más baratas en el mercado que en el centro?"
+            },
+            {
+              "speaker": "María",
+              "text": "Sí. Y también se puede regatear."
+            },
+            {
+              "speaker": "Usted",
+              "text": "Pero yo no sé regatear. ¿Quieres ir conmigo?"
+            },
+            {
+              "speaker": "María",
+              "text": "Sí, claro. ¡Vamos!"
+            }
+          ],
+          "notes": [
+            "¿Qué tal? is a lighter hello than ¿cómo está? — it works the way how's it going does.",
+            "Artesanías are handmade things: pottery, weaving, carving. The course's cultural note says market day in a small town can be a festive occasion, and names Chichicastenango in Guatemala and Huancayo in Peru for their Sunday markets.",
+            "El regateo is bargaining, and regatear is the verb. The note adds that even in markets, fixed prices are common, so it is not always on offer.",
+            "Más baratas means cheaper. The comparison is built with que: más baratas en el mercado que en el centro.",
+            "Aconsejas que vaya is the subjunctive — Spanish uses it after advising, wanting or asking that somebody do something, and the verb changes shape to show it.",
+            "¿Quieres ir conmigo? uses tú, because these two are friends. Conmigo is one word for with me.",
+            "Open-air markets are more common in small towns, but capital cities have central markets too, where handicrafts and fresh produce are sold at reasonable prices."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "¿Qué tal?",
+              "english_gloss": "How's it going?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Vas de compras?",
+              "english_gloss": "Are you going shopping?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Quiero comprar algunas artesanías.",
+              "english_gloss": "I want to buy some handicrafts."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Adónde me aconsejas que vaya?",
+              "english_gloss": "Where do you advise me to go?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "En el mercado central hay una gran variedad de artesanías.",
+              "english_gloss": "In the central market there's a wide variety of handicrafts."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Son más baratas en el mercado que en el centro?",
+              "english_gloss": "Are they cheaper in the market than downtown?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Y también se puede regatear.",
+              "english_gloss": "And you can bargain too."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Pero yo no sé regatear.",
+              "english_gloss": "But I don't know how to bargain."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Quieres ir conmigo?",
+              "english_gloss": "Do you want to come with me?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Sí, claro. ¡Vamos!",
+              "english_gloss": "Yes, of course. Let's go!"
+            },
+            {
+              "kind": "cue_response",
+              "cue": "¿Vas de compras?",
+              "expected_response": "Sí, quiero comprar algunas artesanías."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "¿Son más baratas en el mercado que en el centro?",
+              "expected_response": "Sí. Y también se puede regatear."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "¿Quieres ir conmigo?",
+              "expected_response": "Sí, claro. ¡Vamos!"
+            }
+          ]
+        },
+        {
+          "id": "es-fast-06-household-repairs",
+          "position": 6,
+          "title": "Household repairs",
+          "objective": "Tell someone what went wrong at home and what you had to do about it: una avería eléctrica, se fundieron los fusibles, fue necesario que llamáramos a un electricista.",
+          "source": {
+            "module": "Single volume",
+            "unit": "38",
+            "page": 526
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Amigo",
+              "text": "¿Por qué no fue usted a la reunión de ayer? Pasamos un rato muy agradable."
+            },
+            {
+              "speaker": "Usted",
+              "text": "Es que tuvimos una avería eléctrica en casa. A la hora que iba a salir se fundieron los fusibles y fue necesario que llamáramos a un electricista."
+            },
+            {
+              "speaker": "Amigo",
+              "text": "¿Un electricista? Eso es algo difícil de encontrar en estos días."
+            },
+            {
+              "speaker": "Usted",
+              "text": "Entonces tuvimos suerte porque no tardó mucho en llegar."
+            },
+            {
+              "speaker": "Amigo",
+              "text": "Y, ¿qué pasó exactamente? ¿Se produjo un cortocircuito?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Sí. Betty, mi esposa, estaba planchando y parece que el cordón de la plancha estaba estropeado porque de pronto empezó a echar chispas."
+            },
+            {
+              "speaker": "Amigo",
+              "text": "¿Se asustó su esposa?"
+            },
+            {
+              "speaker": "Usted",
+              "text": "Pues no."
+            }
+          ],
+          "notes": [
+            "Una avería is a breakdown or fault; una avería eléctrica is an electrical fault. In some countries you will hear una falla for the same thing.",
+            "Se fundieron los fusibles is the fuses blew. Los plomos is the other common word for fuses.",
+            "Fue necesario que llamáramos is the subjunctive after it was necessary that — Spanish requires it there, and llamásemos is an equally correct older form of the same word.",
+            "Un cortocircuito is a short circuit, and echar chispas is to throw off sparks.",
+            "Estropeado means broken or spoilt, and it turns up everywhere: el cordón estaba estropeado, unos enchufes que se habían estropeado.",
+            "Un enchufe is a plug or a socket, and una plancha is an iron — the thing, not the verb. Planchar is the verb.",
+            "No tardó mucho en llegar means he didn't take long to arrive. Tardar en is to take time to do something.",
+            "Two ways to ask whether something happened: ¿se produjo un cortocircuito? and the plainer ¿hubo un cortocircuito?"
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "Tuvimos una avería eléctrica en casa.",
+              "english_gloss": "We had an electrical fault at home."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Se fundieron los fusibles.",
+              "english_gloss": "The fuses blew."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Fue necesario que llamáramos a un electricista.",
+              "english_gloss": "It was necessary for us to call an electrician."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "¿Se produjo un cortocircuito?",
+              "english_gloss": "Was there a short circuit?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "El cordón estaba estropeado.",
+              "english_gloss": "The cord was damaged."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Empezó a echar chispas.",
+              "english_gloss": "It started throwing off sparks."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "No tardó mucho en llegar.",
+              "english_gloss": "He didn't take long to arrive."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Eso es algo difícil de encontrar en estos días.",
+              "english_gloss": "That's a hard thing to find these days."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Le pidió al electricista que nos cambiara unos enchufes.",
+              "english_gloss": "She asked the electrician to change some sockets for us."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Entonces tuvimos suerte.",
+              "english_gloss": "So we were lucky."
+            },
+            {
+              "kind": "cue_response",
+              "cue": "¿Un electricista? Eso es algo difícil de encontrar en estos días.",
+              "expected_response": "Entonces tuvimos suerte porque no tardó mucho en llegar."
+            }
+          ]
+        }
+      ]
     }
   ]
 }

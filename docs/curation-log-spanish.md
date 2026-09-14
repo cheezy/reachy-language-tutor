@@ -646,12 +646,13 @@ is what a course written for diplomats arriving at post looks like when you scre
 
 ---
 
-## Curation (W36) — started, and stopped on a defect worth more than the lesson
+## Curation (W36) — the defect found on the way in, and how it was closed
 
-**Nothing was shipped into `converted_lessons.json`, and that is a deliberate outcome
-rather than an unfinished one.** Curating the first Cycle exposed a seeding defect that
-would have broken every robot that already has a database, and fixing that was worth
-more than landing one lesson.
+Curating the first Cycle exposed a seeding defect that would have broken every robot
+that already had a database. An earlier pass through W36 stopped there, shipped nothing
+and fixed the defect first; **Cycle 10 has since landed** and the section above records
+what it contains. This section is kept because the defect is the more useful half of
+the story.
 
 ### What was curated and verified
 
@@ -663,8 +664,9 @@ office building), so **no situation needed replacing and no Spanish had to be in
 drills were drafted from the lines, plus usage notes on ordinal floors, `doble a la
 derecha`, `pasillo`/`corredor`, and `ascensor`/`elevador` (the source gives both).
 
-That draft is not in the shipped file. It is recoverable from this log and from the
-page images, and W36 should re-apply it once the blocker below is understood.
+That draft is what shipped, re-read from the page images rather than recovered from
+this log — 140 dpi this time, and the re-reading is what caught the printed `Optica`
+against the same page's lowercase `óptica`.
 
 ### The defect: "renumbering is only safe upward" was not the whole rule
 
@@ -689,10 +691,10 @@ self-clearing whatever its size. `test_placeholders_shifting_up_by_one_survive_t
 pins it and fails with the exact IntegrityError when the sort is removed. Step 7 of
 docs/converting-a-course.md now states the corrected rule.
 
-### What W36 still owes, enumerated so the next pass does not rediscover it
+### What that cost, and what W36 still owes
 
 The other five shortlisted Cycles (2, 5, 14, 25, 38) are screened, read and approved
-but not curated. Cycle 10's draft above needs re-applying.
+but not curated. Those are the remaining content work.
 
 **Landing any Spanish lesson costs about twenty test updates, and they were run and
 enumerated rather than estimated.** With the lesson and the renumber applied, the suite
@@ -714,25 +716,344 @@ gives 20 failures. Every one is a control behaving correctly:
   not work to do at speed. Rewriting a security-adjacent assertion until it passes is
   the exact failure this project's rules are written against.
 
-None of it is blocked. It is a known, bounded piece of careful work, and the seeder now
-survives the renumber that makes it necessary.
+**All twenty landed, and the estimate was close: 18, not 20.** The suite went from
+green to 18 failures and back to green. Each was a control behaving correctly, and two
+turned out to be worth more than the update they asked for:
+
+- **`test_lesson_positions_are_contiguous_and_unique` checked only `es` and `fr`,**
+  pinning the literal `[1, 2, 3, 4, 5, 6]`. That is a COUNT, while the test's name
+  claims a SHAPE — and the two languages it skipped are the only ones where the shape
+  can break, Italian at 7–12 and now Spanish at 2–7. It now derives the expected list
+  from the row count and checks every catalogued language.
+- **`get_progress` reported the wrong lesson as `last_completed`.** The field read
+  `progress.completed[-1]`, and that tuple is ordered by POSITION, so it names the
+  furthest-along completed lesson rather than the most recent one. The two agree only
+  while a learner works straight through a fixed catalog, which is why it survived
+  Italian. Landing a lesson at Spanish position 1 made them diverge: a learner who
+  finished Cycle 10 would be told they had just completed *Introducing yourself*, a
+  placeholder they finished days earlier — and the tutor says this field out loud.
+  Fixed to read the most recent completed attempt, and revert-proofed against exactly
+  that wrong title.
+
+The partial-does-not-advance rule needed care rather than an edit. It used to be
+demonstrated by the seeded learner's next lesson BEING their partial; once Cycle 10 sat
+ahead of it, that assertion would have passed for the wrong reason. The demonstration
+moved rather than disappearing: the test now completes Cycle 10 first and asserts the
+learner lands back on their partial `es-03`, not past it to `es-04`.
+
+**The upgrade was run, not reasoned about — and the shipped shift turned out not to be
+the dangerous one.** With one Cycle landed the placeholders moved 1–6 → 2–7, a shift of
+ONE, which is the collision this defect describes; that state was reached and the real
+v5→v6 upgrade exercised against it in a separate git worktree. With all six landed they
+move 1–6 → **7–12**, a shift of six, and every destination is already free — the shape
+Italian has always had. Measured: removing the descending sort from `_seed` leaves both
+real-data upgrade tests **green**, because at a shift of six the order of those
+statements stops mattering.
+
+So the guard for the real hazard is not those tests. It is
+`test_converted_courses.py::test_placeholders_shifting_up_by_one_survive_the_upgrade`,
+which constructs the shift-by-one deliberately; removing the sort fails exactly that
+test and nothing else in 1559. **The hazard returns the moment a pass ships a number of
+Cycles that does not equal the number of placeholders** — precisely the state this task
+passed through on its way here.
+
+`test_the_upgrade_every_installed_robot_will_actually_take` is now parameterised over
+Italian and Spanish. It had deleted every converted lesson in the file and rewound only
+Italian's positions, leaving Spanish with six vacant positions at the front — a layout
+no robot has ever been in, which is the unreality that test's own docstring condemns in
+every other test.
 
 ## Conventions applied to every unit
 
-Nothing yet — W36.
+Recorded once here rather than per line, which is the method's rule. Each one is a
+decision a reviewer can disagree with, so each says what was done and why.
+
+**The accent rule, stated as a rule so the remaining Cycles can apply it.** Restore an
+accent only where the SOURCE ITSELF supplies the evidence, and otherwise set what the
+page sets. Two kinds of evidence count, and both were used:
+
+1. *The same word, accented, elsewhere on the page or in the unit* — this licenses
+   `Óptica`.
+2. *The course's own stated rule.* Printed 122's Language Note reads: "Whenever the
+   forms este, esta, estos, estas, ese, esa, esos, and esas appear NOT immediately
+   followed by a noun, they are written with an accent mark", illustrated with `Sí,
+   éste es.` Printed 121 sets `Este es el Edificio Santa Fe` without it, against the
+   course's own rule three pages later, so it ships as **`Éste`**. An earlier draft
+   restored `Óptica` and left this one alone — two defensible choices and no policy.
+
+Never restore an accent from general knowledge of Spanish alone: that is correcting the
+source rather than reading it, and the whole method rests on the difference.
+
+**Accents on capitals are restored.** The printed dialogue title reads `Buscando la
+Optica Alemana`, with no accent on the capital O, and it ships as **`Óptica`**. This is
+not a correction of the source but the resolution of an era typographic convention:
+the *same page* gives `séptimo` and page 129's vocabulary gives **`la óptica`** with the
+accent, both lowercase and both read on the image. Measured across the whole text
+layer, every apparently accented capital is an OCR mis-casing of a lowercase letter —
+`DÓnde` for *dónde*, `jabÓn` for *jabón*, `fÚtbol` for *fútbol* — so there is no
+evidence the print accents capitals anywhere. A Spanish course that taught `optica`
+would be teaching a misspelling by current orthography.
+
+**Parenthetical alternatives are lifted out of the dialogue and into the notes.** A
+voice cannot say `pasillo (corredor)`. The dialogue line takes the first form and the
+alternative becomes a usage note, so both still reach the learner:
+
+| Printed | Shipped in the dialogue | Where the alternative went |
+|---|---|---|
+| `pasillo (corredor)` | `pasillo` | note on the two words for a hallway |
+| `ascensor (Méx. elevador)` | `ascensor` | note naming `elevador` as the Mexican form |
+| `Gracias, (usted es) muy amable.` | `Gracias, usted es muy amable.` | — the parentheses mark an optional politeness, and the fuller form is the one worth teaching |
+| `No hay de qué (de nada).` | `No hay de qué.` | note giving both ways to say *you're welcome* |
+| `Sí, éste es •••• ¿Puedo…` | `Sí, éste es. ¿Puedo…` | — the printed ellipsis is a pause for the teacher to fill |
+
+**Speakers are named, because the source labels them `A` and `N`** (or Student and
+Teacher). Those stand for the American student and the native speaker, and none of them
+is sayable in a dialogue a tutor reads aloud.
+
+The learner is always **`Usted`**, because the scene-setting text addresses them as
+*you* directly, and because that matches the Italian course's `Lei`. The other side is
+named for its role in the scene. **Four of those names are not in the source and are
+substitutions**, listed here because criterion 5 requires every substitution to be
+recorded and an earlier draft of this paragraph claimed there was only one:
+
+| Lesson | Shipped | In the source? |
+|---|---|---|
+| Cycle 2 | `Tutor` | no — the source says *Teacher*, and the robot is the partner |
+| Cycle 5 | `Camarero` | no — not on printed 57-58 |
+| Cycle 10 | `Recepcionista` | no — the role is inferred from `¿Puedo ayudarle en algo?` |
+| Cycle 38 | `Amigo` | no — the scene says the speaker is telling a friend |
+| Cycle 14 | `Manuel` | **yes**, printed 177 |
+| Cycle 25 | `María` | **yes**, printed 342 |
+
+Two vocatives were dropped rather than replaced, on the same reasoning: `Jean` in Cycle
+25 and `señor/señora/señorita Jones` in Cycle 14 are names the source gives the student,
+and a tutor must not address a learner by one. They ship as **`Usted`** and **`Recepcionista`** — `Usted` because the
+scene-setting text addresses the learner as *you* directly, and `Recepcionista` because
+in both dialogues the other party is someone in a building lobby who offers help
+(`¿Puedo ayudarle en algo?`). This matches the Italian course's existing convention of
+naming the two sides rather than lettering them. **`Recepcionista` is the one word in
+the shipped Spanish that is not in the source**, and it is recorded here for that
+reason.
+
+**Teacher directions are dropped, never translated.** The preface states the course
+"requires the presence of a trained instructor who is a native speaker of Spanish". The
+instructor is the thing this app replaces, so a line written to one is a line to drop.
+
+**Provenance uses `Single volume` as the module.** The FAST is flat — its own preface
+says "This course consists of 38 lessons, called 'Cycles'" — so there is no volume or
+part above the Cycle to name, unlike Italian FAST's `Volume 1`. The unit is the Cycle
+number and the page is the printed page, not the PDF page.
 
 ## What shipped, unit by unit
 
-Nothing yet — W36 and W37.
+Six Cycles, at catalog positions 1-6, which pushed the six Spanish placeholders to
+7-12 exactly as Italian's did. Every line below was read on a page image rendered at
+140 dpi; the text layer was used only to find pages.
+
+**1. `es-fast-01-getting-started-in-class` — Cycle 2, printed 7-8.**
+Two printed exchanges merged: the sample greeting conversation and the pen exchange
+(*¿Qué es esto?* — *Es una pluma* — *¿Cómo?* — *Por favor. Repita.*). The best beginner
+material in the volume and entirely neutral; the only substitution is the speaker
+naming. 11 turns, 8 notes, 18 drills (15 repetition, 3 cue-response).
+
+> **A near-miss worth recording.** A first draft of this lesson bridged the two printed
+> exchanges with an invented pair — *¿Cómo se dice "my name is" en español?* / *Se dice
+> me llamo.* — built by analogy from the printed *"table"*/*mesa* exchange. Neither line
+> is on any page. That is precisely the invention this task's first pitfall forbids, and
+> it was caught by re-checking each turn against the image rather than against my own
+> draft. The bridge is gone; the two exchanges simply sit end to end.
+>
+> `Me llamo ______.` is printed with a blank, which a voice cannot say. Rather than
+> complete it with a name the page never gave, the phrase moved into a note.
+
+**2. `es-fast-02-at-the-restaurant` — Cycle 5, printed 57-58.**
+Being seated, ordering, steak doneness, asking for the bill. 12 turns, 7 notes, 17 drills (16 repetition,
+1 cue-response). **Two substitutions, both recorded here because both change what a child
+hears:**
+
+- The printed dialogue orders **`una cerveza fría`** and later **`otra cerveza`**.
+  A tutor for children does not teach a learner to order beer. Substituted to
+  **`una limonada fría`** and **`otra limonada`** — *limonada* is feminine like
+  *cerveza*, so `una`, `otra` and `fría` are all untouched and the agreement the line
+  exists to teach survives exactly.
+- The printed text reads **`Pan y matequilla`**. The facing English page reads "Bread
+  and butter", so this is a print typo for **`mantequilla`**, and it ships corrected.
+
+**3. `es-fast-03-getting-around-inside` — Cycle 10, printed 120-121, 122, 126, 129.**
+Both dialogues: *Buscando el consultorio del Doctor Cardona* and *Buscando la Óptica
+Alemana*. 10 turns, 8 notes, 15 drills (12 repetition, 3 cue-response). **No situation replaced and no Spanish
+invented** — the premises are a doctor's office and an optician, the cleanest case in
+the volume, which is why it was curated first.
+
+> **One cue was constructed before it was read — the second near-miss.** The
+> cue-response `¿En qué piso está la óptica?` was first written as `¿En qué piso está
+> la Óptica Alemana?`, assembled from the dialogue's `no sé en qué piso está` rather
+> than taken from a page. Review found that printed **126** prints the question
+> verbatim — Narrative No. 2, question 4 — so the cue now matches the page it should
+> have come from, and 126 is in the page list above. Arriving at a line that happens to
+> exist is not the same as meeting criterion 2.
+>
+> **Two cue-response drills were dropped for admitting more than one right answer**,
+> the task's named pitfall: `Gracias, usted es muy amable.` → `No hay de qué.`, where
+> the source prints `No hay de qué (de nada).` and this lesson's own note teaches
+> both — a learner answering `De nada.` would have been marked wrong on a form the
+> lesson had just taught them; and `¿Dónde están las escaleras?`, the same fault one
+> word deep, where the source prints `pasillo (corredor)`. Both survive as
+> **repetition** drills, which do not pretend the answer is unique.
+
+*What was deliberately left out.* Cycle 10's section V is a large question-and-answer
+bank and most of it did not ship, for two separate reasons:
+
+- **Block D is embassy material.** Its question is `¿Está en la Sección Consular?` and
+  its answers run through `Sección Económica`, `Sección Política` and `Sección
+  Administrativa`. That is exactly what the screen excludes, sitting inside a Cycle
+  that passed the screen on its dialogues. **A Cycle approved as neutral can still
+  carry pages that are not**, and that is the single most useful thing this pass
+  learned about the method.
+  *An earlier draft of this bullet attributed those answers to block B.* It should not
+  have: block B asks `¿Quién es su jefe?` and answers it `Es ese señor que está ahí`,
+  `Es el Sr. Smith`, `Es el americano que está en esa oficina`, `Es el Sr. Jones` — no
+  `Sección` anywhere. Block B was excluded for the other reason below, six alternative
+  answers. The decision was right for a reason the log had recorded wrongly. Verified
+  by grep over the shipped file: no `secci`, `consular`, `económic`, `polític`,
+  `embaja` or `jefe` reached it.
+- **Block A's questions admit eight right answers each** (`a`-`h`), so none can honestly
+  become a `cue_response` with one chosen. One line ships as a *repetition* drill
+  instead — `Está al final del pasillo.`
+
+**4. `es-fast-04-the-familiar-form` — Cycle 14, printed 177-178.**
+Two friends agreeing to switch from *usted* to *tú*, one of them asking to be
+corrected. 9 turns, 9 notes, 17 drills (15 repetition, 2 cue-response). The scene-setting text names "a national
+employee at the American Embassy", but scene-setting is not shipped and the dialogue
+itself is neutral.
+
+Dialogue No. 2, *Conversación entre un adulto y un niño*, is the closest thing in this
+volume to what this app actually is. It ships as **drills rather than turns**: merging
+two dialogues with different people into one `turns` list would read as a single
+conversation, and Cycle 10's two dialogues merge cleanly only because they do not.
+
+**5. `es-fast-05-shopping-at-the-market` — Cycle 25, printed 341-342.**
+The short version of *A dónde ir de compras*. 8 turns, 7 notes, 13 drills (10 repetition, 3 cue-response).
+
+> **A teacher direction, in Spanish, inside the dialogue.** The printed line
+> `Sí. Y también se puede regatear.` carries a footnote marker whose note reads
+> **`*Explicar lo del regateo - ver la página 12.1.`** — "explain the bargaining thing,
+> see page 12.1". That is addressed to a human instructor, and the pitfall is explicit:
+> a source line that reads as an instruction is a line to **drop rather than
+> translate**. Dropped. Its subject matter survives as a usage note written to the
+> learner instead.
+>
+> The printed reply is `Muy bien, Jean` — *Jean* is the student's name in the source.
+> The vocative is dropped rather than replaced: a tutor must not address a learner by a
+> name the source invented for somebody else.
+
+**6. `es-fast-06-household-repairs` — Cycle 38, printed 526.**
+Telling a friend about an electrical fault at home. 8 turns, 8 notes, 11 drills (10 repetition, 1 cue-response). The
+asset here is real subjunctive — `fue necesario que llamáramos a un electricista` and
+`le pidió al electricista que nos cambiara unos enchufes` — and it ships intact.
+
+> **The 1983 joke that did not ship.** The printed dialogue continues: the speaker's
+> wife was ironing when the cord sparked, and "to avoid these problems she has decided
+> not to iron my shirts any more. What do you think?" — answered "Very intelligent of
+> her." Two turns, dated and off-key in a tutor a child uses. The dialogue is truncated
+> at the printed `Pues no`, and those two turns are dropped. **Nothing was written to
+> replace them**, so no Spanish is invented: `Betty, mi esposa` stays exactly as
+> printed, because a wife is ordinary vocabulary and the joke is not.
+
+## What review caught that authoring did not
+
+Two rounds, and the second one found the more instructive fault.
+
+### The same defect, five more times
+
+Round 1 found one cue-response drill whose answer the source prints an alternative for:
+`Gracias, usted es muy amable.` → `No hay de qué.`, where printed 121 gives `No hay de
+qué (de nada)` and the lesson's own note teaches both. That member was dropped. **Round
+2 found four siblings that had kept the bug**, plus a fifth of a different shape:
+
+| Lesson | Cue | Pinned answer | What the page prints |
+|---|---|---|---|
+| Cycle 5 | `¿Cómo quiere su bistec?` | `Medio crudo.` | `Medio crudo. (Jugoso, término medio, medio hecho).` |
+| Cycle 2 | `¿Cómo está?` | `Bien, gracias. ¿Y usted?` | also `(Muy bien, gracias.)` and `(Bastante bien, gracias.)` |
+| Cycle 5 | `¿Espera a alguien?` | `No, estoy solo.` | `No, estoy solo/a.` |
+| Cycle 38 | `¿Se produjo un cortocircuito?` | `Sí.` | `¿Se produjo (hubo) un cortocircuito?` — the alternative is in the CUE |
+| Cycle 38 | `¿Qué pasó exactamente?` | `Se fundieron los fusibles.` | the page answers that question differently; this pairs two real lines the source never pairs |
+
+In every case **the lesson's own note taught the alternative the drill would mark
+wrong**. The `solo/a` one is the worst: it marks roughly half of children wrong for the
+correct form of their own sentence.
+
+This is the defect class CLAUDE.md puts first — *fix the class, not the member you were
+shown* — and this task is now one of its examples. Round 1 handed over a member; the
+fix went to that member; the siblings shipped. All six cue-responses are dropped, and
+each answer survives as a **repetition** drill, which does not pretend the answer is
+unique. Where the source offered alternatives the drills now teach them: `Jugoso.`,
+`Medio hecho.`, `No, estoy sola.`, `Muy bien, gracias.`, `Bastante bien, gracias.`
+
+Spanish now ships 78 repetition and 13 cue-response drills. **The suite did not catch
+any of this and still would not**: the alternatives live on the printed page, not in
+the shipped string, so no test over the shipped text can see them. The control is
+reading the page beside the drill, and this log is the record that it was done.
+
+### A line from a Cycle the screen had excluded
+
+Cycle 25's note 5 ended "You will meet it again as *quiero que vengas*." That sentence
+is on neither printed 341 nor 342. It is on **printed 203**, footed `15.7` — Cycle 15,
+which this log excludes by name, on a page whose narrative is about a *vicecónsul* at
+the *Embajada*. The line itself is innocuous subjunctive and nothing harmful shipped.
+
+What crossed silently is the `APPROVED_UNITS` boundary, and the reason it could is
+worth stating plainly: **nothing checks which page a NOTE came from.** Provenance is
+recorded per lesson, and a note is free prose written beside the dialogue, so a curator
+reaching for an illustration can leave the approved unit without anything objecting.
+The clause is removed. The gap is not closed, and the next pass should decide whether
+notes need their own provenance.
+
+### What else the two rounds moved
+
+- **Spanish had no accent pins at all** — `ACCENTED_LINES` held eight entries, every
+  one Italian, on a task whose whole justification is a measured 47.9% accent loss on
+  *this* scan. Nine Spanish lines are now pinned to the printed page they were read on.
+- **The military/embassy/border screen was Italian- and English-only** while six
+  Spanish Cycles shipped. Spanish terms added. `general` and `oficial` are deliberately
+  left out: W35 measured that widening to them matched *generalmente* and made the
+  screen worse.
+- **Spanish had no shipped-text digest, no row-count pin and no leads-with-converted
+  assertion**, all three of which Italian had. Added. Italian's own digest is unchanged
+  throughout, which is the evidence that landing Spanish moved nothing Italian.
 
 ## What did not ship, and why
 
-Nothing yet — W35 records the rejections.
+W35 records the 32 Cycles dropped at screening, with a reason each. **All six
+shortlisted Cycles are now curated and shipped**, so nothing from the shortlist is
+outstanding.
+
+What did not ship from *inside* the six is recorded per unit above, and it is the more
+interesting list: an embassy question-and-answer block inside a Cycle that passed the
+screen, two orders for beer, a teacher direction written in Spanish, a 1983 joke about
+a wife ironing her husband's shirts, and two cue-response drills whose answer the
+source itself prints an alternative for.
 
 ## What a learner can actually do with this, today
 
-Nothing. No Spanish lesson in the catalog carries content; a Spanish learner is still
-offered the six title-and-objective placeholders. W38 closes this section.
+**Six real Spanish lessons, and they are the first six a learner meets.** Starting
+from nothing, a Spanish learner can now:
+
+1. greet someone, give and ask for a name, say *no entiendo*, and ask how to say a word
+   they do not have;
+2. be seated in a restaurant, order a drink and a meal, say how they want it and ask
+   for the bill;
+3. find their way inside a building — ordinal floors, stairs, *doble a la derecha*;
+4. switch from *usted* to *tú* with someone they know, and ask to be corrected;
+5. say what they want to buy, ask where to go and whether it is cheaper, and ask
+   someone to come along;
+6. tell someone what went wrong at home and what they had to do about it.
+
+That is **six of twelve** Spanish lessons carrying content, the same proportion Italian
+has. The remaining six are the title-and-objective placeholders at positions 7-12.
+
+The gap that remains is the other three languages: French, German and Portuguese still
+have six placeholders each and no material at all.
 
 ## What a reviewer should look at first
 
