@@ -211,6 +211,34 @@ prints a concrete fix for anything broken. It exits non-zero on failure, so it w
 Re-run it any time something stops working. It is faster than debugging by hand, and it knows
 about the traps.
 
+## 8b. Install it into the simulator's app list (optional)
+
+Section 9 runs the app directly, which is the fast loop for development. To have it
+appear in the Reachy Mini Control dashboard and start like any other app instead:
+
+```bash
+./scripts/install-into-simulator.sh          # --start to launch it too
+./scripts/remove-from-simulator.sh           # the undo
+```
+
+Both are idempotent and verify by asking rather than by trusting the installer: the
+install checks that a `reachy_mini_apps` entry point appeared and that the daemon lists
+the app; the remove checks that both are gone.
+
+**Which environment, because it is not the obvious one.** Apps live in the desktop app's
+`apps_venv`, a third environment beside your SDK at `~/dev/reachy/reachy_mini_env` and
+the daemon's own `.venv`. The script installs there with the desktop app's own bundled
+`uv`, and prints `reachy_mini`'s version before and after — this app declares
+`reachy-mini>=1.10.0rc5`, so an install *can* move the SDK and put it out of step with
+the daemon, which is the trap section 5 is about. It warns if that happens.
+
+**Not through `/api/apps/install`.** The daemon has that endpoint and it refuses a local
+directory — `source_kind 'local' is not installable via the API`. It is for Hugging Face
+spaces. Established by trying it, so nobody has to try it again.
+
+The install is editable, so the simulator runs your working tree. Reinstall only after
+changing entry points or dependencies.
+
 ## 9. Run the app
 
 ```bash
