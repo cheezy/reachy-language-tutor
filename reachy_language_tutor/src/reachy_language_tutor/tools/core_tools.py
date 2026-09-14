@@ -9,7 +9,7 @@ import threading
 import traceback
 import importlib.util
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Callable, ClassVar, Sequence, TypedDict
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Callable, ClassVar, Optional, Sequence, TypedDict
 from pathlib import Path
 from dataclasses import field, dataclass
 
@@ -208,6 +208,20 @@ class Tool(abc.ABC):
 
     _auto_register: ClassVar[bool] = True
     needs_response: ClassVar[bool] = True
+    # May this tool's top-level result keys be named in a log? True here because a
+    # tool defined in this tree composes its own return dict, so its keys are our
+    # schema. A tool that returns somebody ELSE's payload verbatim must set this
+    # False -- RemoteMcpTool does, and so must any future wrapper around a hosted
+    # backend or an external service.
+    #
+    # THIS DEFAULT IS OPT-OUT, and the rule does not rely on it alone. An earlier
+    # comment here claimed the marker made trust opt-in; review measured that and it
+    # was false -- a subclass that sets nothing still inherits True. What the marker
+    # buys is that a tool can now opt OUT without subclassing RemoteMcpTool, which
+    # the subclass test it replaced could not express. The reachable population this
+    # default would otherwise trust -- external tool FILES loaded from
+    # TOOLS_DIRECTORY -- is excluded by provenance in log_trust_for_resolved_tool.
+    log_keys_are_ours: ClassVar[bool] = True
 
     name: str
     description: str
@@ -235,12 +249,20 @@ _LOADED_TOOL_CLASS_CACHE: Dict[tuple[str, str], List[type[Tool]]] = {}
 _REMOTE_TOOL_RETRY_DELAY_S = 0.25
 _TOOLS_LOCK = threading.RLock()
 _EXTERNAL_TOOL_MODULE_NAMESPACE = "reachy_language_tutor._external_tools"
+# Where a tool has to be DEFINED for its result keys to count as our schema.
+# Deliberately narrower than the package: _external_tools sits under
+# reachy_language_tutor too, so a prefix of the package alone would admit the
+# very tools this excludes.
+_OUR_TOOLS_NAMESPACE = "reachy_language_tutor.tools."
 
 
 class RemoteMcpTool(Tool):
     """Adapter exposing one remote MCP tool through the local Tool interface."""
 
     _auto_register: ClassVar[bool] = False
+    # Returns dict(result) from a third-party Space, so the envelope keys belong to
+    # whoever wrote it and may be anything -- a learner's name among them.
+    log_keys_are_ours: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -593,64 +615,58 @@ def get_tool_specs(exclusion_list: list[str] | None = None) -> list[ToolSpec]:
         return [tool.spec() for tool in ALL_TOOLS.values() if tool.name not in exclusion_list]
 
 
-def result_keys_are_ours(tool_name: str) -> bool:
-    """Report whether a tool's result envelope was built by this application.
+def log_trust_for_resolved_tool(tool: object) -> bool:
+    """Decide whether THIS tool's result envelope keys may be logged -- the one rule.
+
+    Takes the resolved Tool, never a name, and that is the entire point of D36. The
+    name-based version asked the registry at dispatch while `_dispatch_tool_call`
+    asked it again to get the callable, so the verdict and the tool that executed
+    were two reads of a registry `initialize_tools(force=True)` can rebind between --
+    reachable off-loop through `asyncio.to_thread`, so the window was wall-clock. A
+    security review reproduced a learner's name rendering as a trusted envelope key
+    through it. A verdict derived from the object cannot be about a different object.
 
     A locally-registered tool composes its own return dict here, so its top-level
-    keys are schema and are worth naming in a log -- that is most of the dispatch
-    signal. A RemoteMcpTool returns dict(result) from a third-party Space, so those
-    keys belong to whoever wrote it and a data-keyed envelope would print verbatim.
+    keys are this application's schema and are most of the dispatch signal an
+    operator reads. A RemoteMcpTool returns dict(result) from a third-party Space, so
+    those keys belong to whoever wrote it and a data-keyed envelope would print
+    verbatim -- a learner's name among the possibilities, in a child's household.
 
     Nesting is a separate question and is never trusted: describe_for_log stops trust
     at the envelope, which is what covers a hosted backend's payload at milestone 5.
+
+    NAMES WHAT IS PERMITTED, and that is not a stylistic preference here. While this
+    rule took a name it could only ever be handed a registry value, so
+    `tool is not None and not isinstance(tool, RemoteMcpTool)` was adequate. Taking
+    the object exposed it as the deny-list it always was: a plain string is not None
+    and not a RemoteMcpTool, so it answered YES. Caught by this task's own test, one
+    line after CLAUDE.md records the same inversion costing four defects. The
+    permitted set is "an instance of our Tool base that is not the remote subclass",
+    so None from an unresolved name, a string, or anything that is not a Tool at all
+    is refused without needing to be foreseen.
+
+    TWO POSITIVE CONDITIONS, because one of them was not enough and review proved it.
+
+    The first is PROVENANCE: the class must be defined under this package's own
+    tools. `TOOLS_DIRECTORY` loads external tool FILES and their classes enter the
+    registry as ordinary Tools, under `_EXTERNAL_TOOL_MODULE_NAMESPACE` -- so a
+    file-backed proxy returning a third party's payload verbatim was trusted, which
+    is reachable today by configuration rather than after some future refactor. A
+    tool defined anywhere else is refused, which fails closed for a future in-tree
+    module too.
+
+    The second is the class MARKER, `log_keys_are_ours`. It lets a tool that wraps
+    somebody else's service opt out without subclassing RemoteMcpTool -- which the
+    subclass test this replaced could not express -- and `is True` refuses a
+    subclass that sets it to something odd rather than accepting a truthy value.
+
+    An earlier version of this docstring called the marker alone "opt-in". It is
+    not: the base default is True, so a subclass that says nothing inherits trust.
+    Review measured that and the claim is gone rather than the measurement.
     """
-    tool = get_tools().get(tool_name)
-    return tool is not None and not isinstance(tool, RemoteMcpTool)
-
-
-def log_trust_for_tool_result(tool_name: object) -> bool:
-    """Decide whether a tool result's envelope keys may be logged -- the ONE rule.
-
-    ONE caller, deliberately: `BackgroundToolManager.start_tool`, which takes the
-    answer at dispatch and puts it on the ToolNotification, so everything downstream
-    carries it rather than asking again. The console does not call this and must not --
-    tests/test_log_redaction.py asserts that, and a guard there requires every
-    tool_result record in the tree to take its verdict from this function.
-
-    D34 is why. The producer asked `result_keys_are_ours`; the console's fallback
-    asked whether the record's kind was "tool_result", a blanket yes for every tool
-    result including a remote one -- so a learner's name arriving as an ENVELOPE KEY
-    from a third-party Space would have printed in cleartext at INFO, where the
-    producer would have rendered it as a count. Two spellings of one decision is how
-    they came apart. The first fix gave both sides this one function; the security
-    review of D34 then showed that two CALLS is still two moments, because
-    `initialize_tools(force=True)` can rebind a name in between. So it is called
-    once, and the answer travels.
-
-    It FAILS CLOSED, in three ways, and the reason is stronger than it used to be:
-    this now runs inside `start_tool`, so a raise here would abort the dispatch of
-    the tool itself rather than spoil one log line.
-
-    * a `tool_name` that is not a non-empty string -- including the None a record
-      simply does not carry -- is not trusted. An absent name must never read as
-      permission; that is the same inversion D34 is about.
-    * `result_keys_are_ours` calls `get_tools()`, which calls `initialize_tools()`,
-      which raises RuntimeError when a profile cannot be loaded. A logging call that
-      raises turns a degraded log line into a crash, so the exception is swallowed
-      and the answer is no.
-    * anything else unforeseen from the registry lands in the same place.
-
-    Untrusted is always the safe answer here: it renders the shape (`{3 keys: str,
-    int, list}`) instead of the names, which is strictly less information and never
-    a person's data.
-    """
-    if not isinstance(tool_name, str) or not tool_name:
+    if not isinstance(tool, Tool) or tool.log_keys_are_ours is not True:
         return False
-    try:
-        return result_keys_are_ours(tool_name)
-    except Exception:  # noqa: BLE001 -- see the docstring: a log line must not raise
-        logger.debug("log_trust_for_tool_result: the tool registry was unreadable, so keys were not trusted")
-        return False
+    return type(tool).__module__.startswith(_OUR_TOOLS_NAMESPACE)
 
 
 def get_tools() -> dict[str, Tool]:
@@ -673,15 +689,28 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
         return {}
 
 
-async def _dispatch_tool_call(tool_name: str, args: Dict[str, Any], deps: ToolDependencies) -> Dict[str, Any]:
+async def _dispatch_tool_call(
+    tool_name: str, args: Dict[str, Any], deps: ToolDependencies
+) -> tuple[Dict[str, Any], Optional[Tool]]:
+    """Run a tool and report BOTH its result and the tool object that produced it.
+
+    The second half of that pair is D36. This function is the one place that resolves
+    a name to a callable, so it is the only place that can say with certainty which
+    object ran -- and the log-trust verdict has to be about that object, not about
+    what the name resolved to at some other moment. Callers that do not care unwrap
+    and discard it; `dispatch_tool_call` and `dispatch_tool_call_with_manager` keep
+    their dict-only contracts for exactly that reason, because four test modules
+    depend on them -- test_learner_tool_flow, test_converted_lessons,
+    test_tool_space_runtime and the identity-boundary suite.
+    """
     tool = get_tools().get(tool_name)
     if not tool:
-        return {"error": f"unknown tool: {tool_name}"}
+        return {"error": f"unknown tool: {tool_name}"}, None
     try:
-        return await tool(deps, **args)
+        return await tool(deps, **args), tool
     except asyncio.CancelledError:
         logger.info("Tool cancelled: %s", tool_name)
-        return {"error": "Tool cancelled"}
+        return {"error": "Tool cancelled"}, tool
     except Exception as e:
         msg = f"{type(e).__name__}: {e}"
         # The type and where it happened, never the message. An exception raised out
@@ -695,12 +724,13 @@ async def _dispatch_tool_call(tool_name: str, args: Dict[str, Any], deps: ToolDe
             f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno}" for frame in traceback.extract_tb(e.__traceback__)
         )
         logger.error("Tool error in %s: %s at %s", tool_name, type(e).__name__, frames)
-        return {"error": msg}
+        return {"error": msg}, tool
 
 
 async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> Dict[str, Any]:
     """Dispatch a tool call by name with JSON args and dependencies."""
-    return await _dispatch_tool_call(tool_name, _safe_load_obj(args_json), deps)
+    result, _tool = await _dispatch_tool_call(tool_name, _safe_load_obj(args_json), deps)
+    return result
 
 
 async def dispatch_tool_call_with_manager(
@@ -709,4 +739,25 @@ async def dispatch_tool_call_with_manager(
     """Dispatch a tool call, injecting a BackgroundToolManager into the args."""
     args = _safe_load_obj(args_json)
     args["tool_manager"] = tool_manager
+    result, _tool = await _dispatch_tool_call(tool_name, args, deps)
+    return result
+
+
+async def dispatch_tool_call_reporting_tool(
+    tool_name: str,
+    args_json: str,
+    deps: ToolDependencies,
+    tool_manager: Optional["BackgroundToolManager"] = None,
+) -> tuple[Dict[str, Any], Optional[Tool]]:
+    """Dispatch a tool call and report the tool object that ran alongside its result.
+
+    The entry the background manager uses, so it can take the log-trust verdict from
+    the object rather than from the name (D36). `tool_manager` is injected when given,
+    which is what `dispatch_tool_call_with_manager` does for system tools -- one
+    function rather than a second reporting variant, so the two spellings of "run a
+    tool" do not become four.
+    """
+    args = _safe_load_obj(args_json)
+    if tool_manager is not None:
+        args["tool_manager"] = tool_manager
     return await _dispatch_tool_call(tool_name, args, deps)

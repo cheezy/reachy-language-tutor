@@ -60,6 +60,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from reachy_language_tutor import tools
+from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.learners import store
 
 # For typing and subclassing ONLY. Never use these in an isinstance/issubclass check:
@@ -109,9 +110,22 @@ INJECTED_IDENTITY["name"] = HOUSEMATE_NAME
 INJECTED_IDENTITY["display_name"] = HOUSEMATE_NAME
 INJECTED_IDENTITY["email"] = "zerelda@example.invalid"
 
-# Both real entry points. dispatch_tool_call_with_manager writes tool_manager into args
-# before the same unvalidated splat, which is why the **kwargs catch-all must stay.
-ENTRY_POINTS = ("dispatch_tool_call", "dispatch_tool_call_with_manager")
+# Every real entry point, and the list is CHECKED against the module rather than
+# remembered -- see test_every_public_dispatch_entry_point_is_attacked below. D36
+# added dispatch_tool_call_reporting_tool and made it the only one production calls;
+# this tuple still named the other two, so the suite was attacking two paths the app
+# no longer uses and none that it does. A hand-maintained list of what to attack is
+# only ever as current as the last person to edit it.
+#
+# dispatch_tool_call_with_manager writes tool_manager into args before the same
+# unvalidated splat, which is why the **kwargs catch-all must stay.
+# dispatch_tool_call_reporting_tool does the same when a manager is passed, and
+# returns (result, tool) rather than a bare dict.
+ENTRY_POINTS = (
+    "dispatch_tool_call",
+    "dispatch_tool_call_with_manager",
+    "dispatch_tool_call_reporting_tool",
+)
 
 # Non-degenerate on purpose. An empty string is rejected by remember, forget, camera
 # and task_cancel at their first guard clause, so the attack would land on the input
@@ -406,14 +420,75 @@ async def _run(
     state = random.getstate()
     random.seed(0)
     try:
+        # One manager per exchange, like deps: a fresh mock each call would make a
+        # tool that echoes it look non-deterministic, and that artefact would
+        # silently disable the equality half of the attack for that tool.
         if entry == "dispatch_tool_call_with_manager":
-            # One manager per exchange, like deps: a fresh mock each call would make a
-            # tool that echoes it look non-deterministic, and that artefact would
-            # silently disable the equality half of the attack for that tool.
             return await core.dispatch_tool_call_with_manager(tool_name, payload, deps, manager or MagicMock())
+        if entry == "dispatch_tool_call_reporting_tool":
+            # Returns (result, resolved_tool); the identity boundary is about the
+            # result, and the second half is unwrapped here so every entry point in
+            # ENTRY_POINTS answers the same shape to the attacks below.
+            result, _resolved = await core.dispatch_tool_call_reporting_tool(
+                tool_name, payload, deps, manager or MagicMock()
+            )
+            return result
         return await core.dispatch_tool_call(tool_name, payload, deps)
     finally:
         random.setstate(state)
+
+
+def test_every_public_dispatch_entry_point_is_attacked() -> None:
+    """ENTRY_POINTS is read from what REACHES the splat, not from what it is called.
+
+    D36 added a third entry point and made it the only one production calls, while
+    this tuple still named the other two -- so the suite spent its whole run
+    attacking paths the application no longer uses, and nothing failed, because a
+    hand-maintained list cannot notice what it is missing.
+
+    The first replacement was a NAME-PREFIX convention, and the security review
+    defeated it in one move: a public `async def run_tool_call(...)` whose body is
+    the same `await _dispatch_tool_call(...)` splat this whole suite exists to attack
+    slipped past, and the full suite stayed green. A convention enumerates what
+    somebody chose to call an entry point. The property that matters is structural --
+    does this function reach the unvalidated `**args` splat -- so that is what is
+    read, from the AST, and an entry point called ANYTHING is caught as long as it
+    has the shape below.
+
+    WHAT IT CATCHES, stated exactly, because the sentence that used to be here said
+    "a fifth entry point called anything at all is attacked the day it is written"
+    and review measured four shapes that walk past it. Caught: a public top-level
+    `async def` in core_tools whose body contains a direct `_dispatch_tool_call(...)`
+    call. NOT caught: one level of indirection through a helper; a call written as
+    `core_tools._dispatch_tool_call(...)`, since the walk reads `func.id` and an
+    attribute has none; a public alias assignment, which is no FunctionDef at all;
+    and an entry point defined in another module or as a method. Those are real
+    gaps, not hypotheticals -- each was appended to the real module and each passed.
+    Widening the walk is possible; what is not acceptable is a docstring claiming
+    the breadth this does not have, which is the D15 class CLAUDE.md records.
+
+    `_dispatch_tool_call` itself is excluded: it IS the splat, and attacking it would
+    re-run the same code a fourth time while proving nothing about a public surface.
+    """
+    source = Path(core_tools.__file__).read_text(encoding="utf-8")
+    reaching = {
+        node.name
+        for node in ast.parse(source).body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and not node.name.startswith("_")
+        and any(
+            isinstance(inner, ast.Call) and getattr(inner.func, "id", None) == "_dispatch_tool_call"
+            for inner in ast.walk(node)
+        )
+    }
+
+    assert reaching, "no function was found reaching _dispatch_tool_call, so this guard proves nothing"
+    assert set(ENTRY_POINTS) == reaching, (
+        "the identity-boundary suite attacks a different set than the module exposes to the splat; "
+        f"reaching _dispatch_tool_call={sorted(reaching)} attacked={sorted(ENTRY_POINTS)}"
+    )
+    for name in ENTRY_POINTS:
+        assert inspect.iscoroutinefunction(getattr(core_tools, name)), f"{name} is not an async entry point"
 
 
 # --- The suite must not be able to pass while proving nothing --------------------------

@@ -566,11 +566,11 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
     async def _handle_tool_result(self, completed_tool: ToolNotification) -> None:
         """Process the result of a tool call."""
         # CARRIED, not looked up. May this result's top-level keys be named in a
-        # log? The notification answers, because the answer was taken at dispatch
-        # where the tool was being resolved. Deriving it here from the tool NAME --
-        # which is what D34 did first, and then did once instead of twice -- asks a
-        # registry `initialize_tools(force=True)` can rebind after the tool has run,
-        # and the security review reproduced a learner's name reaching INFO that way.
+        # log? The notification answers, because the answer was taken from the tool
+        # OBJECT that produced the result, in _run_tool (D36). Deriving it here from
+        # the tool NAME -- which is what D34 did first -- asks a registry
+        # `initialize_tools(force=True)` can rebind after the tool has run, and the
+        # security review reproduced a learner's name reaching INFO that way.
         #
         # Read once into a local so the DEBUG line below and the record queued for
         # the console cannot render the same result two different ways.
@@ -677,11 +677,11 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                         # True) can rebind a name between this queue put and the
                         # console's get, so a name that was a RemoteMcpTool here could
                         # be a local Tool there, and a third-party Space's envelope
-                        # keys would be trusted. The verdict is taken at dispatch
-                        # now and carried on the notification, so nothing downstream
-                        # re-derives it. What that does NOT do is make the verdict
-                        # certainly right about the callable -- see the field's
-                        # comment in background_tool_manager, and D36.
+                        # keys would be trusted. The verdict is taken from the tool
+                        # object that ran and carried on the notification, so nothing
+                        # downstream re-derives it and nothing can rebind between the
+                        # answer and the tool it is about -- D36 closed that. See the
+                        # field's comment in background_tool_manager.
                         #
                         # It also keeps get_tools() out of the console's synchronous
                         # log path, which was taking a lock and re-resolving remote

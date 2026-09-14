@@ -15,9 +15,8 @@ from pydantic import Field, BaseModel, StrictBool, PrivateAttr
 
 from reachy_language_tutor.tools.core_tools import (
     ToolDependencies,
-    dispatch_tool_call,
-    log_trust_for_tool_result,
-    dispatch_tool_call_with_manager,
+    log_trust_for_resolved_tool,
+    dispatch_tool_call_reporting_tool,
 )
 from reachy_language_tutor.tools.tool_constants import ToolState, SystemTool
 
@@ -37,10 +36,11 @@ class ToolProgress(BaseModel):
 class ToolCallRoutine(BaseModel):
     """Encapsulates a tool NAME and its arguments for deferred execution.
 
-    Not a callable, despite what this said until D34. The callable is resolved
-    from `tool_name` when the routine runs, which is why the log-trust verdict
-    taken at dispatch and the tool that actually executes are two separate reads
-    of the registry -- see ToolNotification.log_keys_trusted, and D36.
+    Not a callable, despite what this said until D34. The tool is resolved from
+    `tool_name` once, inside `_dispatch_tool_call`, when the routine runs -- and the
+    object it resolved comes back beside the result, so the log-trust verdict is
+    taken from the tool that actually ran rather than from a second reading of the
+    registry. That was D36; see ToolNotification.log_keys_trusted.
     """
 
     model_config = {"arbitrary_types_allowed": True}
@@ -49,20 +49,29 @@ class ToolCallRoutine(BaseModel):
     args_json_str: str
     deps: "ToolDependencies"
 
-    async def __call__(self, tool_manager: BackgroundToolManager) -> Any:
-        """Resolve this routine's tool BY NAME and execute it with its arguments.
+    async def __call__(self, tool_manager: BackgroundToolManager) -> tuple[dict[str, Any], Any]:
+        """Resolve this routine's tool by name, run it, and report BOTH.
 
-        There is no stored callable -- the class docstring says so, and this one said
-        otherwise until review caught the sibling. The lookup happens in
-        dispatch_tool_call -> _dispatch_tool_call, which is the second read of the
-        registry that D36 exists to remove.
+        There is no stored callable -- the class docstring says so. The resolution
+        happens once, inside `_dispatch_tool_call`, and the tool object it resolved
+        comes back beside the result so the caller can take the log-trust verdict
+        from the thing that actually ran. That is D36: the verdict used to be derived
+        from the name at dispatch while the callable was resolved from the same
+        mutable registry later, and a security review reproduced a learner's name
+        reaching a log through the gap between the two reads.
+
+        Returns `(result, resolved_tool)`. `resolved_tool` is None when the name was
+        not registered, which is the fail-closed answer.
         """
-        if self.tool_name in _SYSTEM_TOOL_NAMES:
-            # For safety purposes, we only allow system tools to be called with the tool manager
-            return await dispatch_tool_call_with_manager(
-                tool_name=self.tool_name, args_json=self.args_json_str, deps=self.deps, tool_manager=tool_manager
-            )
-        return await dispatch_tool_call(tool_name=self.tool_name, args_json=self.args_json_str, deps=self.deps)
+        return await dispatch_tool_call_reporting_tool(
+            tool_name=self.tool_name,
+            args_json=self.args_json_str,
+            deps=self.deps,
+            # For safety purposes, we only allow system tools to be called with the
+            # tool manager -- the same rule as before, expressed as whether the
+            # manager is injected rather than as which of two functions is called.
+            tool_manager=tool_manager if self.tool_name in _SYSTEM_TOOL_NAMES else None,
+        )
 
 
 class ToolNotification(BaseModel):
@@ -74,22 +83,18 @@ class ToolNotification(BaseModel):
     status: ToolState
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
-    # May this result's top-level keys be named in a log? Taken at DISPATCH, from the
-    # tool name, and carried from there -- so the console never re-derives it and two
-    # renderings of one result cannot disagree. D34 answered it after the tool had
-    # run, and the security review reproduced the consequence:
-    # `initialize_tools(force=True)` can rebind a name in between, so a RemoteMcpTool's
-    # envelope keys -- third-party, possibly a learner's name -- were trusted at INFO.
+    # May this result's top-level keys be named in a log? Taken from the tool OBJECT
+    # that produced the result, in `_run_tool`, and carried from there -- so nothing
+    # downstream re-derives it and two renderings of one result cannot disagree.
     #
-    # NOT CLOSED, and saying so here because the version of this comment that claimed
-    # otherwise is what a later reviewer would have trusted instead of re-checking.
-    # `ToolCallRoutine` stores a tool NAME, not a resolved callable, and the callable
-    # is looked up again at core_tools `_dispatch_tool_call` when the task runs. So
-    # this verdict and the tool that actually executes are still two reads of one
-    # mutable registry, and a rebind between them still answers for the wrong object
-    # -- reproduced. The window is a scheduling turn rather than the whole execution
-    # plus queue transit, which is a real narrowing and not a fix. Closing it means
-    # deciding where the callable is resolved and reporting it back: filed as D36.
+    # From the object, and not from the name, because D34 did the latter and a
+    # security review reproduced what that costs: the name was resolved once at
+    # dispatch for the verdict and again at run time for the callable, and
+    # `initialize_tools(force=True)` -- reachable off-loop through
+    # `asyncio.to_thread` -- can rebind between them, so a RemoteMcpTool's envelope
+    # keys, third-party and possibly a learner's name, were trusted at INFO. A
+    # verdict derived from the object cannot be about a different object. That is
+    # D36, and there is no timing argument left to make.
     #
     # Defaults to False so a notification built by anything that does not set it
     # fails closed, which is the only safe direction for a field that gates what
@@ -176,9 +181,10 @@ class BackgroundToolManager(BaseModel):
         Args:
             call_id: The ID of the tool
             tool_call_routine: The ToolCallRoutine carrying the tool NAME and its arguments.
-                Not a callable -- the tool is resolved by name when the routine runs,
-                which is why the verdict stamped below is not certainly about the tool
-                that executes. See ToolNotification.log_keys_trusted, and D36.
+                Not a callable -- the tool is resolved when the routine runs, and the
+                routine reports the object it resolved. Nothing about log trust is
+                decided here any more: D36 moved that to _run_tool, where the tool
+                that actually ran is known. See ToolNotification.log_keys_trusted.
             with_progress: Whether to track progress (0.0-1.0)
             is_idle_tool_call: Whether the tool call was triggered by an idle signal
 
@@ -194,12 +200,6 @@ class BackgroundToolManager(BaseModel):
             is_idle_tool_call=is_idle_tool_call,
             progress=ToolProgress(progress=0.0) if with_progress else None,
             status=ToolState.RUNNING,
-            # Asked here, at dispatch, and carried forward -- earlier than every
-            # later moment, and still not early enough to be certain: the callable
-            # is resolved by name again when the task runs. See the field's comment
-            # and D36. Carrying one answer is what stops the CONSUMERS disagreeing;
-            # it does not make this answer certainly right about the callable.
-            log_keys_trusted=log_trust_for_tool_result(tool_name),
         )
         self._tools[background_tool.tool_id] = background_tool
 
@@ -219,7 +219,14 @@ class BackgroundToolManager(BaseModel):
         tool_call_routine: ToolCallRoutine,
     ) -> None:
         """Execute the tool and handle completion."""
-        result: dict[str, Any] = await tool_call_routine(self)
+        result, resolved_tool = await tool_call_routine(self)
+        # THE verdict, taken from the object that ran and set before the notification
+        # is built from it. Not from the tool NAME, and not at dispatch: those were
+        # two reads of a registry `initialize_tools(force=True)` can rebind between,
+        # and a security review reproduced a learner's name reaching INFO as a
+        # trusted envelope key through that gap (D36). A tool that could not be
+        # resolved gives None, which the rule answers no to.
+        background_tool.log_keys_trusted = log_trust_for_resolved_tool(resolved_tool)
         background_tool.completed_at = time.monotonic()
         error = result.get("error")
 

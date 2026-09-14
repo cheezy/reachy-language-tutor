@@ -39,6 +39,7 @@ import reachy_language_tutor.huggingface_realtime as hf_mod
 # built a second Tool base class and _load_enabled_tools, which filters with issubclass,
 # then matched nothing. See tests/tools_module_graph.py.
 from reachy_language_tutor.tools import core_tools
+from reachy_language_tutor.tools.get_profile import GetProfile
 from reachy_language_tutor.utils import describe_for_log, tool_call_message, describe_json_for_log
 from reachy_language_tutor.console import log_handler_message
 from reachy_language_tutor.streaming import AdditionalOutputs
@@ -149,7 +150,7 @@ async def test_a_remote_tools_envelope_keys_are_not_trusted(
 ) -> None:
     """A Space tool composes its own envelope, so its top-level keys are not ours."""
     handler = _handler(monkeypatch, local_tools=())
-    remote = MagicMock(spec=core_tools.RemoteMcpTool)
+    remote = MagicMock(spec=core_tools.RemoteMcpTool, log_keys_are_ours=False)
     monkeypatch.setattr(core_tools, "get_tools", lambda: {"space_tool": remote})
     handler._in_flight_tool_calls = {"call_r"}
 
@@ -215,7 +216,7 @@ def _handler(monkeypatch: Any, *, local_tools: tuple[str, ...] = ("get_profile",
     monkeypatch.setattr(hf_mod, "get_session_instructions", lambda _instance_path=None: "test")
     monkeypatch.setattr(hf_mod, "get_session_voice", lambda default=None: "Aiden")
     monkeypatch.setattr(hf_mod, "get_tool_specs", lambda: [])
-    registry = {name: MagicMock(spec=core_tools.Tool) for name in local_tools}
+    registry = {name: MagicMock(spec=core_tools.Tool, log_keys_are_ours=True) for name in local_tools}
     monkeypatch.setattr(core_tools, "get_tools", lambda: registry)
 
     handler = HuggingFaceRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
@@ -602,12 +603,12 @@ def test_a_tool_result_with_no_rendering_is_still_redacted(caplog: pytest.LogCap
     A producer that forgets log_safe, or builds a malformed one, must not fall
     through to cleartext -- the default outcome of this control has to be redaction.
 
-    These records carry no `tool_name`, and D34 changed what that means. The branch
-    used to trust a result's keys on the strength of its kind alone; it now asks
-    core_tools.log_trust_for_tool_result, which answers no to a name it does not
-    have. So the key names are suppressed for BOTH kinds here, where a result's used
-    to come back -- and that is the fix, not a loss: the records that legitimately
-    want their keys named are the ones carrying a name to justify it, covered by
+    These records carry no verdict, and D34 changed what that means. The branch used
+    to trust a result's keys on the strength of its kind alone; it now reads the
+    `log_keys_trusted` the producer stamped, and an absent one is not a yes. So the
+    key names are suppressed for BOTH kinds here, where a result's used to come back
+    -- and that is the fix, not a loss: the records that legitimately want their keys
+    named are the ones carrying a verdict to justify it, covered by
     test_the_fallback_names_the_keys_of_a_tool_this_app_wrote_itself below.
     """
     raw = json.dumps(PROFILE_RESULT)
@@ -681,24 +682,19 @@ def test_the_fallback_names_the_keys_of_a_tool_this_app_wrote_itself(caplog: pyt
     assert "display_name" in logged, f"our own schema keys are worth seeing: {logged}"
 
 
-def test_an_unreadable_tool_registry_answers_no_rather_than_raising(monkeypatch: Any) -> None:
-    """The rule runs inside a log statement, so it may not raise, and may not say yes.
+def test_a_tool_that_could_not_be_resolved_is_not_trusted() -> None:
+    """None is what an unknown name resolves to, and None is never permission.
 
-    core_tools.get_tools() calls initialize_tools(), which raises RuntimeError when a
-    profile cannot be loaded. A logging call that raises turns a degraded log line
-    into a crashed console, and the answer it would have needed is "do not trust", so
-    it fails closed twice over.
+    D36 moved the rule from a NAME to the resolved object, which removed the
+    registry from the rule entirely -- it no longer looks anything up, so it can no
+    longer raise, and the previous version of this test (an exploding get_tools)
+    tests nothing about it any more. What survives from that test is the property
+    that actually mattered: the unresolvable case answers no.
 
-    Asserted against the RULE and not through the console, because the console no
-    longer asks: the verdict is decided at the producer and travels with the record.
+    `_dispatch_tool_call` returns None as the tool when the registry does not know
+    the name, so this is the value that really arrives, not a hypothetical.
     """
-
-    def explode() -> dict[str, Any]:
-        raise RuntimeError("the profile could not be loaded")
-
-    monkeypatch.setattr(core_tools, "get_tools", explode)
-
-    assert core_tools.log_trust_for_tool_result("get_profile") is False
+    assert core_tools.log_trust_for_resolved_tool(None) is False
 
 
 @pytest.mark.parametrize(
@@ -768,44 +764,159 @@ def _mentions_rule(path: Path, rule: str) -> bool:
     return False
 
 
-def _called_names(path: Path) -> set[str]:
-    """Return every function name CALLED in a module, read from its AST.
+def _real_local_tool(result: dict[str, Any]) -> core_tools.Tool:
+    """Build a REAL in-tree Tool, not a double, returning *result*.
 
-    Not a text scan. The first version of this guard compared source strings and had
-    to strip comments first, which is how it went wrong twice in one review: the
-    stripper only handled whole-line comments, so a trailing one survived and could
-    satisfy the guard's positive assertions on its own -- `trusted = ...  # replaced
-    log_trust_for_tool_result` passed. That is the D19 shape this task's own
-    patterns_to_follow names, reproduced inside the guard meant to prevent it.
+    Doubles cannot stand in here any more and that is the point. The rule now asks
+    two positive questions -- is the marker True, and is the class defined under
+    this package's own tools -- and a MagicMock answers neither honestly: its
+    marker is whatever the test supplied and its __module__ is unittest.mock. Review
+    measured what that cost: with every double supplying the marker, flipping
+    RemoteMcpTool's real opt-out to True left the entire suite green. So these tests
+    subclass a real in-tree tool, which carries the real class attributes and the
+    real provenance.
     """
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if isinstance(func, ast.Name):
-            names.add(func.id)
-        elif isinstance(func, ast.Attribute):
-            names.add(func.attr)
-    return names
+
+    class _Local(GetProfile):
+        async def __call__(self, deps: Any, **kwargs: Any) -> dict[str, Any]:
+            return dict(result)
+
+    # Defined in a test module, so give it the provenance its base has -- the thing
+    # under test is the RULE, and a class defined here would otherwise be refused on
+    # a technicality that says nothing about whether a local tool is trusted.
+    _Local.__module__ = GetProfile.__module__
+    return _Local()
 
 
-def test_the_rule_answers_no_for_a_space_tool_and_yes_for_one_this_app_registered(monkeypatch: Any) -> None:
+def _real_remote_tool(result: dict[str, Any]) -> core_tools.RemoteMcpTool:
+    """Build a REAL RemoteMcpTool, carrying its own class-level opt-out."""
+
+    class _Remote(core_tools.RemoteMcpTool):
+        def __init__(self) -> None:
+            self.name = "space_tool"
+            self.description = "a third party's tool"
+            self.parameters_schema = {"type": "object", "properties": {}}
+
+        async def __call__(self, deps: Any, **kwargs: Any) -> dict[str, Any]:
+            return dict(result)
+
+    _Remote.__module__ = core_tools.RemoteMcpTool.__module__
+    return _Remote()
+
+
+def test_the_real_classes_carry_the_markers_the_rule_reads() -> None:
+    """The class attributes themselves, because the doubles stopped covering them.
+
+    Review flipped RemoteMcpTool.log_keys_are_ours to True -- deleting the single
+    attribute that stops a third-party Space's envelope keys being named at INFO --
+    and the whole suite stayed green, because every double supplied its own marker.
+    A test that reads the value it just wrote proves nothing about the class.
+    """
+    assert core_tools.RemoteMcpTool.log_keys_are_ours is False
+    assert core_tools.Tool.log_keys_are_ours is True
+    assert GetProfile.log_keys_are_ours is True
+
+    assert core_tools.log_trust_for_resolved_tool(_real_remote_tool({})) is False
+    assert core_tools.log_trust_for_resolved_tool(_real_local_tool({})) is True
+
+
+def test_a_tool_loaded_from_the_external_directory_is_refused_on_provenance_alone() -> None:
+    """The other leg of the rule, isolated so it is revert-proofed by itself.
+
+    `TOOLS_DIRECTORY` loads external tool FILES and their classes enter the registry
+    as ordinary Tools under `_EXTERNAL_TOOL_MODULE_NAMESPACE`. They inherit the
+    base's marker of True, so the MARKER cannot refuse them -- provenance is the only
+    thing that does, and until this test nothing checked it: widening
+    `_OUR_TOOLS_NAMESPACE` from "reachy_language_tutor.tools." to
+    "reachy_language_tutor." -- exactly the error core_tools warns against, since
+    _external_tools sits under the package too -- undid the security fix and failed
+    no test at all.
+
+    The marker is left at its inherited True deliberately. If this class opted out
+    the test would pass on the marker and say nothing about provenance, which is the
+    mistake the sibling test above made in the other direction.
+    """
+
+    class DroppedInByAnOperator(GetProfile):
+        """A file-backed tool that proxies somebody else's service."""
+
+    assert DroppedInByAnOperator.log_keys_are_ours is True, "the marker must not be what refuses this"
+    DroppedInByAnOperator.__module__ = f"{core_tools._EXTERNAL_TOOL_MODULE_NAMESPACE}.dropped_in"
+
+    assert core_tools.log_trust_for_resolved_tool(DroppedInByAnOperator()) is False
+
+
+def test_a_tool_that_wraps_somebody_elses_service_must_opt_in_to_being_logged() -> None:
+    """Trust is a marker on the class, so a NEW kind of remote tool is not trusted.
+
+    The subclass test this replaced -- `not isinstance(tool, RemoteMcpTool)` -- was
+    trusted-by-default for anything that was not literally that class. The security
+    review of D36 showed that is reachable today rather than after some future
+    refactor: TOOLS_DIRECTORY loads external tool FILES whose classes enter the
+    registry as plain Tools, so a file-backed proxy returning a third party's payload
+    verbatim would have had its envelope keys printed.
+
+    `is True` rather than a truthiness test, so a subclass that sets the marker to
+    something odd is refused rather than accepted.
+    """
+
+    class WrapsSomeoneElse(core_tools.Tool):
+        """A plain Tool that is not a RemoteMcpTool and is not ours to trust."""
+
+        log_keys_are_ours = False
+        name = "proxy"
+        description = "returns a third party's payload"
+        parameters_schema: dict[str, Any] = {"type": "object", "properties": {}}
+
+        async def __call__(self, deps: Any, **kwargs: Any) -> dict[str, Any]:
+            return {}
+
+    class ForgotToSayAnything(WrapsSomeoneElse):
+        """Inherits the refusal rather than silently regaining trust."""
+
+    class SaysSomethingOdd(core_tools.Tool):
+        """A marker that is truthy but not True is not permission."""
+
+        log_keys_are_ours = "yes"  # type: ignore[assignment]
+        name = "odd"
+        description = "sets the marker to a truthy non-bool"
+        parameters_schema: dict[str, Any] = {"type": "object", "properties": {}}
+
+        async def __call__(self, deps: Any, **kwargs: Any) -> dict[str, Any]:
+            return {}
+
+    # Stamped IN-TREE on purpose, so the provenance leg cannot be what refuses them
+    # and only the marker is under test. Without this the test passed for the wrong
+    # reason: all three are defined in this module, so provenance refused them and
+    # deleting the marker condition entirely would have left it green.
+    for cls in (WrapsSomeoneElse, ForgotToSayAnything, SaysSomethingOdd):
+        cls.__module__ = GetProfile.__module__
+
+    assert core_tools.log_trust_for_resolved_tool(WrapsSomeoneElse()) is False
+    assert core_tools.log_trust_for_resolved_tool(ForgotToSayAnything()) is False
+    assert core_tools.log_trust_for_resolved_tool(SaysSomethingOdd()) is False
+
+
+def test_the_rule_answers_no_for_a_space_tool_and_yes_for_one_this_app_registered() -> None:
     """The rule itself, both ways, since everything else now trusts its verdict.
 
     A RemoteMcpTool returns dict(result) from a third-party Space, so its envelope
     keys belong to whoever wrote it. A locally-registered tool composes its own
     return dict here, so its keys are this application's schema.
-    """
-    remote = MagicMock(spec=core_tools.RemoteMcpTool)
-    local = MagicMock(spec=core_tools.Tool)
-    monkeypatch.setattr(core_tools, "get_tools", lambda: {"space_tool": remote, "get_profile": local})
 
-    assert core_tools.log_trust_for_tool_result("space_tool") is False
-    assert core_tools.log_trust_for_tool_result("get_profile") is True
-    assert core_tools.log_trust_for_tool_result("never_registered") is False
-    for not_a_name in (None, "", 5, b"get_profile", True, ["get_profile"]):
-        assert core_tools.log_trust_for_tool_result(not_a_name) is False, not_a_name
+    It takes the resolved OBJECT since D36 -- no registry, no name, nothing to be
+    rebound between asking and answering.
+    """
+    assert core_tools.log_trust_for_resolved_tool(_real_remote_tool({})) is False
+    assert core_tools.log_trust_for_resolved_tool(_real_local_tool({})) is True
+    # A double is refused too, and that is correct rather than inconvenient: its
+    # provenance is unittest.mock and its marker is whatever the test supplied, so
+    # it can answer neither question the rule asks.
+    assert core_tools.log_trust_for_resolved_tool(MagicMock(spec=core_tools.Tool, log_keys_are_ours=True)) is False
+    # Not a Tool at all, which is what a future caller passing the wrong thing looks
+    # like. Anything that is not recognisably ours is not ours.
+    for not_a_tool in (None, "get_profile", 5, object()):
+        assert core_tools.log_trust_for_resolved_tool(not_a_tool) is False, not_a_tool
 
 
 @pytest.mark.parametrize("coercible", ["yes", 1, "true", 0])
@@ -833,44 +944,143 @@ def test_the_verdict_field_refuses_a_value_that_merely_looks_true(coercible: Any
 
 
 @pytest.mark.asyncio
-async def test_the_manager_stamps_the_verdict_from_the_registry_at_dispatch(monkeypatch: Any) -> None:
+async def test_the_manager_stamps_the_verdict_from_the_tool_that_actually_ran(monkeypatch: Any) -> None:
     """The one expression the whole design rests on, pinned behaviourally.
 
     Everything downstream -- the handler, the record, the console -- carries this
-    verdict rather than deriving it, which is the point. So the single place it IS
-    derived is the single point of failure, and the third security pass of D34 found
-    nothing testing it: the drift guard inspects dict LITERALS carrying a
-    `kind: "tool_result"` key, and the producer's verdict is a keyword argument to
-    `BackgroundTool(...)`, which that sweep never looks at. Replacing it with a bare
-    `True` left the entire suite green -- the original D34 defect restored at the
-    producer, granting blanket permission to every tool including a remote one.
+    verdict rather than deriving it, so the single place it IS derived is the single
+    point of failure. Nothing tested it until D34's third security pass: replacing
+    it with a bare `True` left the entire suite green, which is the original defect
+    restored at the producer.
+
+    D36 moved WHERE it is derived, and this test moved with it. It used to assert on
+    `start_tool`'s synchronous return, because the verdict was taken from the tool
+    NAME at dispatch. It is now taken from the tool OBJECT that ran, in `_run_tool`,
+    so the assertion has to wait for the tool to finish -- and the waiting is the
+    point rather than an inconvenience: a verdict that exists before the tool has
+    been resolved is precisely the one that could be about a different tool.
+
+    THE RACE THIS CLOSES, exercised rather than described: the registry is rebound
+    between dispatch and execution, which `initialize_tools(force=True)` can do
+    off-loop. The verdict must follow the tool that ran, not the one the name meant
+    when the work was queued.
 
     Both directions, because a guard that only checks the safe answer would pass an
     implementation that always says no and quietly costs an operator the dispatch
     signal they read.
     """
-    remote = MagicMock(spec=core_tools.RemoteMcpTool)
-    local = MagicMock(spec=core_tools.Tool)
-    monkeypatch.setattr(core_tools, "get_tools", lambda: {"space_tool": remote, "get_profile": local})
+    # AsyncMock so the tool genuinely RUNS and _run_tool takes its success branch --
+    # a MagicMock is not awaitable, and a version of this test using one exercised
+    # the error path while appearing to test the happy one.
+    remote = _real_remote_tool({"envelope": "from a Space"})
+    local = _real_local_tool({"display_name": "..."})
 
+    async def _run(name: str, registry_at_run: dict[str, Any]) -> bool:
+        monkeypatch.setattr(core_tools, "get_tools", lambda: registry_at_run)
+        manager = BackgroundToolManager()
+        tool = await manager.start_tool(
+            call_id=f"call-{name}-{len(registry_at_run)}",
+            tool_call_routine=ToolCallRoutine(
+                tool_name=name,
+                args_json_str="{}",
+                deps=ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()),
+            ),
+            is_idle_tool_call=False,
+        )
+        notification = await asyncio.wait_for(manager._notification_queue.get(), timeout=5)
+        assert notification.log_keys_trusted == tool.log_keys_trusted, "the notification lost the verdict"
+        return notification.log_keys_trusted
+
+    assert await _run("space_tool", {"space_tool": remote}) is False
+    assert await _run("get_profile", {"get_profile": local}) is True
+    assert await _run("never_registered", {}) is False, "an unresolvable name is not permission"
+
+
+@pytest.mark.asyncio
+async def test_a_name_rebound_to_a_remote_tool_after_dispatch_is_not_trusted(
+    monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """D36 itself: the verdict follows the tool that RAN, not the name's old meaning.
+
+    Reproduced by the specialist security review of D34 and left open there. A name
+    bound to a local Tool when the work was queued, rebound to a RemoteMcpTool before
+    it executed, produced a verdict of True over a third-party Space's envelope --
+    and the Space's keys, which can be a learner's name, rendered at INFO.
+
+    `initialize_tools(force=True)` is reachable off-loop through `asyncio.to_thread`
+    from the tool-space and profile routes, so the window is wall-clock rather than
+    cooperative. Here it is simulated deterministically by swapping the registry the
+    dispatcher reads, which is what that call does.
+    """
+    local = _real_local_tool({"display_name": "..."})
+    remote = _real_remote_tool({LEARNER_NAME: "es-3"})
+
+    # Bound LOCALLY when the work is QUEUED. start_tool returns as soon as the task
+    # is created, so nothing has resolved the callable yet at this point.
+    monkeypatch.setattr(core_tools, "get_tools", lambda: {"drifting": local})
     manager = BackgroundToolManager()
-    try:
-        for name, expected in (("space_tool", False), ("get_profile", True), ("never_registered", False)):
-            tool = await manager.start_tool(
-                call_id=f"call-{name}",
-                tool_call_routine=ToolCallRoutine(
-                    tool_name=name,
-                    args_json_str="{}",
-                    deps=ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()),
-                ),
-                is_idle_tool_call=False,
-            )
-            assert tool.log_keys_trusted is expected, f"{name} was stamped {tool.log_keys_trusted}"
-            assert tool.get_notification().log_keys_trusted is expected, f"{name} lost its verdict in transit"
-    finally:
-        for tool in list(manager._tools.values()):
-            if tool._task is not None:
-                tool._task.cancel()
+    routine = ToolCallRoutine(
+        tool_name="drifting",
+        args_json_str="{}",
+        deps=ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()),
+    )
+    await manager.start_tool(call_id="drift", tool_call_routine=routine, is_idle_tool_call=False)
+
+    # ...and REMOTE before the task gets to run. This is the window: the rebind lands
+    # AFTER dispatch and BEFORE the dispatcher resolves the callable, which is what
+    # initialize_tools(force=True) does off-loop through asyncio.to_thread.
+    monkeypatch.setattr(core_tools, "get_tools", lambda: {"drifting": remote})
+
+    notification = await asyncio.wait_for(manager._notification_queue.get(), timeout=5)
+
+    assert notification.log_keys_trusted is False, (
+        "the verdict followed the name's meaning at dispatch, not the tool that ran"
+    )
+
+    # ...and then the whole way to the log line, because a verdict nobody renders
+    # protects nobody. Criterion 3 asks for the RENDERED line, so the notification
+    # goes through the real handler, which builds the real console record, which
+    # goes through the real log_handler_message.
+    handler = _handler(monkeypatch, local_tools=())
+    handler._in_flight_tool_calls = {notification.id}
+    with caplog.at_level(logging.DEBUG):
+        await handler._handle_tool_result(notification)
+        queued = handler.output_queue.get_nowait()
+        _log_one(queued.args[0], caplog)
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert LEARNER_NAME not in logged, f"a learner's name from a Space reached the log: {logged}"
+    assert "1 keys" in logged, f"the shape should still be described: {logged}"
+
+
+@pytest.mark.asyncio
+async def test_a_name_rebound_to_a_local_tool_after_dispatch_is_trusted(monkeypatch: Any) -> None:
+    """The rebind in the SAFE direction, so the fix is not "always answer no".
+
+    The coverage target asks for the window exercised BOTH ways, and only one of
+    them was: an implementation that ignored the resolved tool and returned False
+    would have passed every rebind test. Here the name is remote when the work is
+    queued and local by the time it runs, and the verdict must follow the tool that
+    ran -- to yes, which is the answer an operator's dispatch signal depends on.
+    """
+    remote = _real_remote_tool({"envelope": "from a Space"})
+    local = _real_local_tool({"display_name": "..."})
+
+    monkeypatch.setattr(core_tools, "get_tools", lambda: {"drifting": remote})
+    manager = BackgroundToolManager()
+    routine = ToolCallRoutine(
+        tool_name="drifting",
+        args_json_str="{}",
+        deps=ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()),
+    )
+    await manager.start_tool(call_id="drift-safe", tool_call_routine=routine, is_idle_tool_call=False)
+    monkeypatch.setattr(core_tools, "get_tools", lambda: {"drifting": local})
+
+    notification = await asyncio.wait_for(manager._notification_queue.get(), timeout=5)
+
+    assert notification.log_keys_trusted is True, (
+        "the verdict stayed with the name's meaning at dispatch instead of the tool that ran"
+    )
 
 
 def _call_name(node: ast.Call) -> str | None:
@@ -891,7 +1101,7 @@ def _names_bound_from(module: Path, rule: str) -> set[str]:
 
     Two provenances are legitimate and a third is not:
 
-    * `x = log_trust_for_tool_result(...)` -- computed here from the rule;
+    * `x = log_trust_for_resolved_tool(...)` -- computed here from the rule;
     * `x = something.log_keys_trusted` -- carried from a notification that took the
       answer at dispatch, which is where D34 ended up after the security review
       showed that computing it later asks a registry that may have been rebound;
@@ -916,7 +1126,7 @@ def test_exactly_one_place_in_the_tree_decides_whether_a_result_s_keys_are_logge
     """Criterion 4, read off the AST: the two sides cannot drift apart again.
 
     They already did once, and that is this defect -- the producer asked
-    `result_keys_are_ours` while the console's fallback asked whether the record's
+    the registry by name while the console's fallback asked whether the record's
     kind was "tool_result". Two spellings of one decision.
 
     Criterion 4 asks that both sides "derive trust_keys from one shared function".
@@ -931,26 +1141,80 @@ def test_exactly_one_place_in_the_tree_decides_whether_a_result_s_keys_are_logge
     module reaching the rule would reintroduce the second spelling unseen, and the
     narrow version of this guard was not looking.
     """
-    RULE = "log_trust_for_tool_result"
+    RULE = "log_trust_for_resolved_tool"
     root = _source_root()
     modules = sorted(root.rglob("*.py"))
     assert len(modules) > 10, "the source sweep found almost nothing, so this guard proves nothing"
 
     deciders = {path for path in modules if _mentions_rule(path, RULE)}
+    # `_mentions_rule` reads reaches, not definitions, so core_tools -- which defines
+    # the rule and never calls it -- is correctly absent here. Its definition is
+    # asserted separately below rather than by widening the sweep.
     assert deciders == {root / "tools" / "background_tool_manager.py"}, (
-        "the verdict must be COMPUTED in exactly one place, where the tool is resolved for dispatch; "
+        "the verdict must be APPLIED in exactly one place, _run_tool, from the tool object that ran; "
         f"found: {sorted(str(path.relative_to(root)) for path in deciders)}"
     )
-
-    underlying = {path for path in modules if _mentions_rule(path, "result_keys_are_ours")}
-    assert underlying == {root / "tools" / "core_tools.py"}, (
-        "result_keys_are_ours must be reached only by the log_trust_for_tool_result wrapper beside it; "
-        f"found: {sorted(str(path.relative_to(root)) for path in underlying)}"
-    )
-
-    assert "def log_trust_for_tool_result" in (root / "tools" / "core_tools.py").read_text(encoding="utf-8"), (
+    assert f"def {RULE}" in (root / "tools" / "core_tools.py").read_text(encoding="utf-8"), (
         "the rule has moved out of core_tools, so this guard is looking in the wrong place"
     )
+
+    # ...and the ARGUMENT is the tool the routine reported, not another lookup.
+    # Without this the guard's own message -- "from the tool object that ran" -- is
+    # not what it enforces: `log_trust_for_resolved_tool(get_tools().get(name))`
+    # satisfied every other assertion here while reintroducing the two-reads shape
+    # D36 removed, merely with a narrower window. Review found that by mutation.
+    manager_src = (root / "tools" / "background_tool_manager.py").read_text(encoding="utf-8")
+    manager_ast = ast.parse(manager_src)
+    awaited_names = {
+        target.id
+        for node in ast.walk(manager_ast)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Await)
+        for target in ast.walk(node.targets[0])
+        if isinstance(target, ast.Name)
+    }
+    verdict_args = [
+        node.args[0]
+        for node in ast.walk(manager_ast)
+        if isinstance(node, ast.Call) and _call_name(node) == RULE and node.args
+    ]
+    assert verdict_args, f"nothing in background_tool_manager calls {RULE}"
+    for arg in verdict_args:
+        assert isinstance(arg, ast.Name), (
+            f"{RULE} must be given the tool the routine reported, not an expression resolved here"
+        )
+        assert arg.id in awaited_names, (
+            f"{RULE} is given '{arg.id}', which is not bound from awaiting the routine -- "
+            "the verdict must be about the tool that ran, not another registry read"
+        )
+
+    # The predicate itself lives in exactly one function. Before D36 that was true by
+    # accident -- one caller, one isinstance. Now that the rule takes an object and
+    # could be re-expressed anywhere, it is asserted.
+    remote_checks = {
+        path
+        for path in modules
+        if "RemoteMcpTool)" in path.read_text(encoding="utf-8") and path.name != "core_tools.py"
+    }
+    assert not remote_checks, (
+        "the RemoteMcpTool test belongs only in core_tools' rule; "
+        f"found: {sorted(str(path.relative_to(root)) for path in remote_checks)}"
+    )
+
+    # The NAME-based rules are gone, not merely unused. `result_keys_are_ours` and
+    # `log_trust_for_tool_result` both answered "may these keys be logged?" from a
+    # tool name, which is the second read of the registry D36 exists to remove.
+    # Leaving either in place, callable and documented, is how the name lookup comes
+    # back: the next author reaches for the one that takes what they have.
+    for retired in ("result_keys_are_ours", "log_trust_for_tool_result"):
+        survivors = {
+            path
+            for path in modules
+            if _mentions_rule(path, retired) or f"def {retired}" in path.read_text(encoding="utf-8")
+        }
+        assert not survivors, (
+            f"{retired} takes a tool NAME and was retired by D36; "
+            f"found: {sorted(str(path.relative_to(root)) for path in survivors)}"
+        )
 
     # THE PRODUCERS, not a fixed list of modules. An earlier version of this guard
     # asserted the decider set was exactly {huggingface_realtime.py}, and the
@@ -999,13 +1263,9 @@ def test_exactly_one_place_in_the_tree_decides_whether_a_result_s_keys_are_logge
                     literals.append(f"{where} uses a name not bound from {RULE}")
             else:
                 literals.append(f"{where} computes its verdict some other way")
-    assert not literals, "a tool_result record must take its verdict from log_trust_for_tool_result: " + "; ".join(
+    assert not literals, "a tool_result record must take its verdict from log_trust_for_resolved_tool: " + "; ".join(
         literals
     )
-
-    console = _called_names(root / "console.py")
-    assert "log_trust_for_tool_result" not in console, "console.py decides this again instead of reading the verdict"
-    assert "result_keys_are_ours" not in console, "console.py asks the rule a second way"
 
 
 # --- Sink 2, transcript: the D9 decision --------------------------------------------

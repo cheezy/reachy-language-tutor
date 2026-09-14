@@ -27,6 +27,7 @@ def _make_routine(
     result: dict[str, Any] | None = None,
     error: Exception | None = None,
     delay: float = 0.0,
+    resolved_tool: Any | None = None,
 ) -> ToolCallRoutine:
     """Create a mock ToolCallRoutine that returns *result* or raises *error*.
 
@@ -36,22 +37,29 @@ def _make_routine(
     Mirrors the contract of ``_dispatch_tool_call`` in core_tools: exceptions
     (including ``CancelledError``) are caught and returned as
     ``{"error": "..."}`` dicts so that ``_run_tool`` never sees a raw raise.
+
+    Since D36 that contract is a PAIR -- ``(result, resolved_tool)``. The second
+    half is the tool object that actually ran, and ``_run_tool`` takes the
+    log-trust verdict from it rather than from the tool's name, because those
+    were two reads of a registry that can be rebound in between. *resolved_tool*
+    defaults to None, which is the not-registered case and the fail-closed
+    answer; pass a Tool double when a test cares about the verdict.
     """
     routine = MagicMock(spec=ToolCallRoutine)
     routine.tool_name = tool_name
     routine.args_json_str = "{}"
 
-    async def _call(manager: BackgroundToolManager) -> dict[str, Any]:
+    async def _call(manager: BackgroundToolManager) -> tuple[dict[str, Any], Any]:
         try:
             if delay:
                 await asyncio.sleep(delay)
             if error is not None:
                 raise error
-            return result or {"ok": True}
+            return result or {"ok": True}, resolved_tool
         except asyncio.CancelledError:
-            return {"error": "Tool cancelled"}
+            return {"error": "Tool cancelled"}, resolved_tool
         except Exception as e:
-            return {"error": f"{type(e).__name__}: {e}"}
+            return {"error": f"{type(e).__name__}: {e}"}, resolved_tool
 
     routine.__call__ = _call  # type: ignore[method-assign]
     routine.side_effect = _call
