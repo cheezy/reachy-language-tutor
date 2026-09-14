@@ -55,6 +55,7 @@ from reachy_language_tutor import tools, config
 # built a second Tool base class, and _load_enabled_tools filters with issubclass, so it
 # matched nothing and the loader blamed the profile. This file used to carry a lookup helper
 # that fetched the module per call to dodge exactly that. See tools_module_graph.py.
+from reachy_language_tutor.learners import store
 from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.profile_store import read_profile_from_directory
 from reachy_language_tutor.lesson_session import LessonSessionHolder
@@ -533,6 +534,59 @@ def test_the_prompt_opens_a_lesson_in_english_before_switching() -> None:
     # no opening English sentence for the switch to come after -- and "switch when they
     # name a language" would carry that news in a language they cannot read yet.
     assert "only when a lesson actually started — news that none did stays in English" in text
+
+
+def test_scope_requires_a_lookup_before_naming_which_languages_are_taught() -> None:
+    """D35: asked what it could teach, the tutor answered from nothing and called no tool.
+
+    Observed live, in both runs of tests/language_availability_session.py: *"I can teach
+    Spanish, French, German, Italian, and Portuguese"*, with no tool call behind it.
+    Three of those five are a syllabus with nothing written in them. That is an invented
+    claim about the robot's own abilities, made to a child, and it is the first thing a
+    new learner hears.
+
+    It could not have been answered from evidence when it was observed, and that is the
+    part worth remembering: get_progress and start_lesson both require a language before
+    they will say anything about the catalog, and get_profile returned only what the
+    LEARNER had practised -- empty, for somebody new. So D35 gave get_profile the
+    catalog split and pointed this instruction at it.
+
+    NO LANGUAGE IS NAMED HERE, and none may be added to the profile: the task's own
+    first pitfall forbids writing a list into it, because it would go stale the day a
+    conversion lands. What is pinned is that the answer must come from a lookup, and
+    that the field named is the one the tools actually return.
+
+    The second half of this test is an ALLOW-LIST, and the first draft of it was not.
+    That draft listed three spellings -- "French, German", "Italian and Spanish",
+    "Spanish, French" -- and every near-miss walked through it: "Spanish and Italian",
+    "Italian, Spanish", "German, Italian, Portuguese". CLAUDE.md records that exact
+    shape failing four times (D11 twice, D19, D20), and review caught it here on the
+    fifth. The permitted state is that no catalog language NAME appears in the prompt,
+    in any casing, and the set to check comes from the seeded catalog rather than from
+    a literal -- so a sixth language is covered the day it is added, with nothing to
+    remember.
+
+    Two limits, stated because an overclaimed guard is worse than a narrow one. The
+    check is on names, folded to lower case; language CODES are not reachable by a
+    substring test at all, since "es" occurs inside "languages", and no amount of care
+    fixes that. And a paraphrase that names a language without spelling it is beyond
+    any string check -- what stops that is the live session, not this test.
+
+    Each substring sits inside one physical line of profile.md.
+    """
+    text = _prompt()
+
+    assert "Which languages you teach is a lookup too, never something you remember." in text
+    assert "can teach, call get_profile first and answer from it: name the languages in" in text
+    assert "languages_with_material and no others, however sure you feel about a language missing" in text
+    assert "written in them — you may say they are coming, and you may not offer to teach one." in text
+    assert "both lists come back empty, say you cannot reach your records just now and name no" in text
+
+    seeded = [name for _code, name in store.SEED_LANGUAGES]
+    assert seeded, "the seeded catalog is empty, so this guard would check nothing"
+    folded = text.lower()
+    for name in seeded:
+        assert name.lower() not in folded, f"a language name was written into the profile: {name!r}"
 
 
 def test_the_scope_section_still_forbids_inventing_lesson_material() -> None:

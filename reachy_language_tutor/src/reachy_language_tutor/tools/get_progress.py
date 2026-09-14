@@ -1,7 +1,7 @@
 import logging
 from typing import Any
 
-from reachy_language_tutor.learners import get_progress, get_language_catalog
+from reachy_language_tutor.learners import get_progress, get_language_catalog, split_catalog_by_material
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 from reachy_language_tutor.tools._language_choice import resolve_language
 
@@ -131,11 +131,12 @@ class GetProgress(Tool):
             # they just asked for was refused, so the list is the whole answer they
             # get. Both keys are always present, so the model cannot read an absent
             # key as "none of those".
+            with_material, without_material = split_catalog_by_material(catalog)
             return {
                 "error": "I do not teach that language.",
                 "languages_taught": [entry.name for entry in catalog],
-                "languages_with_material": [entry.name for entry in catalog if entry.has_material],
-                "languages_without_material_yet": [entry.name for entry in catalog if not entry.has_material],
+                "languages_with_material": with_material,
+                "languages_without_material_yet": without_material,
             }
 
         progress = get_progress(learner_id, matched.code, instance_path=deps.instance_path)

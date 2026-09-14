@@ -2964,6 +2964,7 @@ def test_package_exports_only_the_interface() -> None:
         "get_faceprint",
         "save_faceprint",
         "delete_faceprint",
+        "split_catalog_by_material",
     }
     for leaked in ("connect", "NEXT_LESSON_SQL", "ensure_learner_database", "SEED_LESSONS"):
         assert leaked not in learners.__all__

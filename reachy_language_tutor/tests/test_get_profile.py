@@ -90,7 +90,14 @@ async def test_a_language_only_attempted_still_counts_as_practised(instance: Pat
 
 @pytest.mark.asyncio
 async def test_a_learner_with_no_history_gets_an_empty_language_list(instance: Path) -> None:
-    """A brand-new learner has a name but nothing practised; that is not an error."""
+    """A brand-new learner has a name but nothing practised; that is not an error.
+
+    `languages` is what THEY have practised and is empty here. The two catalog lists
+    are what the ROBOT can teach and are not: a newcomer is precisely the person who
+    asks "what can you teach me?", and D35 is the defect where the tutor answered that
+    from nothing. Whole-dict equality on purpose, so a field added to this result has
+    to be looked at rather than slipping past.
+    """
     connection = store.connect(instance)
     with connection:
         connection.execute(
@@ -100,7 +107,96 @@ async def test_a_learner_with_no_history_gets_an_empty_language_list(instance: P
 
     result = await _call(current_learner_id="newcomer", instance_path=instance)
 
-    assert result == {"display_name": "New", "languages": []}
+    assert result == {
+        "display_name": "New",
+        "languages": [],
+        "languages_with_material": ["Italian", "Spanish"],
+        "languages_without_material_yet": ["French", "German", "Portuguese"],
+    }
+
+
+def test_the_description_points_the_model_at_the_field_rather_than_at_its_memory() -> None:
+    """The result is only half the fix; the model has to be told to use it.
+
+    D35's second observation is why: after correctly refusing French, one run offered
+    "Spanish, German, Italian, or Portuguese" as alternatives while the result it was
+    holding said languages_with_material = ["Italian", "Spanish"]. The field was there
+    and the model talked past it. So the description names the field, says "and no
+    others", and says what an empty list means -- rather than leaving the model to
+    infer any of it.
+
+    No language is named here, and none may be: a list in the description is the same
+    staleness the task's first pitfall forbids in the profile.
+    """
+    description = GetProfile.description
+
+    assert "languages_with_material" in description
+    assert "name those and no others" in description
+    assert "languages_without_material_yet" in description
+    assert "never offer to teach one" in description
+    assert "If both lists are empty" in description
+    for name in ("Italian", "Spanish", "French", "German", "Portuguese"):
+        assert name not in description, f"a language name was written into the description: {name!r}"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_catalog_names_no_language_rather_than_claiming_none(
+    instance: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empty means unreadable OR nothing written, and a caller must not tell them apart.
+
+    get_language_catalog's contract says so. This tool cannot refuse -- the learner's
+    name and history are still true and still worth returning -- so the empty case is
+    handled where it is consumed: the description tells the model that two empty lists
+    mean name no language at all and say the records are unreachable.
+    """
+    monkeypatch.setattr(module, "get_language_catalog", lambda *a, **k: ())
+
+    result = await _call(current_learner_id=SEEDED_LEARNER, instance_path=instance)
+
+    assert "error" not in result, "an unreadable catalog must not lose the learner their profile"
+    assert result["languages_with_material"] == []
+    assert result["languages_without_material_yet"] == []
+    assert "If both lists are empty" in GetProfile.description
+
+
+@pytest.mark.asyncio
+async def test_every_error_still_says_which_languages_the_robot_teaches(instance: Path) -> None:
+    """Not knowing WHO you are is not the same as not knowing WHAT you teach.
+
+    Review of D35 caught the first version coupling the two: the catalog read sat
+    after both profile guards, so an unbound learner or a missing profile row left the
+    tutor with no grounded answer to "what can you teach me?" -- and that is exactly
+    the moment it invented five languages in the session that produced this defect.
+    The capability answer is the same for everyone and does not depend on a profile,
+    so every return carries it.
+
+    All three error paths, because the repository's most common defect is fixing one
+    member of a set -- and the first version of this test said "all three" while
+    exercising two, so review caught the claim before the sibling could rot. The
+    unreadable-store branch is the third, and it is the one where the catalog cannot
+    be read either, so it is the only one that legitimately answers with two empty
+    lists rather than the real ones.
+    """
+    unbound = await _call(current_learner_id=None, instance_path=instance)
+    assert "error" in unbound
+    assert unbound["languages_with_material"] == ["Italian", "Spanish"]
+
+    connection = store.connect(instance)
+    with connection:
+        connection.execute("DELETE FROM learners WHERE id = ?", (SEEDED_LEARNER,))
+    connection.close()
+    no_row = await _call(current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    assert "error" in no_row
+    assert no_row["languages_with_material"] == ["Italian", "Spanish"]
+
+    # The third: a store that cannot be read at all. Both keys must still be PRESENT,
+    # so the model reads "I can name nothing" rather than an absent key it can fill
+    # in from memory -- which is the whole defect, one state along.
+    unreadable = await _call(current_learner_id=SEEDED_LEARNER, instance_path=Path("/nonexistent-instance"))
+    assert "error" in unreadable
+    assert unreadable["languages_with_material"] == []
+    assert unreadable["languages_without_material_yet"] == []
 
 
 # --- The identity boundary -------------------------------------------------------------

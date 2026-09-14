@@ -18,7 +18,12 @@ somebody thought of.
 import logging
 from typing import Any
 
-from reachy_language_tutor.learners import get_lesson_content, store_is_available, get_language_catalog
+from reachy_language_tutor.learners import (
+    get_lesson_content,
+    store_is_available,
+    get_language_catalog,
+    split_catalog_by_material,
+)
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 
@@ -219,6 +224,10 @@ class GetLessonContent(Tool):
             # make an exhaustive claim over nothing -- the round-two defect reproduced
             # on the degraded path.
             catalog = get_language_catalog(instance_path=deps.instance_path)
+            # Unpacked rather than indexed. The two halves of this pair are exact
+            # opposites, so `[1]` here would hand the model the languages it CANNOT
+            # teach as the ones it can -- a one-character way to reinstate the defect.
+            with_material, _without_material = split_catalog_by_material(catalog)
             return {
                 "have_content": False,
                 "reason": "no_material",
@@ -231,7 +240,7 @@ class GetLessonContent(Tool):
                     "I do not have this lesson's dialogue, notes or drills written down, "
                     "so there is nothing written here for me to teach."
                 ),
-                "languages_with_material": [entry.name for entry in catalog if entry.has_material],
+                "languages_with_material": with_material,
                 "language_code": content.lesson.language_code,
                 "lesson": lesson,
             }

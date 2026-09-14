@@ -10,6 +10,7 @@ that query text lives only in store.py, and it reads comments and docstrings too
 
 from __future__ import annotations
 from dataclasses import dataclass
+from collections.abc import Sequence
 
 
 # The only outcomes an attempt may carry. Mirrored by a constraint in schema.sql;
@@ -220,6 +221,34 @@ class CatalogLanguage:
     code: str
     name: str
     has_material: bool
+
+
+def split_catalog_by_material(
+    catalog: Sequence[CatalogLanguage],
+) -> tuple[list[str], list[str]]:
+    """Split a catalog into the language NAMES that can be taught and those that cannot.
+
+    One definition, because there were six. Every tool that tells the model which
+    languages are ready wrote `[entry.name for entry in catalog if entry.has_material]`
+    out by hand -- get_progress, start_lesson twice, get_lesson_content, and now
+    get_profile -- and the review of D33 named that as the drift surface it is: they
+    agree today by copy, so changing what "ready" means reaches one of them and leaves
+    the others stating the opposite about the same language. The field names the tools
+    return are the two halves of this pair, so the names travel with the derivation.
+
+    Order is the catalog's own, which `get_language_catalog` sorts by name in SQL, so
+    what the tutor reads aloud is stable rather than whatever the rows happened to be.
+
+    An empty catalog yields two empty lists, and that is NOT a claim that no language
+    has material: `get_language_catalog` returns empty both for a store it could not
+    read and for a catalog with no rows, and its contract is that a caller must treat
+    those the same, because neither supports telling a person which languages are
+    taught. Splitting nothing cannot invent that distinction -- each caller still has
+    to decide what to do with an empty catalog, and the callers that can refuse, do.
+    """
+    with_material = [entry.name for entry in catalog if entry.has_material]
+    without_material = [entry.name for entry in catalog if not entry.has_material]
+    return with_material, without_material
 
 
 @dataclass(frozen=True)

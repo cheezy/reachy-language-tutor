@@ -38,6 +38,7 @@ from reachy_language_tutor.learners.models import (
     PractisedLanguage,
     RecordResultOutcome,
     SaveFaceprintOutcome,
+    split_catalog_by_material,
 )
 
 
@@ -71,5 +72,6 @@ __all__ = [
     "get_progress",
     "record_result",
     "save_faceprint",
+    "split_catalog_by_material",
     "store_is_available",
 ]

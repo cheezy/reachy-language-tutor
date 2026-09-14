@@ -2394,6 +2394,22 @@ def get_language_catalog(*, instance_path: str | Path | None = None) -> tuple[Ca
         # Shape, never a value: two counts, and no language name either -- a catalog
         # is not personal data but this reader follows the same rule as the others.
         language_count = len(catalog)
+        # NOT split_catalog_by_material, deliberately, and the honest reason is not
+        # the first one I wrote down. D35 routed every other site through that helper
+        # and tried this one too; the log guard refused
+        # `len(split_catalog_by_material(catalog)[0])`, because a name interpolated
+        # into a log line must be built from a producer on _SAFE_PRODUCERS. I recorded
+        # that as "the guard forbids routing this site through the helper", and review
+        # showed it is false: binding `with_material, _ = split_catalog_by_material(...)`
+        # and then `len(with_material)` passes unchanged, since the intermediate is not
+        # a permitted log name and so is never inspected.
+        #
+        # Which is exactly why the copy stays. That form does not satisfy the guard,
+        # it LAUNDERS the value past it -- an unchecked intermediate one line above a
+        # log call -- and doing that to save a duplicated comprehension would trade a
+        # real control for tidiness. Widening _SAFE_PRODUCERS instead is the trade
+        # W39 already got wrong: it added `sum`, and review found a working bypass the
+        # same day. The count never leaves this line, and the duplication is cheap.
         with_material_count = len([entry for entry in catalog if entry.has_material])
         logger.info("Catalog read: languages=%d with_material=%d", language_count, with_material_count)
         return catalog

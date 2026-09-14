@@ -1,7 +1,12 @@
 import logging
 from typing import Any
 
-from reachy_language_tutor.learners import get_progress, get_lesson_content, get_language_catalog
+from reachy_language_tutor.learners import (
+    get_progress,
+    get_lesson_content,
+    get_language_catalog,
+    split_catalog_by_material,
+)
 from reachy_language_tutor.lesson_session import LessonSessionRefusedError
 from reachy_language_tutor.lesson_feedback import LessonEvent, react_to_lesson_event
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
@@ -114,6 +119,7 @@ class StartLesson(Tool):
             # neither supports a claim about which languages are taught.
             logger.error("start_lesson: the language catalog could not be read")
             return _refused("records_unavailable")
+        with_material, without_material = split_catalog_by_material(catalog)
 
         matched = resolve_language(catalog, spoken)
         if matched is None:
@@ -121,11 +127,12 @@ class StartLesson(Tool):
             return _refused(
                 "language_not_taught",
                 languages_taught=[entry.name for entry in catalog],
-                # Split the same way get_progress splits it. Listing five names flat
-                # said the robot could teach five languages when it can teach two, and
-                # this is the answer a learner gets at the moment they were refused.
-                languages_with_material=[entry.name for entry in catalog if entry.has_material],
-                languages_without_material_yet=[entry.name for entry in catalog if not entry.has_material],
+                # Split the same way get_progress splits it -- literally the same way
+                # now, through one shared function. Listing five names flat said the
+                # robot could teach five languages when it can teach two, and this is
+                # the answer a learner gets at the moment they were refused.
+                languages_with_material=with_material,
+                languages_without_material_yet=without_material,
             )
 
         progress = get_progress(learner_id, matched.code, instance_path=deps.instance_path)
@@ -203,7 +210,7 @@ class StartLesson(Tool):
                 "lesson_not_written_yet",
                 language=matched.name,
                 language_code=matched.code,
-                languages_with_material=[entry.name for entry in catalog if entry.has_material],
+                languages_with_material=with_material,
             )
 
         try:

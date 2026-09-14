@@ -630,6 +630,7 @@ from reachy_language_tutor.learners import (
     get_progress,
     record_result,
     save_faceprint,
+    split_catalog_by_material,
     store_is_available,
 )
 ```
@@ -731,9 +732,46 @@ must not silently appear to succeed.
 ### Why a language can be taught and still have nothing to teach
 
 **The decision: a language with no written material stays in the catalog and is marked,
-rather than being hidden.** `CatalogLanguage.has_material` carries the mark, and both
-learner-facing tools act on it — `get_progress` and `start_lesson` both split their
-catalog answer into `languages_with_material` and `languages_without_material_yet`.
+rather than being hidden.** `CatalogLanguage.has_material` carries the mark, and the
+learner-facing tools act on it — `get_progress`, `start_lesson`, `get_lesson_content`
+and `get_profile` split their catalog answer into `languages_with_material` and
+`languages_without_material_yet`.
+
+**`get_profile` carries the split because nothing else could answer the bare question,
+and D35 is what that cost.** Asked *"What languages can you teach me?"*, the tutor
+replied *"I can teach Spanish, French, German, Italian, and Portuguese"* and called no
+tool at all — three of those five have nothing written in them. It had no way to answer
+from evidence: `get_progress` and `start_lesson` both require a language before they
+will say anything about the catalog, and they surface the two lists only on their
+*language not recognised* branch, so reaching them means guessing a language the robot
+does **not** teach. `get_profile` took no arguments and returned only what the LEARNER
+had practised, which is a different fact and is empty for somebody new — exactly the
+person who asks.
+
+So the catalog rides along with the profile. It needs no argument, it is already the
+call made at the start of every conversation, and it puts the list in front of the
+model before the question arrives. It is not a second source of truth: it derives from
+`get_language_catalog` like every other caller.
+
+**Every return carries it, including the three error paths**, and that is not tidiness.
+The first version of this change read the catalog after both profile guards, so an
+unbound learner or a missing profile row left the tutor with no grounded answer about
+its own abilities — and "I do not know who you are" is precisely the moment the session
+that produced D35 invented five languages. Which languages the robot teaches is not a
+fact about the learner: it is the same answer for everyone and it stays true when there
+is no profile to read. The error paths are covered by test, not by a live run.
+
+**One derivation, not six.** `split_catalog_by_material(catalog)` in
+`learners/models.py` returns the two name lists, and every tool calls it. The line
+`[entry.name for entry in catalog if entry.has_material]` had been written out by hand
+in six places; a security review of D33 named that as a drift surface — they agreed by
+copy, so changing what *ready* means would have reached one and left the others saying
+the opposite about the same language. Empty in, two empty lists out, and that is
+deliberately **not** a claim that no language has material: `get_language_catalog`
+returns empty both for an unreadable store and for a catalog with no rows, and each
+caller still decides what to do about it. The ones that can refuse, do; `get_profile`
+cannot, so its tool description tells the model that two empty lists mean name no
+language at all.
 
 **Presentation is per LANGUAGE; refusing to start is per LESSON.** These are different
 questions and an earlier version of this change answered both with the language-level
