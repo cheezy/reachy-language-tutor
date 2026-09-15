@@ -56,6 +56,16 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
     enrol_parser = subparsers.add_parser(
         "enrol",
         help="Enrol a household member's face, in person, after recording their consent",
+        # The warning handle_enrol_command's docstring says is here. It was not, until
+        # a review looked for it. Every branch of this subcommand prints a household
+        # member's name -- deliberately, because a consent read-back or an erasure
+        # that cannot say WHO is not worth much -- and a terminal is not a log, but a
+        # redirect turns one into the other.
+        epilog=(
+            "This subcommand prints a household member's name to the terminal, which is "
+            "how it confirms who was enrolled, read back or erased. Redirecting or piping "
+            "its output writes that name into whatever file you send it to."
+        ),
     )
     enrol_parser.add_argument(
         "--name",
@@ -104,6 +114,17 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
         default=None,
         metavar="LEARNER_ID",
         help="Remove a learner who has no lesson history, with their consent record. Undoes a half-finished enrolment.",
+    )
+    # The second erasure, and deliberately a separate flag from --forget. "Stop
+    # recognising me" and "forget me" are different requests and a person will want
+    # each without the other; one flag doing both would cost somebody a year of
+    # learning to turn off a camera feature.
+    enrol_parser.add_argument(
+        "--forget-everything",
+        dest="forget_everything_id",
+        default=None,
+        metavar="LEARNER_ID",
+        help="Erase this person completely: faceprint, agreement, lesson history and their record.",
     )
     enrol_parser.add_argument(
         "--instance-path",

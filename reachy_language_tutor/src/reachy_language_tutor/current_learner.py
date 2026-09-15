@@ -37,6 +37,25 @@ That is not this change. What bounds the consequence today is the calibration ga
 below: while the threshold is unmeasured no identity is ever set from recognition, so
 there is no identity to go stale. Solving re-identification is a precondition for
 flipping THRESHOLD_CALIBRATED, and it is recorded beside that flag.
+
+IF THE PERSON BEING SERVED IS ERASED MID-SESSION, the decision is to do nothing to
+the running process, and it is a decision rather than an omission. ToolDependencies
+is sealed, so the id stays until the bundle is rebuilt -- and a stale id reaches
+nobody. Measured against a real store after forget_learner_entirely: get_profile
+answers None; record_result and save_faceprint both refuse with `unknown_learner`, so
+nothing recreates the erased rows; and get_progress does NOT answer None -- it
+answers the language's public course with completed=() and attempts=(), which is
+byte-identical to what an id that never existed gets. That distinction is the one
+that matters here and it was measured rather than assumed, twice, because the first
+two attempts to write this paragraph both got it wrong: what comes back is the
+catalogue every household shares, never another member's record. Learner ids are
+UUIDs, so an erased id is never reissued and can never come to name somebody else.
+
+The lesson surface therefore goes quiet for the rest of the process -- the right
+failure for somebody who just asked to be forgotten -- and the id is gone at the next
+session boundary. test_face_deletion.py pins each of those four answers, because the
+decision rests on them and a silent regression would turn "reaches nobody" into
+"reaches somebody".
 """
 
 from __future__ import annotations

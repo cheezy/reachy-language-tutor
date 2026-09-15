@@ -2335,9 +2335,26 @@ _CONSENTS_SQL = _learner_scoped(
 # The two halves of undoing an enrolment that did not finish. The DELETE refuses a
 # learner with lesson history in the statement itself rather than in a prior read: a
 # check and a delete in two statements is a race, and this is a row about a person.
-_HISTORY_COUNT_SQL = _learner_scoped(
-    "SELECT count(*) AS attempts FROM lesson_results WHERE lesson_results.learner_id = ?"
-)
+# What an erasure removed, counted so it can be reported back. count(*) rather than a
+# row-returning read: these numbers travel to the caller on an outcome and never into a
+# log line, so nothing here needs the len()-of-rows shape the log guard insists on --
+# and reading a whole lesson history into memory to measure its length is the wrong way
+# to produce an integer. There is no learners count statement: the DELETE's own rowcount
+# answers "was there such a person", in the same statement, with no window between.
+_FACEPRINT_COUNT_SQL = _learner_scoped("SELECT count(*) FROM faceprints WHERE faceprints.learner_id = ?")
+_CONSENT_COUNT_SQL = _learner_scoped("SELECT count(*) FROM consents WHERE consents.learner_id = ?")
+_RESULT_COUNT_SQL = _learner_scoped("SELECT count(*) FROM lesson_results WHERE lesson_results.learner_id = ?")
+# Forgetting somebody ENTIRELY, and it is one statement rather than four because the
+# schema already says so: consents, faceprints and lesson_results all reference
+# learners(id) ON DELETE CASCADE. Measured rather than assumed -- deleting the learner
+# row alone took all four counts to zero.
+#
+# Deliberately separate from _DELETE_LEARNER_SQL below, which refuses anybody with
+# lesson history. That refusal is right for undoing a half-finished enrolment and
+# exactly wrong for a person asking to be forgotten: their history is the largest
+# thing they are asking you to remove.
+_FORGET_LEARNER_SQL = _learner_scoped("DELETE FROM learners WHERE learners.id = ?")
+
 _DELETE_LEARNER_SQL = _learner_scoped(
     "DELETE FROM learners WHERE learners.id = ? "
     "AND NOT EXISTS (SELECT 1 FROM lesson_results WHERE lesson_results.learner_id = ?)"
@@ -2454,9 +2471,12 @@ _LEARNER_SCOPED_SQL: tuple[str, ...] = (
     _INSERT_FACEPRINT_SQL,
     _DELETE_FACEPRINT_SQL,
     _INSERT_LEARNER_SQL,
+    _FORGET_LEARNER_SQL,
+    _FACEPRINT_COUNT_SQL,
+    _CONSENT_COUNT_SQL,
+    _RESULT_COUNT_SQL,
     _INSERT_CONSENT_SQL,
     _CONSENTS_SQL,
-    _HISTORY_COUNT_SQL,
     _DELETE_LEARNER_SQL,
 )
 
@@ -3194,6 +3214,17 @@ def save_faceprint(
             )
             if written.rowcount != 1:
                 raise _ConsentMissing
+
+        # THE REPLACE IS AN ERASURE TOO, and it was the fourth copy of the bug the
+        # three named erasures had. A replace frees the pages holding the SUPERSEDED
+        # faceprint, and measured, those pages survive: with a second connection open,
+        # the old packed vector was still recoverable from learners.v1.sqlite3-wal
+        # after this function returned, and went only when that connection closed.
+        # A face template nobody is using any more is still a face template.
+        #
+        # Affordable here for the same reason as on the erasure paths: one caller,
+        # faces/enrol, once per enrolment, driven by an operator standing at the robot.
+        _checkpoint_the_log(connection)
     except _ConsentMissing:
         # No learner id in the line. That this robot was asked to store a faceprint
         # for somebody who has not agreed is worth a warning; who they are is not.
@@ -3231,6 +3262,78 @@ def save_faceprint(
     )
 
 
+def _checkpoint_the_log(connection: sqlite3.Connection) -> bool:
+    """Push the pages an erasure freed out of the write-ahead log. True if they stayed.
+
+    ONE COPY OF THIS RULE, deliberately. Three functions erase personal data --
+    delete_faceprint, forget_learner and forget_learner_entirely -- and each had its
+    own transcription of this block. All three carried the same defect, which is what
+    three copies of a rule are for; this is the one place it now lives.
+
+    WHY A CHECKPOINT AT ALL. connect() sets secure_delete, so a freed page is zeroed
+    when it is WRITTEN, and a checkpoint is what writes it. Measured, without this the
+    delete sits in the log while the main file still holds the packed vector and the
+    display name in full, with the erasure function already returned.
+
+    TRUNCATE, AND THE EARLIER CHOICE OF PASSIVE WAS WRONG. A passive checkpoint yields
+    to readers rather than waiting, which sounds like the kinder option and is how this
+    was first written. Measured, it is not enough, because copying the frames forward
+    is not the same as removing them: with a second connection merely OPEN -- not
+    reading, not in a transaction -- wal_checkpoint(PASSIVE) returned
+    (busy=0, log_frames=12, checkpointed=12), a clean result by every number it gives
+    you, and left a 49 KB learners.v1.sqlite3-wal still containing the packed vector,
+    the display name AND the learner id. SQLite cannot rewind the log while anybody
+    else is attached, so the stale frames stay on disk, and an erasure that reported
+    success had left a face template recoverable from the device.
+
+    TRUNCATE takes the log to zero length instead of merely copying it forward.
+    Measured on the same case: (busy=0, log_frames=0, checkpointed=0), a zero-byte
+    -wal, and neither the vector nor the name present in any file. It waits on real
+    readers rather than yielding, bounded by the busy_timeout connect() already sets,
+    and when it cannot have them it says so honestly: against an open read transaction
+    it returned (busy=1, log_frames=12, checkpointed=6), which both halves of the rule
+    below catch.
+
+    BUSY OR SHORT, EITHER ONE. busy alone would miss the passive-style partial copy,
+    and the frame comparison alone would miss a TRUNCATE that reported busy without
+    getting to copy anything. An unreadable result is reported as a deferral, never as
+    a success: "I could not tell" must not be told to a household as "it is gone".
+
+    WHAT THIS DOES NOT MEASURE, said plainly rather than left to be discovered. On a
+    database that is not in WAL mode the pragma answers (0, 0, 0) -- nothing pending,
+    nothing copied -- so this returns False having checked nothing. connect() sets WAL
+    on every connection, and measured on a database forced to journal_mode=DELETE
+    beforehand, a full erasure still left no vector and no name in any file, because
+    secure_delete writes the zeroed page at commit and the rollback journal is
+    unlinked. So the promise holds there; it is simply not this flag that establishes
+    it, and a future mode change would need its own measurement rather than this one.
+    """
+    checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    if checkpoint is None:
+        # No row at all. Nothing was measured, so nothing may be promised.
+        logger.warning(
+            "An erasure could not read its checkpoint result, so whether the freed pages "
+            "left the database file is unknown. They leave at the next checkpoint no "
+            "reader is holding open."
+        )
+        return True
+
+    busy, log_frames, checkpointed = (int(value) for value in tuple(checkpoint)[:3])
+    deferred = busy != 0 or checkpointed < log_frames
+    if deferred:
+        # Counts only: no path, no learner id, no name, no vector. This sentence is
+        # shared by all three erasures because the fact it reports is the same one.
+        logger.warning(
+            "An erasure freed pages that are still in the write-ahead log: %d of %d frames "
+            "checkpointed, busy=%d. They leave the database file at the next checkpoint no "
+            "reader is holding open.",
+            checkpointed,
+            log_frames,
+            busy,
+        )
+    return deferred
+
+
 def delete_faceprint(learner_id: str, *, instance_path: str | Path | None = None) -> int | None:
     """Remove this learner's faceprint, returning how many rows went, or None.
 
@@ -3248,18 +3351,11 @@ def delete_faceprint(learner_id: str, *, instance_path: str | Path | None = None
     without the checkpoint the delete sat in the WAL while the main file still held the
     vector and the model name in full, with this function already returning 1.
 
-    The checkpoint is PASSIVE, so it yields rather than waiting on another connection:
-    an erase can never block on somebody else's reader. The price is that ONE ordinary
-    open read transaction is enough to defer it -- measured, not supposed: with a second
-    connection sitting in BEGIN + SELECT, wal_checkpoint(PASSIVE) returned
-    (busy=0, log_frames=2, checkpointed=0), copying nothing while reporting no
-    contention, and the packed vector and the model name were both still recoverable
-    from the main file. Heavy load is not required; a single idle reader does it.
-
-    A deferral is therefore reported rather than silent (see below), and it is
-    temporary: the bytes go at the next checkpoint no reader is pinning. Measured, as
-    soon as that reader let go, both the vector and the model name were gone from the
-    file.
+    _checkpoint_the_log carries that rule and the measurements behind it, including why
+    it takes the write-ahead log to zero rather than merely copying it forward. A
+    deferral is reported there rather than swallowed, and it is temporary: the bytes go
+    at the next checkpoint no reader is pinning. Measured, as soon as the reader let
+    go, both the vector and the model name were gone from every file.
 
     A learner id that could never name anybody is answered with 0 rather than a
     refusal, because that is the truthful answer: no such row existed to remove.
@@ -3274,41 +3370,24 @@ def delete_faceprint(learner_id: str, *, instance_path: str | Path | None = None
         connection = connect(instance_path)
         with connection:
             cursor = connection.execute(_DELETE_FACEPRINT_SQL, (learner_id,))
-        # Ship the delete into the main database before reporting it done.
+        # Ship the delete out of the write-ahead log before reporting it done.
         #
         # Without this the promise is conditional on nobody else holding a connection,
         # and measured, that condition fails in the obvious way: with a second
-        # connection open the delete stays in the WAL, the main file still holds the
+        # connection open the delete stays in the log, the main file still holds the
         # original page, and the packed vector AND the model name were both fully
-        # recoverable from learners.v1.sqlite3 while this function had already returned
-        # 1. secure_delete zeroes a page when it is WRITTEN, and a checkpoint is what
-        # writes it. Measured cost: none worth naming. delete_faceprint runs at a
-        # median 0.660 ms with this line and 0.664 ms with it removed, over 300 samples
-        # each -- the checkpoint is inside the noise of the call it protects. (An
-        # earlier version of this comment reported 0.73-1.18 ms as the checkpoint's
-        # cost; that was the whole call, not this line's share of it.)
+        # recoverable while this function had already returned 1.
         #
-        # PASSIVE rather than TRUNCATE: a passive checkpoint yields to readers instead
-        # of waiting on them, so an erase can never block on somebody else's open
-        # connection. The cost is that it can copy nothing, and SAY NOTHING about it --
-        # measured, one open read transaction gets (busy=0, log_frames=2,
-        # checkpointed=0), so busy is 0 and a busy-flag check would miss it entirely.
+        # Measured cost: none worth naming. delete_faceprint runs at a median 0.660 ms
+        # with this line and 0.664 ms with it removed, over 300 samples each -- the
+        # checkpoint is inside the noise of the call it protects. (An earlier version
+        # of this comment reported 0.73-1.18 ms as the checkpoint's cost; that was the
+        # whole call, not this line's share of it. The figures predate the move from
+        # PASSIVE to TRUNCATE, which waits on readers this measurement did not have.)
         #
-        # So compare the two counts instead, and report a deferral. The row is gone
-        # either way -- this does not change what is returned -- but "the bytes are
-        # still in the file for now" is exactly the thing that must not be silent on
-        # biometric data. Counts only: no path, no learner id, no vector.
-        checkpoint = connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-        if checkpoint is not None:
-            _, log_frames, checkpointed = (int(value) for value in tuple(checkpoint)[:3])
-            if checkpointed < log_frames:
-                logger.warning(
-                    "A faceprint was deleted but its pages are still in the write-ahead "
-                    "log: %d of %d frames checkpointed. They leave the database file at "
-                    "the next checkpoint no reader is holding open.",
-                    checkpointed,
-                    log_frames,
-                )
+        # The rule, the mode and the measurements behind both live in one place now.
+        # The row is gone either way, so this does not change what is returned.
+        _checkpoint_the_log(connection)
         return int(cursor.rowcount)
     except _FACEPRINT_ABSORBS as exc:
         logger.warning("Could not delete a faceprint: %s", _log_safe(exc))
@@ -3475,6 +3554,135 @@ def get_consents(learner_id: str, *, instance_path: str | Path | None = None) ->
             connection.close()
 
 
+@dataclass(frozen=True)
+class ErasureOutcome:
+    """What an erasure removed, in counts, and whether the bytes have left the file.
+
+    COUNTS, NEVER NAMES. A household asking to be forgotten is owed proof it
+    happened, and an audit trail that records WHO was forgotten has kept the one
+    thing it was asked to destroy. Every field here is an integer or a bool.
+
+    `pages_still_in_the_log` is the honest half. A delete removes the rows
+    immediately, but on this database the bytes leave the files only when the
+    write-ahead log is emptied, and an open read transaction can block that. So True
+    means "gone from the tables, still recoverable from the log for now" --
+    temporary, and it resolves at the next checkpoint no reader is holding open.
+
+    MID-SESSION, IF THIS IS THE PERSON THE APP IS CURRENTLY SERVING: the decision is
+    to leave the running process alone and let its now-stale learner id go nowhere.
+    See the note in current_learner.py, which records what that id can and cannot do,
+    and the test that pins it.
+    """
+
+    erased: bool
+    learners: int = 0
+    faceprints: int = 0
+    consents: int = 0
+    results: int = 0
+    pages_still_in_the_log: bool = False
+
+
+def forget_learner_entirely(learner_id: str, *, instance_path: str | Path | None = None) -> ErasureOutcome | None:
+    """Remove a person completely -- faceprint, consent, results and the learner row.
+
+    THE OTHER ERASURE, and it is deliberately not the same operation as
+    delete_faceprint. "Stop recognising me" and "forget me" are different requests,
+    and a person will want each without the other; collapsing them would cost
+    somebody a year of learning to turn off a camera feature. This is the second one,
+    and forget_learner above is neither -- that one refuses anybody with history,
+    which is right for undoing a half-finished enrolment and exactly wrong here.
+
+    ONE STATEMENT. consents, faceprints and lesson_results all reference learners(id)
+    ON DELETE CASCADE, so deleting the learner row takes everything. Measured rather
+    than trusted: one DELETE took all four counts to zero. The counts are read before
+    the delete, because afterwards there is nothing left to count -- which is the
+    point.
+
+    Never raises, like every other writer here. None means the store could not be
+    read and nothing can be promised either way; an ErasureOutcome with erased=False
+    means there was no such person, which is a clean answer rather than an error.
+
+    WHETHER THE BYTES ARE GONE is measured and reported, not asserted -- and the scope
+    of that claim is every file the database has, not just the one named after it.
+    connect() sets secure_delete so a freed page is zeroed as it is written, and
+    _checkpoint_the_log is what writes it. Measured across learners.v1.sqlite3, its
+    -wal and its -shm, with a second connection held open across both the enrolment
+    and the erasure: no vector, no display name and no learner id in any of the three,
+    and VACUUM changes nothing that the checkpoint has not already done.
+
+    An earlier version of this function measured only the main file and was wrong
+    about the rest. It checkpointed PASSIVE, and with a second connection merely open
+    that returned a spotless (busy=0, log_frames=12, checkpointed=12) while leaving a
+    49 KB -wal holding the vector, the name and the id in full. The honest flag said
+    False and the operator was told the data was gone. _checkpoint_the_log carries
+    what replaced it and why.
+
+    When the log cannot be emptied, pages_still_in_the_log says so rather than the
+    outcome claiming more than was measured.
+    """
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not read a learner id: %s", refusal)
+        return ErasureOutcome(erased=False)
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        # ONE TRANSACTION FOR THE COUNTS AND THE DELETE. Counting has to happen first,
+        # because the cascade leaves nothing to count afterwards -- but counting in its
+        # own autocommit statement and then deleting is the check-then-act race this
+        # module's own comment above _FORGET_LEARNER_SQL condemns, and it is worse than
+        # theoretical here: the app writes lesson results while an operator runs the
+        # CLI, so a result written in that window is erased by the cascade and missing
+        # from the number the household is shown. BEGIN IMMEDIATE takes the write lock
+        # up front and gives every statement below one consistent snapshot, so the
+        # counts describe exactly the rows the cascade removed.
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            faceprints = int(connection.execute(_FACEPRINT_COUNT_SQL, (learner_id,)).fetchone()[0])
+            consents = int(connection.execute(_CONSENT_COUNT_SQL, (learner_id,)).fetchone()[0])
+            results = int(connection.execute(_RESULT_COUNT_SQL, (learner_id,)).fetchone()[0])
+            # No separate existence read. rowcount IS the answer to "was there such a
+            # person", taken from the statement that acted, so there is no window
+            # between deciding and doing in which the answer could change. An earlier
+            # version read the learner row first and would have reported erased=True
+            # with learners=1 for a delete that removed nothing.
+            learners = int(connection.execute(_FORGET_LEARNER_SQL, (learner_id,)).rowcount)
+
+        if learners == 0:
+            # No such person. A clean answer: nothing was removed and nothing failed.
+            return ErasureOutcome(erased=False)
+
+        deferred = _checkpoint_the_log(connection)
+    except _FACEPRINT_ABSORBS as exc:
+        logger.warning("Could not forget a learner: %s", _log_safe(exc))
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+    # A FIXED SENTENCE, and the counts deliberately stay out of it. They are carried
+    # to the caller on the outcome instead, and the operator command prints them.
+    #
+    # Not a privacy decision -- a count is not personal data -- but a decision the
+    # module's own log guard pushed me to and was right about. Every name reaching a
+    # log line here must be pinned to a producer a static reader can prove yields a
+    # shape, and a count read back through a scalar SELECT is not one. Widening the
+    # allow-list to admit it would have weakened the rule that keeps a learner id out
+    # of a log line, to gain four numbers that already reach the person who asked for
+    # them. So the counts never go to the logger, and no statement above is shaped
+    # around the guard any more.
+    logger.info("A household member was forgotten; the counts are on the returned outcome")
+    return ErasureOutcome(
+        erased=True,
+        learners=learners,
+        faceprints=faceprints,
+        consents=consents,
+        results=results,
+        pages_still_in_the_log=deferred,
+    )
+
+
 def forget_learner(learner_id: str, *, instance_path: str | Path | None = None) -> int | None:
     """Remove a learner who has no lesson history, returning how many rows went, or None.
 
@@ -3509,20 +3717,9 @@ def forget_learner(learner_id: str, *, instance_path: str | Path | None = None) 
         connection = connect(instance_path)
         with connection:
             cursor = connection.execute(_DELETE_LEARNER_SQL, (learner_id, learner_id))
-        checkpoint = connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-        if checkpoint is not None:
-            _, log_frames, checkpointed = (int(value) for value in tuple(checkpoint)[:3])
-            if checkpointed < log_frames:
-                # Counts only: no path, no learner id, no name. The same deferral
-                # delete_faceprint reports, and it is reported here for the same
-                # reason -- a display name left in the file is personal data too.
-                logger.warning(
-                    "A learner was removed but their pages are still in the write-ahead "
-                    "log: %d of %d frames checkpointed. They leave the database file at "
-                    "the next checkpoint no reader is holding open.",
-                    checkpointed,
-                    log_frames,
-                )
+        # A display name left in the file is personal data too, so this path gets the
+        # same checkpoint and the same honest deferral report as the other two.
+        _checkpoint_the_log(connection)
         return int(cursor.rowcount)
     except _FACEPRINT_ABSORBS as exc:
         logger.warning("Could not remove a learner: %s", _log_safe(exc))

@@ -259,6 +259,7 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
         forget_learner,
         delete_faceprint,
         store_is_available,
+        forget_learner_entirely,
     )
 
     # Bootstrap and the path helper come from the storage module rather than the
@@ -296,6 +297,42 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
         else:
             print("The learner database could not be read, so nothing can be promised either way.")
         return None
+
+    if getattr(args, "forget_everything_id", None) is not None:
+        # THE SECOND ERASURE. --forget removes the numbers and keeps the person;
+        # this removes the person. Both exist because they are different requests,
+        # and which one happened is said out loud below rather than left to be
+        # inferred from silence.
+        profile = _named_learner(args.forget_everything_id)
+        if profile is None:
+            return 1
+        # Read BEFORE the erasure, because afterwards there is deliberately nobody
+        # to ask. Printed to the operator's terminal, which is not a log -- the
+        # store's own log line carries no counts and no name at all.
+        display_name = profile.display_name
+        outcome = forget_learner_entirely(args.forget_everything_id, instance_path=instance_path)
+        if outcome is None:
+            print("The learner database could not be read, so nothing can be promised either way.")
+            return 1
+        if not outcome.erased:
+            print("No such learner. Nothing was erased.")
+            return 1
+        print(f"Forgot {display_name} completely.")
+        print(
+            f"  removed: {outcome.learners} person, {outcome.faceprints} faceprint, "
+            f"{outcome.consents} agreement, {outcome.results} lesson result(s)"
+        )
+        if outcome.pages_still_in_the_log:
+            # Said plainly, because the promise is about the data and not the row.
+            print("  NOTE: their pages are still in the database's write-ahead log.")
+            print("  They leave the file at the next checkpoint no reader is holding open.")
+        else:
+            # Names both files, because both were measured. An earlier version of
+            # this sentence said "the database file" while the write-ahead log still
+            # held the vector and the name -- a promise wider than the measurement
+            # behind it, which is the one thing this project forbids writing down.
+            print("  Nothing of theirs is left in the database file or its write-ahead log.")
+        return 0
 
     if getattr(args, "remove_learner_id", None) is not None:
         # Removes the learner, their consent and any faceprint -- the remedy for an

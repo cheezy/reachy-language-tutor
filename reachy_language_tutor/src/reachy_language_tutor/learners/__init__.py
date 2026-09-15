@@ -6,6 +6,7 @@ needs, and it is what a future hosted backend has to provide.
 """
 
 from reachy_language_tutor.learners.store import (
+    ErasureOutcome,
     get_lesson,
     get_profile,
     get_consents,
@@ -19,6 +20,7 @@ from reachy_language_tutor.learners.store import (
     get_lesson_content,
     store_is_available,
     get_language_catalog,
+    forget_learner_entirely,
     get_enrolled_faceprints,
     get_practised_languages,
 )
@@ -59,6 +61,7 @@ __all__ = [
     "CONSENT_SCOPES",
     "CatalogLanguage",
     "ConsentOutcome",
+    "ErasureOutcome",
     "ConsentRecord",
     "DRILL_KINDS",
     "DialogueTurn",
@@ -81,6 +84,7 @@ __all__ = [
     "UsageNote",
     "delete_faceprint",
     "forget_learner",
+    "forget_learner_entirely",
     "get_consents",
     "get_enrolled_faceprints",
     "get_faceprint",

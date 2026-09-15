@@ -622,6 +622,7 @@ Everything above describes the data. This is how the application reaches it.
 from reachy_language_tutor.learners import (
     delete_faceprint,
     forget_learner,
+    forget_learner_entirely,
     get_consents,
     get_enrolled_faceprints,
     get_faceprint,
@@ -899,21 +900,19 @@ as it frees it — measured: after `delete_faceprint` returns `1` and a
 anywhere in `learners.v1.sqlite3` or its `-wal`/`-shm` companions. The same holds for the
 `ON DELETE CASCADE` path, and both are asserted against the file rather than the table.
 
-**What `1` does not promise: that the bytes have already left the file.** Zeroing happens
-when a freed page is *written*, and a checkpoint is what writes it. `delete_faceprint`
-checkpoints before returning, but a `PASSIVE` checkpoint yields to readers rather than
-waiting on them — so an erase never blocks on somebody else's connection, and the price
-is that a single open read transaction defers the copy. Measured, not supposed: with a
-second connection sitting in `BEGIN` + `SELECT`, `wal_checkpoint(PASSIVE)` returned
-`(busy=0, log_frames=2, checkpointed=0)` — copying nothing while reporting no contention,
-so a `busy` check would not catch it — and the vector and the model name were both still
-recoverable from the main file. Heavy load is not required; one idle reader does it.
+**What `1` does not promise: that the bytes have already left the files.** Zeroing
+happens when a freed page is *written*, and emptying the write-ahead log is what writes
+it. `delete_faceprint` does that before returning, through the same
+`_checkpoint_the_log` helper as the other two erasures — see
+[Is the data actually gone?](#is-the-data-actually-gone-measured-and-the-answer-is-not-the-obvious-one)
+for the measurements, including why the mode is `TRUNCATE` and what a `PASSIVE`
+checkpoint left behind.
 
-That deferral is **reported rather than silent**: `delete_faceprint` compares the frames
-copied against the frames pending and logs the two counts (counts only — no path, no
-learner id, no vector) when the erase did not ship. And it is temporary. The bytes go at
-the next checkpoint no reader is pinning; measured, as soon as that reader let go, both
-the vector and the model name were gone from the file.
+A real reader can still block it, and then it is **reported rather than silent**: the
+helper logs the frame counts and the busy flag (counts only — no path, no learner id, no
+vector) when the log did not empty. And it is temporary. The bytes go at the next
+checkpoint no reader is pinning; measured, as soon as that reader let go, both the
+vector and the model name were gone from every file.
 
 `secure_delete` was set to `ON` rather than `FAST` on a measurement, not an argument:
 over 300 write-and-delete cycles in WAL with `synchronous = NORMAL`, the three settings
@@ -1041,6 +1040,120 @@ pages sit in the write-ahead log while the main file still holds the display nam
 
 Erasing a household member who has actually used the robot is a different promise with a
 different surface, and this is not it.
+
+## Forgetting a household member
+
+Two different erasures, and a person will want either. **"Stop recognising me"** and
+**"forget me"** are different requests, and one operation doing both would cost
+somebody a year of learning to turn off a camera feature.
+
+| ask | command | function | what goes | what stays |
+|---|---|---|---|---|
+| stop recognising me | `enrol --forget ID` | `delete_faceprint` | the faceprint | the person, their agreement, their lesson history |
+| forget me | `enrol --forget-everything ID` | `forget_learner_entirely` | everything: faceprint, agreement, lesson results, the learner row | nothing |
+| undo a half-finished enrolment | `enrol --remove ID` | `forget_learner` | the person, **only if they have no lesson history** | — |
+
+The third is neither of the first two and is not an erasure feature: it refuses
+anybody with history, which is right for undoing an enrolment that failed midway and
+exactly wrong for somebody asking to be forgotten, whose history is the largest thing
+they are asking to have removed.
+
+`forget_learner_entirely` is **one statement**. `consents`, `faceprints` and
+`lesson_results` all reference `learners(id) ON DELETE CASCADE`, so deleting the
+learner row takes all three — measured, not assumed: one `DELETE` took all four counts
+to zero.
+
+**Counts, never names.** `ErasureOutcome` carries only integers and a flag, so an
+audit record of a deletion cannot itself hold the thing it was asked to destroy. The
+store's own log line carries no counts either, for a reason worth recording: every
+logged name in that module is pinned to a producer a static guard can prove yields a
+shape, a count read back through a scalar `SELECT` is not one, and widening that
+allow-list to admit it would have weakened the rule keeping learner ids out of logs —
+to gain four numbers that already reach the person who asked.
+
+### Is the data actually gone? Measured, and the answer is not the obvious one
+
+The promise made to a household is about the data, not the row, so this was measured
+rather than asserted — a distinctive vector was packed, saved, erased, and the raw
+bytes searched for the packed vector, the display name and the learner id.
+
+**A database is three files, and the first version of this measurement searched one.**
+That is the finding worth leading with, because everything else here was already
+believed and this was not. Searching `learners.v1.sqlite3` alone found nothing after
+an erasure and looked like proof. Measured again with a second connection held open
+across the enrolment, the vector, the display name and the learner id were all sitting
+in a 49 KB `learners.v1.sqlite3-wal`, and the erasure had reported a spotless
+`(busy=0, log_frames=12, checkpointed=12)`. Copying frames forward is not the same as
+removing them: SQLite will not rewind the log while another connection is attached, so
+the stale frames stay on disk — and unplugging the robot leaves them there. The
+operator had been told the data was gone.
+
+What the measurement says now, across `learners.v1.sqlite3`, its `-wal` and its `-shm`:
+
+- **After a full erasure, all three values are absent from all three files.**
+  `connect()` sets `secure_delete`, which zeroes a freed page when it is *written*,
+  and emptying the write-ahead log is what writes it.
+- **`wal_checkpoint(TRUNCATE)`, not `PASSIVE`.** TRUNCATE takes the log to zero length
+  rather than merely copying it forward. Measured on the case above:
+  `(busy=0, log_frames=0, checkpointed=0)`, a zero-byte `-wal`, and neither the vector
+  nor the name present anywhere. It waits on real readers instead of yielding to them,
+  bounded by the `busy_timeout` `connect()` already sets — acceptable on an operator
+  command, and the honest trade for a promise that is true.
+- **A real reader can still block it, and then it says so.** A connection sitting in
+  `BEGIN` gives `(busy=1, log_frames=12, checkpointed=6)`: the rows are gone, the bytes
+  are not. `ErasureOutcome.pages_still_in_the_log` carries that, and
+  `enrol --forget-everything` prints which of the two happened. The deferral is
+  temporary — the bytes go at the next checkpoint no reader is holding open — and
+  "I could not tell" is reported as a deferral rather than as success.
+- **The explicit checkpoint earns its line, though proving that took a second
+  measurement.** Removing it failed no byte test at first — because the function closes
+  its own connection and SQLite checkpoints automatically when the *last* connection to
+  a database closes. The case that distinguishes them is a second connection merely
+  being open: the erasing one is then not the last, the automatic checkpoint cannot
+  fire, and only the explicit one empties the log before the function returns.
+- **`VACUUM` is not what makes this true.** Running it after the checkpoint changed
+  nothing. The task that added this anticipated VACUUM might be required; it is not.
+- **A crash before the checkpoint leaves the bytes until the next open.** Measured by
+  `SIGKILL`ing a process between the committed `DELETE` and the checkpoint — how an
+  unplugged robot dies: the vector was still in the main file immediately afterwards,
+  and was gone after the next ordinary open-and-close, because SQLite checkpoints when
+  the last connection closes. The window is real and it is bounded by the next time
+  anything opens the database.
+- **Things that did NOT break it**, recorded so they are not re-tried as unknowns: page
+  reuse in a 237 KB database with forty other people enrolled; thirty further
+  enrolments after the erasure; `journal_mode` forced to `DELETE` beforehand (`connect()`
+  re-sets WAL on every connection); and the `-shm` file, which never held the vector or
+  the name in any run.
+
+**Four paths free personal pages, not three.** `delete_faceprint`, `forget_learner`
+and `forget_learner_entirely` are the erasures the feature is about — but
+`save_faceprint` replaces a faceprint by deleting the old one first, and measured, the
+**superseded** vector outlived its replacement in the `-wal` until the other
+connection closed. A face template nobody is using is still a face template. All four
+now go through one helper, `_checkpoint_the_log`, and the test that enforces it
+derives the set from every function deleting from a table in `_PERSONAL_TABLES` rather
+than naming today's functions — because naming three is what let the fourth exist.
+
+### If the person being served is erased mid-session
+
+The decision is to leave the running process alone, and it is a decision rather than an
+omission. `ToolDependencies` is sealed, so the recognised id survives until the bundle
+is rebuilt at the next session boundary — and a stale id reaches nobody. Measured after
+`forget_learner_entirely`:
+
+| route | answer |
+|---|---|
+| `get_profile` | `None` |
+| `get_progress` | the language's **public** course, `completed=()` and `attempts=()` — byte-identical to what an id that never existed gets |
+| `record_result` | refused, `unknown_learner` |
+| `save_faceprint` | refused, `unknown_learner` |
+
+`get_progress` answering *something* is the part worth writing down, because two
+earlier attempts to describe this said it answered `None`. It does not — what comes
+back is the catalogue every household shares, never another member's record. Learner
+ids are UUIDs, so an erased id is never reissued and can never come to name somebody
+else. The lesson surface therefore goes quiet for the rest of the process, which is the
+right failure for somebody who has just asked to be forgotten.
 
 ### Deleting a faceprint on request
 

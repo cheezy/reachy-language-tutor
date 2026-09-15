@@ -927,7 +927,7 @@ def test_every_registered_statement_is_still_accepted() -> None:
     during store's import. Saying it again here is what makes the failure name the
     statement instead of arriving as a collection error against every test in the file.
     """
-    assert len(store._LEARNER_SCOPED_SQL) == 15
+    assert len(store._LEARNER_SCOPED_SQL) == 18
 
     for sql in store._LEARNER_SCOPED_SQL:
         assert store._learner_scoped(sql) == sql
@@ -3072,6 +3072,8 @@ def test_package_exports_only_the_interface() -> None:
         "record_consent",
         "get_consents",
         "forget_learner",
+        "forget_learner_entirely",
+        "ErasureOutcome",
         "split_catalog_by_material",
     }
     for leaked in ("connect", "NEXT_LESSON_SQL", "ensure_learner_database", "SEED_LESSONS"):
@@ -4293,6 +4295,7 @@ _PERMITTED_LOG_NAMES = frozenset(
         "seeded",  # bool
         "checkpointed",  # int, WAL frames copied
         "log_frames",  # int, WAL frames pending
+        "busy",  # int, the checkpoint's busy flag -- same unpacking as its two siblings
         "SEEDED_LEARNERS_KEY",  # a module constant naming a settings key
         "LEARNER_DB_FILENAME",  # the fixed filename, which names no person and no directory
         "suffix",  # "" / "-wal" / "-shm" / "-journal", from a literal tuple in the loop
