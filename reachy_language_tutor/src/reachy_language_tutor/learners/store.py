@@ -2343,6 +2343,103 @@ _DELETE_LEARNER_SQL = _learner_scoped(
     "AND NOT EXISTS (SELECT 1 FROM lesson_results WHERE lesson_results.learner_id = ?)"
 )
 
+# THE ONE STATEMENT THAT DELIBERATELY READS EVERY LEARNER, and the rule that keeps it
+# to one. This is NOT an exception to _learner_scoped -- that rule still refuses this
+# statement, and nothing about it was relaxed. It is a second, narrower rule that
+# approves a named statement rather than a shape.
+#
+# WHY IT HAS TO EXIST. Recognition compares one face against the household. That is
+# not a read of one learner's data that happens to be badly scoped -- comparing
+# against everybody IS the operation, and there is no way to express it one learner at
+# a time without first knowing who to ask about, which is the question being answered.
+# The scoping rule is right to refuse it and this is the deliberate, enumerated place
+# where that refusal is overridden, once.
+#
+# WHAT KEEPS IT HONEST. The statement is derived rather than written: it is
+# _FACEPRINT_SQL with its filter removed and nothing else, and a test asserts exactly
+# that by reconstructing one from the other. So it cannot gain a column, a join to
+# learners for a display name, or a join to lesson_results for history, unless the
+# SCOPED statement gains the same -- and that one is judged by _learner_scoped. The
+# columns are faceprints columns: numbers and a model name, never a name.
+_FACEPRINT_COLUMNS = frozenset({"learner_id", "embedding_model", "dimension", "vector", "created_at"})
+
+
+def _reads_every_learners_faceprint(sql: str) -> str:
+    """Return a statement approved to read the whole household, refusing anything else.
+
+    An allow-list of what the statement may BE, the shape _insert_is_attributed uses.
+    Five conditions, each refusing at import time.
+
+    THERE WAS A SIXTH and it is gone, because a review measured it doing nothing. It
+    required the text to be a member of the enumerated tuple -- and the tuple the
+    guards read is built by mapping this rule over that same tuple, so anything
+    appended satisfied its own membership test by construction. The docstring
+    credited that condition as "what stops this becoming a category", which is how
+    the next reader deletes the wrong thing.
+
+    What actually pins the category at one is the five shape conditions, which run on
+    every entry, plus `len(_EVERY_LEARNERS_FACEPRINT_SQL) == 1` in the tests. Both
+    were verified by appending a second statement and watching what refused it.
+    """
+    tokens = _sql_tokens(sql)
+    words = [token.upper() for token in tokens]
+
+    unreadable = _unreadable(tokens, words)
+    if unreadable is not None:
+        raise ValueError(f"a cross-learner statement has to be one this rule can read: {unreadable}")
+    if words[:1] != ["SELECT"]:
+        # A cross-learner WRITE is never justifiable, so the category is closed to
+        # writes permanently rather than one statement at a time.
+        raise ValueError("only a SELECT may read across learners")
+    if "?" in tokens:
+        # What is exempted is "reads the whole household", not "reads whatever it is
+        # told to". A parameter would let a caller choose the breadth.
+        raise ValueError("a cross-learner statement takes no parameters")
+
+    rows, _ = _bracket_map(tokens, words)
+    # NOT named `refusal`. That name is on the log guard's permitted list and is
+    # pinned to a set of safe producers, and this value never reaches a log at all --
+    # it goes into a ValueError at import time. Borrowing the name would have meant
+    # widening that allow-list for a binding it was not written about.
+    relations, _, unreadable_relations = _personal_relations(tokens, words, rows, write_target_exempt=False)
+    if unreadable_relations is not None:
+        raise ValueError(f"a cross-learner statement has to be one this rule can read: {unreadable_relations}")
+    named = {table for _, table, _ in relations}
+    if named != {"faceprints"}:
+        raise ValueError(f"a cross-learner statement may read faceprints and nothing else, not {sorted(named)}")
+
+    selected = {token for token in tokens[1 : words.index("FROM")] if _is_a_name(token)}
+    if not selected <= _FACEPRINT_COLUMNS:
+        # Refuses SELECT * as well, since "*" is not a name and the set would be empty
+        # -- which the emptiness check below turns into a refusal.
+        raise ValueError(f"a cross-learner statement may select faceprint columns only, not {sorted(selected)}")
+    if not selected:
+        raise ValueError("a cross-learner statement must name its columns")
+    return sql
+
+
+# Bound ONCE, to a LITERAL. A name bound from a CALL is a value the module's own
+# inline-query guard cannot read out of the source, so `x = _rule("SELECT ...")`
+# would silently make every use of x unverifiable -- and two bindings of one name is
+# a name whose statement nothing can judge at all. Both shapes were tried and both
+# were refused by guards already in this file.
+_HOUSEHOLD_FACEPRINTS_SQL = "SELECT learner_id, embedding_model, dimension, vector, created_at FROM faceprints"
+
+# What may be approved, and what HAS been. The split matters and a review found why:
+# the rule used to be invoked by hand on the one literal while the TUPLE was what
+# both consumers actually consulted -- the module-level scan and the inline-query
+# guard each admit a statement for being in it. A second entry appended to the tuple
+# would therefore have been waved through by both without the six conditions ever
+# judging it, and the rule's own membership condition would have passed it trivially.
+#
+# Now every entry is judged on the way in. Appending to _APPROVED_CROSS_LEARNER_READS
+# runs the rule; the tuple the guards read is built from the results.
+_APPROVED_CROSS_LEARNER_READS: tuple[str, ...] = (_HOUSEHOLD_FACEPRINTS_SQL,)
+
+_EVERY_LEARNERS_FACEPRINT_SQL: tuple[str, ...] = tuple(
+    _reads_every_learners_faceprint(statement) for statement in _APPROVED_CROSS_LEARNER_READS
+)
+
 _LEARNER_SCOPED_SQL: tuple[str, ...] = (
     # NEXT_LESSON_SQL is scoped too ("r.learner_id = ?"), so it is registered rather
     # than exempted -- an exemption would be a precedent for skipping the next one.
@@ -2983,6 +3080,44 @@ def get_faceprint(learner_id: str, *, instance_path: str | Path | None = None) -
         # Never the learner id and never the vector: both are personal data and this is
         # a log line. _log_safe is what keeps the exception from quoting either.
         logger.warning("Could not read a faceprint: %s", _log_safe(exc))
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def get_enrolled_faceprints(*, instance_path: str | Path | None = None) -> tuple[Faceprint, ...] | None:
+    """Return every enrolled faceprint, or None when the store could not be read.
+
+    THE ONE READER THAT CROSSES LEARNERS, and it exists because recognition has no
+    other shape: comparing a face against the household IS a read of the household.
+    Its statement is approved by name through _reads_every_learners_faceprint, which
+    is a separate and narrower rule than _learner_scoped -- that rule still refuses
+    this statement, and nothing about it was loosened to let this through.
+
+    Numbers only. The columns are the faceprints table's own, so a display name cannot
+    come back from here however the caller asks; a test derives the statement from the
+    scoped one to keep that true as the table changes.
+
+    THREE ANSWERS, and the difference matters more here than anywhere else in this
+    module:
+      ()    -- nobody is enrolled. A fact about the household.
+      None  -- the store could not be read. A fault in the robot.
+      rows  -- the household.
+    get_faceprint collapses those two into None and makes the caller ask
+    store_is_available to tell them apart. This one does not, and the asymmetry is
+    deliberate rather than an oversight: the natural empty value for a collection is
+    an empty collection, which leaves None free to mean the fault, and this is called
+    once on the startup path where a second query is a second thing to go wrong.
+    """
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        rows = connection.execute(_HOUSEHOLD_FACEPRINTS_SQL).fetchall()
+        return tuple(_faceprint_from_row(row) for row in rows)
+    except _FACEPRINT_ABSORBS as exc:
+        # Never a row, never a vector, never a count of who lives here.
+        logger.warning("Could not read the enrolled faceprints: %s", _log_safe(exc))
         return None
     finally:
         if connection is not None:

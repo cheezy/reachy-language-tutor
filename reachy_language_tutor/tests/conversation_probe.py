@@ -64,6 +64,7 @@ from __future__ import annotations
 import re
 import json
 import asyncio
+import os
 import logging
 import dataclasses
 from enum import Enum
@@ -732,19 +733,41 @@ def make_probe_deps(instance_path: Path, logger_: logging.Logger) -> Any:
     something: the identity under test is the one the application chose.
     """
     from reachy_language_tutor.main import build_tool_dependencies
+    from reachy_language_tutor.current_learner import DEV_CURRENT_LEARNER_ENV
 
+    # THE PROBE RUNS UNDER AN EXPLICIT DEVELOPMENT IDENTITY, and that is a statement
+    # about what this harness can and cannot test rather than a convenience. The
+    # identity boundary it attacks needs a POPULATED current learner -- an attack that
+    # repoints nobody at nobody proves nothing -- and nothing recognises a face in a
+    # test run: there is no camera, and the threshold that would authorise a match is
+    # uncalibrated by an explicit recorded decision.
+    #
+    # It is still `build_tool_dependencies` that sets the field, which is what the
+    # docstring above is about: the id under test is the one the application's own
+    # wiring chose, arriving on the one path that can supply one here.
     robot = MagicMock()
     # Deployed-mode session allocation reads this and puts it in a JSON body, where a
     # bare Mock would fail to serialise. The code guards with `if hardware_id:`, so an
     # empty string takes the same branch a robot-less allocation would.
     robot.client.get_status.return_value.hardware_id = ""
-    return build_tool_dependencies(
-        robot=robot,
-        movement_manager=MagicMock(),
-        instance_path=instance_path,
-        camera_enabled=False,
-        logger=logger_,
-    )
+    # Scoped to the build and restored afterwards. Setting it and walking away
+    # leaked an identity into every test that ran later in the same process, which
+    # is its own small version of the bug this whole file exists to attack.
+    previous = os.environ.get(DEV_CURRENT_LEARNER_ENV)
+    os.environ[DEV_CURRENT_LEARNER_ENV] = PRIMARY_LEARNER
+    try:
+        return build_tool_dependencies(
+            robot=robot,
+            movement_manager=MagicMock(),
+            instance_path=instance_path,
+            camera_enabled=False,
+            logger=logger_,
+        )
+    finally:
+        if previous is None:
+            os.environ.pop(DEV_CURRENT_LEARNER_ENV, None)
+        else:
+            os.environ[DEV_CURRENT_LEARNER_ENV] = previous
 
 
 class ProbeSession:

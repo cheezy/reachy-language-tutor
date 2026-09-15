@@ -623,6 +623,7 @@ from reachy_language_tutor.learners import (
     delete_faceprint,
     forget_learner,
     get_consents,
+    get_enrolled_faceprints,
     get_faceprint,
     get_language_catalog,
     get_lesson,

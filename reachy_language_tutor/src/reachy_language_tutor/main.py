@@ -30,10 +30,40 @@ if TYPE_CHECKING:
     from reachy_language_tutor.tools.core_tools import ToolDependencies
 
 
-# MILESTONE 4 REPLACES THIS LINE. Until face recognition exists the app serves exactly
-# one seeded learner. This is the only place in the application package that chooses an
-# identity: the LLM cannot reach it, and no tool or conversation may change it.
-HARDCODED_CURRENT_LEARNER_ID = "sample-learner"
+# MILESTONE 4 REPLACED THE LINE THAT WAS HERE. It bound
+# HARDCODED_CURRENT_LEARNER_ID to the seeded learner's id, and the app served exactly
+# that one person. Recognition chooses now, and a test asserts no learner id is
+# hard-coded anywhere in this package at all -- which is why this comment describes
+# the deleted line instead of quoting it. Quoting it put the literal back, and that
+# test caught it immediately, which is the test working.
+#
+# How loudly to say each answer. Keyed by disposition, total over
+# RECOGNITION_DISPOSITIONS and pinned as total by a test, so a disposition added
+# upstream cannot arrive here as a silent KeyError-shaped default.
+#
+# store_unreadable is ERROR because it is a fault in the robot somebody has to fix.
+# declined_uncalibrated is WARNING and deliberately loud: the robot recognised
+# somebody and refused to act on it, which an operator watching a demo fail deserves
+# to be told rather than left to infer. The ordinary "nobody was there" answers are
+# INFO -- they are the expected state of a robot in an empty room.
+_DISPOSITION_LEVEL: dict[str, int] = {
+    "identified": logging.INFO,
+    "override": logging.WARNING,
+    "declined_uncalibrated": logging.WARNING,
+    "store_unreadable": logging.ERROR,
+    "camera_disabled": logging.INFO,
+    "no_camera": logging.INFO,
+    "no_frame": logging.INFO,
+    "no_face": logging.INFO,
+    "several_faces": logging.INFO,
+    "not_confident": logging.INFO,
+    "frame_unreadable": logging.INFO,
+    "recognition_unavailable": logging.INFO,
+    "nobody_enrolled": logging.INFO,
+    "no_one_close_enough": logging.INFO,
+    "too_close_to_call": logging.INFO,
+    "not_recognised": logging.INFO,
+}
 
 
 def _start_inactivity_timeout_thread(
@@ -73,7 +103,13 @@ def _start_inactivity_timeout_thread(
     return thread
 
 
-def resolve_current_learner_id(instance_path: str | Path | None, logger: logging.Logger) -> str | None:
+def resolve_current_learner_id(
+    instance_path: str | Path | None,
+    logger: logging.Logger,
+    *,
+    media: Any | None = None,
+    camera_enabled: bool = False,
+) -> str | None:
     """Decide which learner the app is serving, or None when that cannot be trusted.
 
     Serving the wrong person their housemate's data needs a wrong *identity*; None
@@ -81,12 +117,33 @@ def resolve_current_learner_id(instance_path: str | Path | None, logger: logging
     aborts startup -- a corrupt database in someone's home would brick the robot for
     no security gain. It is loud at the identity boundary and permissive at the
     process boundary: the learner surface goes dead and says why.
+
+    WHEN RECOGNITION RUNS: once, here, in the calling thread, at the moment the app
+    decides who it is serving. Not on a timer and not per frame -- one frame is
+    pulled, compared and dropped. current_learner.py's docstring carries the full
+    reasoning, including why once-per-process and continuous are both wrong and what
+    that leaves unsolved.
+
+    The identity recognition offers is still checked against the database before it
+    is served. That check is near-unreachable for a recognised learner, whose
+    faceprint has a foreign key to their row -- but it is exactly what validates the
+    development override, which is the untrusted input on this path.
     """
     from reachy_language_tutor.learners import get_profile, store_is_available
+    from reachy_language_tutor.current_learner import recognise_current_learner
 
     try:
-        if get_profile(HARDCODED_CURRENT_LEARNER_ID, instance_path=instance_path) is not None:
-            return HARDCODED_CURRENT_LEARNER_ID
+        outcome = recognise_current_learner(media=media, camera_enabled=camera_enabled, instance_path=instance_path)
+        if outcome.learner_id is None:
+            # The disposition, never an id -- that is the whole point of the code.
+            logger.log(
+                _DISPOSITION_LEVEL.get(outcome.disposition, logging.INFO),
+                "Serving nobody: %s",
+                outcome.disposition,
+            )
+            return None
+        if get_profile(outcome.learner_id, instance_path=instance_path) is not None:
+            return outcome.learner_id
         # Only now pay for the second query, to say which of the two failures it was.
         if store_is_available(instance_path):
             logger.error("The configured learner is not in the learner database; serving nobody.")
@@ -128,7 +185,14 @@ def build_tool_dependencies(
     # leave two answers that could in principle differ, and a holder bound to somebody
     # other than the learner the app is serving is precisely the state this design
     # exists to make unrepresentable.
-    current_learner_id = resolve_current_learner_id(instance_path, logger)
+    # Resolved ONCE, and now that has teeth: the call reads the camera, so a second
+    # call would be a second frame and a second chance to answer differently.
+    current_learner_id = resolve_current_learner_id(
+        instance_path,
+        logger,
+        media=getattr(robot, "media", None),
+        camera_enabled=camera_enabled,
+    )
 
     return ToolDependencies(
         reachy_mini=robot,
@@ -453,6 +517,21 @@ def run(
         warm_emotion_library()
     except Exception as e:  # never block startup on movement
         logger.warning("Failed to warm the emotion library: %s", log_safe(e))
+
+    try:
+        from reachy_language_tutor.faces import warm_face_models
+
+        # Paid once, here, for the same reason as the emotion library: recognition
+        # runs while the tool dependencies are built, and an unwarmed model would
+        # make it answer recognition_unavailable for the whole session.
+        #
+        # Deliberately NOT gated on THRESHOLD_CALIBRATED. Gating would save a
+        # download whose result is discarded while the flag is False -- and it would
+        # mean the recognition pipeline never actually runs, so the flag would change
+        # two things instead of one and there would be nothing to withhold.
+        warm_face_models()
+    except Exception as e:  # never block startup on recognition
+        logger.warning("Failed to warm the face models: %s", log_safe(e))
 
     logger.info(
         "Configured Hugging Face realtime backend, connection mode: %s",

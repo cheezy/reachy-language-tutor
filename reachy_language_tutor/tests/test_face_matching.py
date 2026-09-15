@@ -1151,6 +1151,133 @@ def test_the_three_copies_of_the_embedding_dimension_agree() -> None:
     assert DIMENSION == matching.EXPECTED_MATCH_DIMENSION, "this module's fixtures are the wrong length"
 
 
+def _branches_on_the_calibration_flag(tree: ast.Module) -> bool:
+    """True when THRESHOLD_CALIBRATED is read somewhere a branch depends on it.
+    The substring version of this check accepted a comment, a docstring, an
+    unused import or a logging argument -- anything at all, as long as the
+    fifteen characters appeared. The task that wired recognition in said in as
+    many words that satisfying this with a passing mention is worse than not
+    having the check, so the question asked here is whether control flow
+    actually depends on the flag.
+    """
+    # ONLY the tests of control-flow nodes, and whatever those tests are built from.
+    # Collecting every BoolOp and Compare operand wherever it appeared accepted
+    # `x = THRESHOLD_CALIBRATED and y` -- an unused assignment controlling nothing,
+    # which is the same passing mention the plain `flag = THRESHOLD_CALIBRATED` is
+    # refused for. A review caught that the self-check had pinned the hole as
+    # intended behaviour, which would have taught the next reader it was by design.
+    conditions: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.IfExp, ast.While, ast.Assert)):
+            conditions.append(node.test)
+    return any(
+        isinstance(inner, (ast.Name, ast.Attribute))
+        and (getattr(inner, "id", None) or getattr(inner, "attr", None)) == "THRESHOLD_CALIBRATED"
+        for condition in conditions
+        for inner in ast.walk(condition)
+    )
+
+
+def test_a_passing_mention_does_not_satisfy_the_calibration_check() -> None:
+    """The check's own self-check, and the reason it was rewritten.
+
+    The substring version accepted any file containing the fifteen characters. The
+    task that wired recognition in said satisfying it with a passing mention is
+    worse than not having it, so each of these is a mention that must NOT count and
+    each was accepted by the old form.
+    """
+    mentions_only = [
+        ("a comment", "# THRESHOLD_CALIBRATED is False\nmatch_faceprint(a, b)"),
+        ("a docstring", '"""See THRESHOLD_CALIBRATED."""\nmatch_faceprint(a, b)'),
+        ("an import", "from x import THRESHOLD_CALIBRATED\nmatch_faceprint(a, b)"),
+        ("a log argument", "log(THRESHOLD_CALIBRATED)\nmatch_faceprint(a, b)"),
+        ("an unused assignment", "flag = THRESHOLD_CALIBRATED\nmatch_faceprint(a, b)"),
+    ]
+    for label, source in mentions_only:
+        assert not _branches_on_the_calibration_flag(ast.parse(source)), f"{label} must not satisfy the check"
+
+    # And these were accepted while controlling nothing. `x = A and y` is an unused
+    # assignment exactly as `flag = A` is, and pinning it as acceptable was the
+    # self-check endorsing the hole rather than finding it.
+    mentions_only += [
+        ("a non-controlling boolean op", "x = THRESHOLD_CALIBRATED and y"),
+        ("a non-controlling comparison", "x = THRESHOLD_CALIBRATED is True"),
+    ]
+    for label, source in mentions_only[-2:]:
+        assert not _branches_on_the_calibration_flag(ast.parse(source)), f"{label} must not satisfy the check"
+
+    branches = [
+        ("an if", "if not THRESHOLD_CALIBRATED:\n    pass"),
+        ("a conditional expression", "x = 1 if THRESHOLD_CALIBRATED else 2"),
+        ("a comparison in a condition", "if THRESHOLD_CALIBRATED is True:\n    pass"),
+        ("a boolean op in a condition", "if THRESHOLD_CALIBRATED and y:\n    pass"),
+        ("a while", "while THRESHOLD_CALIBRATED:\n    pass"),
+        ("an assert", "assert THRESHOLD_CALIBRATED"),
+    ]
+    for label, source in branches:
+        assert _branches_on_the_calibration_flag(ast.parse(source)), f"{label} must satisfy the check"
+
+
+def test_an_aliased_import_does_not_evade_the_calibration_check() -> None:
+    """The evasion a review measured, pinned so the narrowing cannot recur.
+
+    `from reachy_language_tutor.faces import match_faceprint as identify` followed by
+    `identify(...)` was invisible to the AST rewrite while the substring form it
+    replaced caught it -- so the rewrite, sold as a strengthening, was a narrowing.
+    """
+    aliased = ast.parse(
+        "from reachy_language_tutor.faces import match_faceprint as identify\n"
+        "def who(v, h):\n    return identify(v, h, embedding_model='m').learner_id\n"
+    )
+    plain = ast.parse("from reachy_language_tutor.faces import match_faceprint\nmatch_faceprint(a, b)\n")
+    unrelated = ast.parse("def who():\n    return identify(1, 2)\n")
+
+    assert _reaches_the_matcher(aliased), "an aliased import evaded the caller check"
+    assert _reaches_the_matcher(plain)
+    assert not _reaches_the_matcher(unrelated), "a same-named call with no import must not count"
+
+
+def test_the_calibration_check_refuses_to_pass_with_no_callers() -> None:
+    """It passed vacuously for two whole tasks, and its own docstring admitted it.
+
+    Pinned so that deleting the recognition wiring fails loudly rather than
+    returning this guard to the state where it guarded nothing.
+    """
+    from reachy_language_tutor import current_learner
+
+    source = Path(current_learner.__file__).read_text(encoding="utf-8")
+    assert "match_faceprint" in source, (
+        "current_learner.py no longer calls match_faceprint, so the calibration check "
+        "has gone back to passing vacuously"
+    )
+
+
+# Every module outside faces/ that may reach match_faceprint, by any spelling.
+PERMITTED_MATCHER_CONSUMERS = frozenset({"current_learner.py"})
+
+
+def _reaches_the_matcher(tree: ast.Module) -> bool:
+    """True when this module can call the matcher, under any name it imported it as.
+
+    ALIASES RESOLVED. The first version of this asked whether a Call's func was
+    spelled `match_faceprint`, which a review broke in one line:
+    `from reachy_language_tutor.faces import match_faceprint as identify` then
+    `identify(...)` was invisible to it, while the substring check this replaced
+    would have caught it. Narrowing a security guard while calling it a
+    strengthening is the worst of the two outcomes, so the names it was imported
+    under are collected first and the call is matched against those.
+    """
+    names = {"match_faceprint"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("reachy_language_tutor.faces"):
+            names |= {alias.asname or alias.name for alias in node.names if alias.name == "match_faceprint"}
+    return any(
+        isinstance(node, ast.Call)
+        and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) in names
+        for node in ast.walk(tree)
+    )
+
+
 def test_any_caller_of_the_matcher_must_consult_whether_it_is_calibrated() -> None:
     """THRESHOLD_CALIBRATED must have a consumer, not just a reader.
 
@@ -1167,15 +1294,43 @@ def test_any_caller_of_the_matcher_must_consult_whether_it_is_calibrated() -> No
     """
     source_root = Path(faces.__file__).resolve().parents[1]
     offenders: list[str] = []
+    callers: list[str] = []
 
+    # The predicate is module-level so the self-check below exercises THIS rule
+    # rather than a second copy of it -- a lesson paid for on the sibling guard in
+    # test_face_matching's print arm, where a re-implemented copy drifted and left
+    # the real check switchable-off without failing.
     for path in sorted(source_root.rglob("*.py")):
         if path.is_relative_to(Path(faces.__file__).parent):
             continue  # the package itself defines these
-        text = path.read_text(encoding="utf-8")
-        if "match_faceprint" in text and "THRESHOLD_CALIBRATED" not in text:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if not _reaches_the_matcher(tree):
+            continue
+        callers.append(str(path.relative_to(source_root)))
+        if not _branches_on_the_calibration_flag(tree):
             offenders.append(str(path.relative_to(source_root)))
 
+    # AND THE SET OF CALLERS IS ITSELF AN ALLOW-LIST. Matching on how the call is
+    # SPELLED is a deny-list of shapes however carefully it is written -- a review
+    # proved it by planting a module that did `import match_faceprint as identify`
+    # and watching this check report four passes. Naming the modules that may reach
+    # the matcher at all closes that family: a new consumer has to be added here,
+    # where somebody has to think about the unmeasured control it is about to use.
+    assert set(callers) <= PERMITTED_MATCHER_CONSUMERS, (
+        f"these modules reach the face matcher and are not on the approved list: "
+        f"{sorted(set(callers) - PERMITTED_MATCHER_CONSUMERS)}. The matcher's threshold is an "
+        "authorization control that has never been measured; a new consumer is a decision."
+    )
+
+    # ANTI-VACUITY, and it is not decoration: this check passed for the whole of W26
+    # and W27 with zero callers, which its own docstring admitted. The day the
+    # wiring is deleted it must fail rather than go quietly green again.
+    assert callers, (
+        "no module outside faces/ calls match_faceprint, so this check proves nothing. "
+        "Recognition is wired in current_learner.py; if that has been removed, this "
+        "guard has stopped guarding anything."
+    )
     assert offenders == [], (
-        "these call match_faceprint without consulting faces.THRESHOLD_CALIBRATED; "
+        "these call match_faceprint without BRANCHING on faces.THRESHOLD_CALIBRATED; "
         "an uncalibrated threshold must change behaviour, not just be documented: " + str(offenders)
     )

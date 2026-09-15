@@ -115,6 +115,23 @@ FACE_MATCH_LONE_MEMBER_FLOOR = 0.65
 # taken the risk without deciding to. The test in tests/test_face_matching.py that
 # refuses any caller of match_faceprint which never mentions this name is the mechanism
 # that makes W29 confront it rather than inherit it silently.
+#
+# BEFORE YOU SET THIS True, TWO THINGS ARE OWED, not one.
+#
+#   1. MEASURE IT. Run scripts/calibrate_faceprints.py against a directory of real
+#      faces outside this repository and record the table it prints beside the three
+#      constants above. Both error directions, not just the false rejects.
+#
+#   2. DECIDE WHAT HAPPENS WHEN THE PERSON CHANGES MID-SESSION. This one is easy to
+#      miss because nothing fails without it today. W29 wired recognition into
+#      choosing the current learner and left re-identification unsolved, and what
+#      bounds that is THIS FLAG: while it is False no identity is ever set from a
+#      face, so there is no identity that can go stale. Flipping it removes that
+#      bound in the same motion as it enables matching. ToolDependencies is sealed
+#      after construction, so a mid-session change is not expressible today at all --
+#      the shape that works is a new bundle per session, at the boundary where the
+#      conversation handler is rebuilt. current_learner.py's module docstring carries
+#      the reasoning; this line is here so that whoever flips the flag reads it.
 THRESHOLD_CALIBRATED = False
 
 

@@ -800,6 +800,14 @@ def test_every_module_level_query_touching_personal_data_is_scoped() -> None:
 
     No exemptions: NEXT_LESSON_SQL is registered rather than skipped, because an
     exemption here is a precedent for skipping the next one.
+
+    ONE STATEMENT IS IN A SECOND REGISTER, and it is admitted by NAME rather than by
+    shape. Recognition compares a face against the household, which is a read of
+    every learner and cannot be written any other way; _reads_every_learners_faceprint
+    approves exactly that statement and refuses a write, a parameter, a join, a
+    SELECT * or anything not enumerated. Widening this check to "or mentions
+    faceprints" would be the bypass -- membership of the enumerated tuple is the
+    whole control, and the test below pins that tuple at one entry.
     """
     for name, value in vars(store).items():
         if not isinstance(value, str) or not name.isupper() and not name.startswith("_"):
@@ -807,7 +815,65 @@ def test_every_module_level_query_touching_personal_data_is_scoped() -> None:
         if not isinstance(value, str) or not any(verb in value for verb in _STATEMENT_VERBS):
             continue
         if _personal(value):
-            assert value in store._LEARNER_SCOPED_SQL, f"{name} touches personal data unscoped"
+            registered = value in store._LEARNER_SCOPED_SQL or value in store._EVERY_LEARNERS_FACEPRINT_SQL
+            assert registered, f"{name} touches personal data unscoped"
+
+
+def test_exactly_one_statement_reads_across_learners() -> None:
+    """The cross-learner category is one statement, and growing it is a decision.
+
+    Not a style rule. Every reader in this module is scoped to one learner by a rule
+    that refuses anything else at import time, and recognition is the single
+    operation that cannot be expressed that way. A second entry here means somebody
+    decided a second thing cannot either -- which may be true, and must be argued
+    rather than appended.
+    """
+    assert len(store._EVERY_LEARNERS_FACEPRINT_SQL) == 1
+
+    # And it is still refused by the scoping rule. The exemption is a separate,
+    # narrower rule -- nothing about _learner_scoped was loosened to admit it.
+    with pytest.raises(ValueError, match="must constrain every personal relation"):
+        store._learner_scoped(store._HOUSEHOLD_FACEPRINTS_SQL)
+
+
+def test_the_cross_learner_read_is_the_scoped_read_with_its_filter_removed() -> None:
+    """The column guard, and it maintains itself as the table changes.
+
+    A hand-written allow-list of permitted columns would need updating by whoever
+    adds a column, which is exactly the person not thinking about it. Deriving the
+    unscoped statement from the scoped one instead means the cross-learner read
+    cannot gain a column, a join to learners for a display name, or a join to
+    lesson_results for history unless the SCOPED statement gains the same -- and that
+    one is judged by _learner_scoped.
+    """
+    assert store._HOUSEHOLD_FACEPRINTS_SQL + " WHERE faceprints.learner_id = ?" == store._FACEPRINT_SQL
+
+
+@pytest.mark.parametrize(
+    ("statement", "refused_because"),
+    [
+        ("DELETE FROM faceprints", "only a SELECT"),
+        ("UPDATE faceprints SET vector = vector", "only a SELECT"),
+        ("SELECT learner_id, vector FROM faceprints WHERE faceprints.learner_id = ?", "takes no parameters"),
+        ("SELECT * FROM faceprints", "must name its columns"),
+        (
+            "SELECT f.learner_id, l.display_name FROM faceprints AS f JOIN learners AS l ON l.id = f.learner_id",
+            "faceprints and nothing else",
+        ),
+        ("SELECT learner_id, recorded_at FROM lesson_results", "faceprints and nothing else"),
+    ],
+)
+def test_the_cross_learner_rule_refuses_everything_but_the_one_statement(
+    statement: str, refused_because: str
+) -> None:
+    """Each condition of the rule, refused for the reason it names.
+
+    The join-to-learners case is the one that matters most: it is how a display name
+    would leave this module through a read nobody scoped, and it is refused for
+    naming a second personal relation rather than for mentioning a column.
+    """
+    with pytest.raises(ValueError, match=refused_because):
+        store._reads_every_learners_faceprint(statement)
 
 
 # --------------------------------------------------------------- the scoping rule
@@ -2246,6 +2312,14 @@ def unverified_inline_queries(source: str) -> list[str]:
         )
         if exempt:
             continue
+        if sql in store._EVERY_LEARNERS_FACEPRINT_SQL:
+            # The one read that crosses learners, admitted by MEMBERSHIP of the
+            # enumerated tuple rather than by anything about its shape. Recognition
+            # compares a face against the household and cannot be written one learner
+            # at a time -- that would need to know who to ask about, which is the
+            # question. Matching on shape here ("or it only reads faceprints") would
+            # be the bypass; the tuple is the control, and a test pins it at one.
+            continue
         try:
             # The statement goes in as written. Stripping comments here used to be
             # necessary because the rule could not tell a comment from SQL; it drops
@@ -2986,6 +3060,7 @@ def test_package_exports_only_the_interface() -> None:
         "Faceprint",
         "SaveFaceprintOutcome",
         "get_faceprint",
+        "get_enrolled_faceprints",
         "save_faceprint",
         "delete_faceprint",
         "CONSENT_SCOPES",

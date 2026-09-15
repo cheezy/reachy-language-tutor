@@ -151,7 +151,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from reachy_language_tutor import main, tools, learners
+from reachy_language_tutor import main, tools, learners, current_learner
 from reachy_language_tutor.learners import store
 from reachy_language_tutor.tools.core_tools import ToolDependencies
 
@@ -478,15 +478,58 @@ def test_a_write_around_the_attribute_protocol_still_lands() -> None:
 # --- Startup populates it ------------------------------------------------------------
 
 
-def test_resolving_the_current_learner_returns_the_seeded_learner(instance: Path) -> None:
-    """The hard-coded learner resolves against a prepared database."""
+def test_resolving_the_current_learner_without_a_camera_serves_nobody(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No camera, no identity -- and the log says which of the many reasons it was.
+
+    This test used to assert the hard-coded learner came back. Recognition chooses
+    now, and with no media handle there is nobody to recognise.
+
+    THE DISPOSITION IS ASSERTED, NOT JUST THE None, and that is deliberate across
+    this whole file: once the default answer is nobody, an `is None` assertion passes
+    for any reason at all, including a pipeline that broke. The disposition is what
+    distinguishes "the camera was absent" from "recognition crashed".
+    """
+    with caplog.at_level(logging.INFO):
+        resolved = main.resolve_current_learner_id(instance, logging.getLogger(__name__))
+
+    assert resolved is None
+    assert any("camera_disabled" in record.getMessage() for record in caplog.records), (
+        "the reason must reach the log, or a broken pipeline looks like an empty room"
+    )
+
+
+def test_an_explicit_development_override_resolves_to_that_learner(
+    instance: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The override is how a developer gets an identity with no face in front of them."""
+    monkeypatch.setenv(current_learner.DEV_CURRENT_LEARNER_ENV, store.SEED_LEARNERS[0][0])
+
     resolved = main.resolve_current_learner_id(instance, logging.getLogger(__name__))
-    assert resolved == main.HARDCODED_CURRENT_LEARNER_ID
+
+    assert resolved == store.SEED_LEARNERS[0][0]
 
 
-def test_app_startup_builds_dependencies_carrying_a_valid_seeded_learner(instance: Path) -> None:
+def test_app_startup_serves_nobody_when_nobody_is_recognised(instance: Path) -> None:
+    """The wiring end to end, and its default is nobody rather than a constant."""
+    deps = main.build_tool_dependencies(
+        robot=MagicMock(),
+        movement_manager=MagicMock(),
+        instance_path=instance,
+        camera_enabled=False,
+        logger=logging.getLogger(__name__),
+    )
+    assert deps.current_learner_id is None
+
+
+def test_app_startup_builds_dependencies_carrying_a_valid_learner_under_the_override(
+    instance: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The wiring end to end: what startup builds names a learner that really exists."""
     from reachy_language_tutor.learners import get_profile
+
+    monkeypatch.setenv(current_learner.DEV_CURRENT_LEARNER_ENV, store.SEED_LEARNERS[0][0])
 
     deps = main.build_tool_dependencies(
         robot=MagicMock(),
@@ -496,7 +539,8 @@ def test_app_startup_builds_dependencies_carrying_a_valid_seeded_learner(instanc
         logger=logging.getLogger(__name__),
     )
     assert deps.current_learner_id == store.SEED_LEARNERS[0][0]
-    # Populated is not enough; it has to be somebody.
+    # Populated is not enough; it has to be somebody. The override is untrusted input
+    # and goes through the same existence check a recognised id does.
     assert get_profile(deps.current_learner_id, instance_path=instance) is not None
 
 
@@ -815,22 +859,29 @@ def test_no_tool_accepts_a_learner_identity_parameter() -> None:
 # --- Hard-coded in exactly one place --------------------------------------------------
 
 
-def test_the_hardcoded_learner_id_matches_the_seeded_learner() -> None:
-    """The literal is duplicated on purpose; this is what keeps the copy honest."""
-    assert main.HARDCODED_CURRENT_LEARNER_ID == store.SEED_LEARNERS[0][0]
+def test_no_learner_id_is_hardcoded_anywhere_in_the_application() -> None:
+    """Milestone 4 had to change one line, and this is that line having changed.
 
+    This test used to assert `hits == ["main.py x1"]` and its docstring said
+    "Milestone 4 must change one line, so make 'one line' a checked fact". That
+    milestone is this task. The constant is gone, recognition chooses, and the
+    checked fact is now that no application module names a learner at all.
 
-def test_the_learner_id_is_hardcoded_in_exactly_one_place() -> None:
-    """Milestone 4 must change one line, so make "one line" a checked fact."""
+    This IS acceptance criterion 1 in its checkable form: "the current learner comes
+    from recognition rather than from a constant" is not provable by reading the
+    resolver, because a resolver can always fall back to something. It is provable by
+    there being no constant to fall back to.
+    """
     package = Path(main.__file__).resolve().parent
     seed_data = package / "learners" / "store.py"
+    seeded = store.SEED_LEARNERS[0][0]
 
     hits = [
-        f"{path.relative_to(package)} x{path.read_text(encoding='utf-8').count(main.HARDCODED_CURRENT_LEARNER_ID)}"
+        f"{path.relative_to(package)} x{path.read_text(encoding='utf-8').count(seeded)}"
         for path in sorted(package.rglob("*.py"))
-        if path != seed_data and main.HARDCODED_CURRENT_LEARNER_ID in path.read_text(encoding="utf-8")
+        if path != seed_data and seeded in path.read_text(encoding="utf-8")
     ]
-    assert hits == ["main.py x1"], f"the learner id should be chosen in one place only, found: {hits}"
+    assert hits == [], f"a learner id is hard-coded in the application package: {hits}"
 
 
 # --- Both failure modes leave it unset ------------------------------------------------
@@ -840,7 +891,11 @@ def test_an_unknown_learner_leaves_the_field_unset(
     instance: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A configured learner who is not in the database serves nobody, loudly."""
-    monkeypatch.setattr(main, "HARDCODED_CURRENT_LEARNER_ID", "no-such-learner")
+    # Through the OVERRIDE, which is now the path an id a human chose arrives on --
+    # and therefore the path this test was always really about: an identity the
+    # database does not recognise. Recognition cannot produce one, because a
+    # faceprint has a foreign key to a learner row.
+    monkeypatch.setenv(current_learner.DEV_CURRENT_LEARNER_ENV, "no-such-learner")
     with caplog.at_level(logging.DEBUG, logger=__name__):
         resolved = main.resolve_current_learner_id(instance, logging.getLogger(__name__))
 
@@ -858,8 +913,19 @@ def test_an_unknown_learner_leaves_the_field_unset(
     assert not any("no-such-learner" in surface for surface in surfaces), surfaces
 
 
-def test_an_unreadable_store_leaves_the_field_unset(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """A broken database must not be reported as "I do not know you"."""
+def test_an_unreadable_store_leaves_the_field_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A broken database must not be reported as "I do not know you".
+
+    THE OVERRIDE IS SET DELIBERATELY. Without it this test now answers
+    camera_disabled long before the store is touched -- it would still see `None`,
+    still pass, and prove nothing whatever about a broken database. That is the
+    failure mode this whole file acquired the moment nobody became the default
+    answer, and it is why every test here asserts a disposition or a message rather
+    than only `is None`.
+    """
+    monkeypatch.setenv(current_learner.DEV_CURRENT_LEARNER_ENV, "somebody")
     with caplog.at_level(logging.DEBUG, logger=__name__):
         resolved = main.resolve_current_learner_id(tmp_path, logging.getLogger(__name__))
 
@@ -928,11 +994,14 @@ def test_an_exception_carrying_the_learner_id_does_not_put_it_in_a_log(
     get_profile would render a real person's identifier into an ERROR log at milestone
     4, with no test noticing. So the exception is forced here rather than hoped against.
     """
-    identifier = main.HARDCODED_CURRENT_LEARNER_ID
+    identifier = "a-recognised-person"
 
     def _raise_with_the_id_in_the_message(*_args: object, **_kwargs: object) -> None:
         raise ValueError(f"profile validation failed for learner {identifier}")
 
+    # Set so the resolver actually reaches get_profile; without it the camera branch
+    # answers first and the forced exception is never raised.
+    monkeypatch.setenv(current_learner.DEV_CURRENT_LEARNER_ENV, identifier)
     monkeypatch.setattr(learners, "get_profile", _raise_with_the_id_in_the_message)
     with caplog.at_level(logging.DEBUG, logger=__name__):
         resolved = main.resolve_current_learner_id(instance, logging.getLogger(__name__))
@@ -956,8 +1025,12 @@ def test_an_exception_from_the_availability_check_is_caught_the_same_way(
     instance: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The second query can raise too, and it is reached only when the first returns None."""
-    identifier = main.HARDCODED_CURRENT_LEARNER_ID
-    monkeypatch.setattr(main, "HARDCODED_CURRENT_LEARNER_ID", "no-such-learner")
+    identifier = "a-recognised-person"
+    # Through the OVERRIDE, which is now the path an id a human chose arrives on --
+    # and therefore the path this test was always really about: an identity the
+    # database does not recognise. Recognition cannot produce one, because a
+    # faceprint has a foreign key to a learner row.
+    monkeypatch.setenv(current_learner.DEV_CURRENT_LEARNER_ENV, "no-such-learner")
 
     def _raise_with_the_id_in_the_message(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError(f"store handle lost while checking {identifier}")

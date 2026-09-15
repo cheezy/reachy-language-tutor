@@ -29,7 +29,7 @@ import pytest
 # test exists to catch -- see test_locked_profile.py for the same import and reason.
 from test_current_learner import _field_write_offenders
 
-from reachy_language_tutor import main, lesson_session
+from reachy_language_tutor import main, lesson_session, current_learner
 from reachy_language_tutor.tools import core_tools
 from reachy_language_tutor.learners import store, get_lesson
 from reachy_language_tutor.lesson_session import LessonSession, LessonSessionHolder, LessonSessionRefusedError
@@ -514,12 +514,20 @@ def test_dependencies_built_without_naming_a_holder_still_have_one_bound_to_nobo
         _opened(deps.lesson_session)
 
 
-def test_dependencies_built_by_startup_carry_a_holder_bound_to_the_current_learner(instance: Path) -> None:
+def test_dependencies_built_by_startup_carry_a_holder_bound_to_the_current_learner(
+    instance: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The wiring end to end: the holder and the seal name the same person.
 
     A robot that has just booted is not in the middle of anybody's lesson, and the
     lesson it can pin belongs to the learner the dependencies are sealed to.
+
+    Run under the development override, because the agreement between the holder and
+    the seal is what this test is about and a holder bound to nobody pins nothing --
+    it would still pass, and prove nothing. Nothing recognises a face in a test run.
     """
+    monkeypatch.setenv(current_learner.DEV_CURRENT_LEARNER_ENV, store.SEED_LEARNERS[0][0])
+
     deps = main.build_tool_dependencies(
         robot=MagicMock(),
         movement_manager=MagicMock(),

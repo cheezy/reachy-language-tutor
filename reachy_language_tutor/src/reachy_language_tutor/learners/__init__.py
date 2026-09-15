@@ -19,6 +19,7 @@ from reachy_language_tutor.learners.store import (
     get_lesson_content,
     store_is_available,
     get_language_catalog,
+    get_enrolled_faceprints,
     get_practised_languages,
 )
 from reachy_language_tutor.learners.models import (
@@ -81,6 +82,7 @@ __all__ = [
     "delete_faceprint",
     "forget_learner",
     "get_consents",
+    "get_enrolled_faceprints",
     "get_faceprint",
     "get_language_catalog",
     "get_lesson",
