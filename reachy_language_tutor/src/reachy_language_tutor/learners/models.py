@@ -44,10 +44,74 @@ FACEPRINT_REASONS: tuple[str, ...] = (
     "storage_unavailable",
 )
 
-# What a household member can be asked to agree to. One entry today, and an allow-list
-# rather than free text on purpose: widening what a stored yes covers is a decision
-# somebody should have to make deliberately, not a string a caller can invent.
-CONSENT_SCOPES: tuple[str, ...] = ("face_recognition",)
+# What a household member can be asked to agree to. An allow-list rather than free
+# text on purpose: widening what a stored yes covers is a decision somebody should
+# have to make deliberately, not a string a caller can invent. This is the second
+# such decision, taken deliberately and recorded here.
+#
+# "local_profile" is agreeing to the robot keeping a learning record on this device
+# and nothing more -- no face data, no camera. It exists because a household that
+# declines face recognition could not otherwise be in the database AT ALL: the only
+# way to create a learner is record_consent, and the only thing to consent to was
+# face recognition, so declining meant having no profile and no way to use the app.
+# That is the opposite of what an opt-in is for.
+#
+# The two scopes are not interchangeable and the database enforces it rather than a
+# caller remembering: the faceprint insert selects from consents filtered to
+# face_recognition, so somebody who agreed only to a learning record cannot be given
+# a faceprint. Measured in tests/test_identity_fallback.py rather than asserted here.
+#
+# AND THERE IS NO UPGRADE PATH, which two earlier versions of this comment both got
+# wrong -- the first inventing a remedy that does not exist, the second inventing a
+# mechanism that does not fire. Measured, and this is what actually happens:
+#
+#   * record_consent is the only way to write a consent row, and it always inserts a
+#     learner too. Passing an EXISTING learner_id is refused -- UNIQUE constraint
+#     failed: learners.id, reported as rejected_by_database.
+#   * Omitting the id does NOT fail. It succeeds with a fresh uuid4, creating a
+#     SECOND household member with the same display name, silently. That is the
+#     hazard worth writing down: the system does not refuse a duplicate person, it
+#     makes one.
+#   * Either way the original learner still holds no face_recognition row, so
+#     save_faceprint keeps answering no_consent for them.
+#
+# So adding face recognition later means registering somebody again, and their
+# history does not come with them. A real limitation, and the next person to need it
+# should find it here rather than discover it.
+CONSENT_SCOPES: tuple[str, ...] = ("face_recognition", "local_profile")
+
+# THE WORDING FOR local_profile, and it is a separate notice rather than a reuse of
+# the face one. Showing somebody the face-recognition notice and then storing their
+# yes under a different scope would record that they agreed to something they were
+# never shown -- and the stored statement_text is the evidence of what each person
+# was actually promised, which makes that a false record rather than a shortcut.
+#
+# Deliberately short, because it covers deliberately little. It makes no promise
+# about faces, cameras or recognition: this scope is the absence of those.
+LOCAL_PROFILE_STATEMENT_ID: str = "local_profile.v1"
+
+# THE SIBLING PROTECTION, extended with the scope rather than left behind. The face
+# notice is pinned by digest in faces/enrollment.py because under its v2 the words
+# changed twice and only a review noticed -- a stored statement_text is the evidence
+# of what a person was promised, so an id naming two different texts cannot answer
+# who agreed to what. This notice is stored on exactly the same terms and was
+# initially given no such pin, which a review caught.
+#
+# APPEND-ONLY, like the other: while the wording is still being written, editing in
+# place and updating the digest is correct, and this is what makes such an edit
+# visible. Once a household has actually agreed under an id, add a NEW id instead.
+LOCAL_PROFILE_STATEMENT_DIGESTS: dict[str, str] = {
+    "local_profile.v1": "cc854bdbe08d35b5aa560a8fae47ba3e018b18117a9d685ed70e23a2c0819a07",
+}
+
+LOCAL_PROFILE_STATEMENT: str = """This robot can keep a record of your language learning on this device, so it knows which lessons you have done and what to teach next.
+
+If you agree, it saves the name you are being registered under, today's date, these words you are reading now, and whether you agreed yourself or an adult agreed for you. It does not save the name of the adult.
+
+It does NOT use the camera and does NOT keep any face data. This robot will not recognise you: whoever sets it up chooses who it is serving.
+
+The record stays on this robot. You can ask whoever set this robot up to show you what is stored, or to delete all of it, and it is gone."""
+
 
 # Who did the agreeing, as a ROLE and never a name. "an_adult_of_the_household" is the
 # prototype's whole answer to parental consent: an adult was standing at the robot and

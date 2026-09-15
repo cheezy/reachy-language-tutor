@@ -760,10 +760,17 @@ class LocalStream:
         if not self._instance_path:
             return
         try:
+            # fallback_learner is read and passed back, not omitted: this function
+            # replaces the whole file, so leaving it out would mean saving a
+            # personality silently stops the robot serving the person an operator
+            # configured -- with no message anywhere. The same reason :832 below
+            # already reads the profile back rather than dropping it.
+            existing = read_startup_settings(self._instance_path)
             write_startup_settings(
                 self._instance_path,
                 profile=selection,
                 voice=normalized_voice_override,
+                fallback_learner=existing.fallback_learner,
             )
             self._remove_persisted_env_values(LEGACY_STARTUP_ENV_NAMES)
             logger.info("Persisted startup personality settings to the instance directory")
@@ -829,7 +836,12 @@ class LocalStream:
             return
         try:
             existing = read_startup_settings(self._instance_path)
-            write_startup_settings(self._instance_path, profile=existing.profile, voice=voice)
+            write_startup_settings(
+                self._instance_path,
+                profile=existing.profile,
+                voice=voice,
+                fallback_learner=existing.fallback_learner,
+            )
         except Exception as e:
             logger.warning("Failed to persist startup voice: %s", log_safe(e))
 

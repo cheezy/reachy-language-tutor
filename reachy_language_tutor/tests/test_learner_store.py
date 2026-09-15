@@ -2257,6 +2257,20 @@ def unverified_inline_queries(source: str) -> list[str]:
         ):
             continue
 
+        # The consent-scope rebuild, read from a file for the same reason and exempted
+        # on the same terms: this exact zero-argument call and no other. It needs its
+        # OWN backing test rather than the schema one, because it legitimately does
+        # what that guard refuses -- a DROP, an INSERT..SELECT and a RENAME are the
+        # whole of a table rebuild. test_the_consent_migration_rebuilds_consents_and_
+        # nothing_else is what makes it safe.
+        if (
+            isinstance(argument, ast.Call)
+            and isinstance(argument.func, ast.Name)
+            and argument.func.id == "_consent_scope_migration_sql"
+            and not argument.args
+        ):
+            continue
+
         try:
             sql = _skeleton(argument, bindings)
         except _Unverifiable as refusal:
@@ -2912,8 +2926,8 @@ def test_every_statement_in_the_module_is_read_rather_than_skipped() -> None:
             # recurring red is to weaken the assertion.
             unreadable.append(ast.unparse(node.args[0]))
 
-    assert unreadable == ["_schema_sql()"], (
-        f"the bundled DDL should be the only statement the guard cannot read; got {unreadable}"
+    assert sorted(unreadable) == ["_consent_scope_migration_sql()", "_schema_sql()"], (
+        f"only the two bundled .sql files should be unreadable to the guard; got {unreadable}"
     )
 
 
@@ -3032,6 +3046,12 @@ def test_learner_id_is_the_first_argument() -> None:
 def test_package_exports_only_the_interface() -> None:
     """The package boundary must not leak the storage engine."""
     assert set(learners.__all__) == {
+        # The wording for the local_profile scope. Published because the operator
+        # command shows it before asking, and a notice a surface cannot reach is a
+        # notice nobody is shown.
+        "LOCAL_PROFILE_STATEMENT",
+        "LOCAL_PROFILE_STATEMENT_DIGESTS",
+        "LOCAL_PROFILE_STATEMENT_ID",
         "DRILL_KINDS",
         "DialogueTurn",
         "Drill",
@@ -4634,3 +4654,89 @@ def test_the_log_guard_refuses_an_annotated_assignment_that_hides_a_value() -> N
     assert verdicts("refusal: int = str(path)") == ["refusal: computed value"]
     assert verdicts("seeded: bool = False") == [], "a constant field default is still fine"
     assert verdicts("seeded: bool") == [], "a bare field declaration is still fine"
+
+
+# What the consent-scope rebuild is allowed to be, as an allow-list of whole
+# statements rather than a list of things it must not do. A rebuild legitimately
+# drops and renames, so the schema guard's "creates tables and nothing else" cannot
+# back it -- and a deny-list of dangerous verbs would be exactly the shape this
+# repository has been burned by four times.
+_PERMITTED_MIGRATION_SHAPES = (
+    # The transaction that makes the rebuild all-or-nothing. Without it a crash
+    # between the DROP and the RENAME destroys every consent record and the database
+    # still comes up ready -- reproduced by a review, which is why these two are on
+    # the list rather than merely tolerated.
+    "BEGIN",
+    "COMMIT",
+    # Recovers a database wedged by an interrupted run of the transactionless version.
+    "DROP TABLE IF EXISTS CONSENTS_MIGRATED",
+    "CREATE TABLE CONSENTS_MIGRATED",
+    "INSERT INTO CONSENTS_MIGRATED",
+    "DROP TABLE CONSENTS",
+    "ALTER TABLE CONSENTS_MIGRATED RENAME TO CONSENTS",
+    "CREATE INDEX IF NOT EXISTS IDX_CONSENTS_LEARNER_SCOPE ON CONSENTS",
+)
+
+
+def _migration_statements(sql: str) -> list[str]:
+    """The migration's statements, comments stripped, whitespace flattened."""
+    without_comments = "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
+    return [" ".join(statement.split()) for statement in without_comments.split(";") if statement.strip()]
+
+
+def _migration_statements_outside_the_allow_list(sql: str) -> list[str]:
+    """Statements the consent rebuild is not permitted to contain."""
+    return [
+        statement
+        for statement in _migration_statements(sql)
+        if not any(statement.upper().startswith(shape) for shape in _PERMITTED_MIGRATION_SHAPES)
+    ]
+
+
+def test_the_consent_migration_rebuilds_consents_and_nothing_else() -> None:
+    """What makes the second exemption safe, rather than merely narrow.
+
+    The migration reads its text from a file at runtime, so source reading cannot show
+    what it executes -- the same hole _schema_sql has, and it is backed the same way:
+    here, instead.
+
+    An allow-list of statement heads, because the thing to prove is not "it avoids the
+    dangerous verbs" but "it is a rebuild of consents and nothing more". A statement
+    touching learners, faceprints or lesson_results, or a CREATE VIEW laundering a
+    table name, is refused by not being on the list rather than by being spotted.
+    """
+    sql = (Path(store.__file__).resolve().parent / "consent_scopes.v5.sql").read_text(encoding="utf-8")
+
+    statements = _migration_statements(sql)
+    assert len(statements) == 8, f"the rebuild should be eight statements, got {len(statements)}: {statements}"
+    assert _migration_statements_outside_the_allow_list(sql) == []
+    # ALL-OR-NOTHING, pinned by position rather than by presence: a BEGIN that is not
+    # first, or a COMMIT that is not last, leaves part of the rebuild outside the
+    # transaction and is exactly the failure this is here to stop.
+    assert statements[0].upper() == "BEGIN", "the rebuild must open a transaction first"
+    assert statements[-1].upper() == "COMMIT", "the rebuild must commit last"
+    # And it names no other personal table, so the copy cannot reach anybody else's
+    # data. Checked over the STATEMENTS rather than the file, so the prose explaining
+    # the rebuild is free to mention the tables it does not touch.
+    body = " ".join(statements).upper()
+    assert body.count("LEARNERS") == 1, "the rebuild should name learners once, in the foreign key"
+    assert "REFERENCES LEARNERS(ID) ON DELETE CASCADE" in body, "the cascade must survive the rebuild"
+    for table in ("FACEPRINTS", "LESSON_RESULTS"):
+        assert table not in body, f"the consent rebuild names {table}"
+    assert "?" not in sql, "a migration takes no parameters"
+
+
+@pytest.mark.parametrize(
+    ("shape", "statement"),
+    [
+        ("a view", "CREATE VIEW all_consents AS SELECT * FROM consents;"),
+        ("a read of another table", "SELECT * FROM lesson_results;"),
+        ("a drop of the wrong table", "DROP TABLE learners;"),
+        ("a rename onto another table", "ALTER TABLE consents_migrated RENAME TO learners;"),
+    ],
+)
+def test_the_consent_migration_guard_rejects_what_it_claims_to(shape: str, statement: str) -> None:
+    """The backing guard, shown failing before it is trusted."""
+    sql = (Path(store.__file__).resolve().parent / "consent_scopes.v5.sql").read_text(encoding="utf-8")
+
+    assert _migration_statements_outside_the_allow_list(sql + "\n" + statement), f"{shape} was accepted"

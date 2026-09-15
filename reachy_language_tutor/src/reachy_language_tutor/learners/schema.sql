@@ -334,7 +334,8 @@ CREATE TABLE IF NOT EXISTS faceprints (
 
 -- One row per act of permission, and the table enrolment writes BEFORE it computes a
 -- faceprint. The ordering is not a convention here: the faceprints INSERT below draws
--- its rows FROM this table, so a faceprint for a learner with no consent row inserts
+-- its rows FROM this table filtered to 'face_recognition', so a faceprint for a
+-- learner with no STANDING FACE consent row inserts
 -- nothing at all. That is what makes an interrupted enrolment safe -- the state it can
 -- leave behind is "a learner who agreed and has no faceprint", never "a faceprint
 -- nobody agreed to".
@@ -360,9 +361,22 @@ CREATE TABLE IF NOT EXISTS faceprints (
 CREATE TABLE IF NOT EXISTS consents (
   id             INTEGER PRIMARY KEY,
   learner_id     TEXT    NOT NULL REFERENCES learners(id) ON DELETE CASCADE,
-  -- WHAT was agreed to, as a machine code. An allow-list of one today; widening it is
-  -- a decision somebody can be asked about rather than housekeeping.
-  scope          TEXT    NOT NULL CHECK (scope IN ('face_recognition')),
+  -- WHAT was agreed to, as a machine code, and an allow-list rather than free text:
+  -- widening it is a decision somebody can be asked about rather than housekeeping.
+  -- 'local_profile' is the second such decision -- keeping a learning record on this
+  -- device, with no face data and no camera -- and it exists because a household
+  -- declining face recognition could otherwise not be in this table at all, which
+  -- meant no profile and no way to use the app. The two are NOT interchangeable: the
+  -- faceprint gate below filters to 'face_recognition', so somebody who agreed only
+  -- to a learning record cannot be given a faceprint. There is no upgrade path:
+  -- record_consent always inserts a learner as well, so reusing an existing id is
+  -- refused by the learners primary key and omitting it quietly creates a SECOND
+  -- person. Measured; the mechanism is spelled out in models.py.
+  --
+  -- CHANGING THIS LIST NEEDS A MIGRATION, not just an edit. Re-running this script is
+  -- IF NOT EXISTS, so an altered CHECK never reaches a database that already exists.
+  -- store._widen_consent_scopes is what carries it, and it rebuilds this table.
+  scope          TEXT    NOT NULL CHECK (scope IN ('face_recognition', 'local_profile')),
   statement_id   TEXT    NOT NULL CHECK (statement_id IS NOT NULL
                                          AND length(trim(statement_id)) BETWEEN 1 AND 64
                                          AND statement_id NOT GLOB '*[^A-Za-z0-9._-]*'),

@@ -615,6 +615,15 @@ PERMITTED_IMPORTS = frozenset(
         "dataclasses",
         "reachy_language_tutor.faces",
         "reachy_language_tutor.learners",
+        # The configured fallback lives in an instance-local settings file, and this
+        # is the module that reads it. Admitted rather than worked around, and the
+        # admission is checked rather than asserted: an earlier version of this
+        # comment claimed startup_settings imports stdlib only, which is false -- it
+        # has a deferred import of config inside load_startup_settings_into_runtime.
+        # What is actually true, and what the test below pins, is that it pulls in no
+        # thread, no timer and no tool surface at module import, which is what this
+        # list exists to keep out.
+        "reachy_language_tutor.startup_settings",
     }
 )
 
@@ -678,3 +687,52 @@ def test_no_learner_id_reaches_a_log_on_any_path(
     )
     assert enrolled not in surface
     assert "Ana" not in surface
+
+
+# What the settings module may reach, since admitting it to PERMITTED_IMPORTS above
+# extends this file's guarantee to whatever it drags in.
+_SETTINGS_MAY_NOT_REACH = frozenset({"threading", "time", "asyncio", "sched", "concurrent", "signal", "subprocess"})
+
+
+def test_the_settings_module_brings_no_thread_or_timer_with_it() -> None:
+    """An allow-list entry is only as narrow as the module behind it.
+
+    current_learner is barred from `threading`, `time`, `asyncio` and `sched` so that
+    "recognition runs once, in the calling thread" is a property of the file. Letting
+    it import startup_settings would be a way round that if startup_settings imported
+    any of them -- so this checks the module rather than trusting the sentence in the
+    comment above, which was wrong the first time it was written.
+
+    It also pins the one import that sentence missed: config is imported INSIDE
+    load_startup_settings_into_runtime, a function current_learner never calls, so it
+    is not on the path this entry opens.
+    """
+    import reachy_language_tutor.startup_settings as startup_settings
+
+    tree = ast.parse(Path(startup_settings.__file__).read_text(encoding="utf-8"))
+
+    at_module_level = {
+        node.module.split(".")[0] if isinstance(node, ast.ImportFrom) and node.module else alias.name.split(".")[0]
+        for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    }
+    assert at_module_level, "no module-level imports found, so this scan proves nothing"
+    assert at_module_level & _SETTINGS_MAY_NOT_REACH == set(), (
+        f"the settings module reaches a scheduler at import: {sorted(at_module_level & _SETTINGS_MAY_NOT_REACH)}"
+    )
+
+    # Deferred imports too: a function-level `import threading` would be just as
+    # reachable from the function current_learner does call.
+    everywhere = {
+        node.module.split(".")[0] if isinstance(node, ast.ImportFrom) and node.module else alias.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    }
+    assert everywhere & _SETTINGS_MAY_NOT_REACH == set(), (
+        f"the settings module reaches a scheduler: {sorted(everywhere & _SETTINGS_MAY_NOT_REACH)}"
+    )
+    # The deferred config import is real and is named here so its absence from the
+    # module-level set is not read as its absence from the file.
+    assert "reachy_language_tutor" in everywhere or "config" in everywhere

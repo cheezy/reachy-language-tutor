@@ -78,9 +78,12 @@ logger = logging.getLogger(__name__)
 # Bumped when schema.sql gains a statement. _apply_schema re-runs the whole script on
 # any database below this number, and every statement there is IF NOT EXISTS, so the
 # bump is what carries a new TABLE out to a robot that already has a database. It
-# cannot carry a new COLUMN on an existing table -- see the note in schema.sql.
-# Version 2 added the lesson-content tables; version 3 added faceprints.
-SCHEMA_VERSION = 4
+# cannot carry a new COLUMN, or a changed CHECK, on an existing table -- see the note
+# in schema.sql. Where that is needed, a migration runs beside the script.
+# Version 2 added the lesson-content tables; version 3 added faceprints; version 4
+# added consents; version 5 widened the consent scope allow-list, which IS a changed
+# CHECK and so is the first version to need a migration rather than only a re-run.
+SCHEMA_VERSION = 5
 # Bumped when the seed data changes -- including the converted lessons in
 # converted_lessons.json, whose bytes are part of the fingerprint a test pins to this
 # number. Version 3 gave every seeded lesson a provenance row; version 4 replaced the
@@ -609,6 +612,11 @@ def _converted_lessons() -> tuple[Any, ...]:
     return tuple(lesson for course in _converted_courses() for lesson in course["lessons"])
 
 
+def _consent_scope_migration_sql() -> str:
+    """Read the bundled consent-scope rebuild, beside the schema it amends."""
+    return (Path(__file__).resolve().parent / "consent_scopes.v5.sql").read_text(encoding="utf-8")
+
+
 def _schema_sql() -> str:
     """Read the bundled DDL.
 
@@ -733,11 +741,67 @@ def _restrict_permissions(path: Path) -> None:
             )
 
 
+def _widen_consent_scopes(connection: sqlite3.Connection) -> bool:
+    """Rebuild consents so its scope CHECK admits local_profile. True if it ran.
+
+    THE FIRST MIGRATION IN THIS MODULE, and it exists because re-running schema.sql
+    cannot do this. Every statement there is IF NOT EXISTS, which carries a new TABLE
+    to a robot that already has a database and carries nothing at all to one that
+    exists -- so a widened CHECK would reach fresh installs only, and a household
+    that upgraded would be told their consent was rejected by the database with no
+    way to tell why.
+
+    SQLite's own documented table-rebuild, in the order its docs give: create the
+    replacement, copy, drop, rename, recreate the index. Foreign keys are handled by
+    the caller, which turns them off around this -- the pragma is a no-op inside a
+    transaction, which is exactly the mistake this comment exists to stop somebody
+    making when they move it.
+
+    Driven by what the table actually says rather than by a version number, so a
+    database at any version converges on the same shape and running it twice is a
+    no-op. The rows are consent records about people: they are copied column for
+    column, never regenerated, and the ids come with them.
+    """
+    row = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'consents'").fetchone()
+    if row is None:
+        # No table yet. The script about to run creates it with the new CHECK.
+        return False
+    existing = str(row[0])
+    if "local_profile" in existing:
+        return False
+
+    connection.executescript(_consent_scope_migration_sql())
+    # Counts only, and only that it happened: a migration touching consent rows is
+    # worth saying out loud, and who they belong to is not.
+    logger.info("The consent table was rebuilt to widen what a household member may agree to")
+    return True
+
+
 def _apply_schema(connection: sqlite3.Connection) -> bool:
     """Apply the DDL when the database predates the current schema version."""
     current: int = int(connection.execute("PRAGMA user_version").fetchone()[0])
     if current >= SCHEMA_VERSION:
         return False
+
+    # BEFORE the script, and outside any transaction. SQLite's rebuild procedure
+    # requires foreign_keys off, and the pragma is silently a no-op inside a
+    # transaction -- so this runs here, where nothing has begun one, rather than
+    # anywhere that reads more conveniently.
+    connection.execute("PRAGMA foreign_keys = OFF")
+    try:
+        _widen_consent_scopes(connection)
+    finally:
+        # ROLL BACK FIRST, and this order is the whole point. A script that raises
+        # part-way leaves the connection inside the transaction its BEGIN opened,
+        # and PRAGMA foreign_keys is silently a no-op in a transaction -- measured,
+        # the restore below then left foreign_keys at 0, which is the exact trap
+        # _widen_consent_scopes' own docstring warns about, sprung in the one place
+        # a finally exists for. Today the damage is contained by the caller closing
+        # the handle, but that containment is incidental, and foreign keys being on
+        # is what the erasure cascade depends on.
+        if connection.in_transaction:
+            connection.rollback()
+        connection.execute("PRAGMA foreign_keys = ON")
 
     connection.executescript(_schema_sql())
     # Pragmas cannot take bound parameters, so this is the one unavoidable
@@ -3430,7 +3494,9 @@ def record_consent(
     person was told and who said yes. That is the ordering guarantee stated as a type
     rather than as a convention: this module publishes no create-learner function, so
     "a learner exists and nobody agreed to anything" is not a state its surface can
-    produce. The faceprint writer then refuses anybody with no consent row, which
+    produce. The faceprint writer then refuses anybody with no standing
+    face_recognition consent row -- the SCOPE matters, and a local_profile yes does
+    not satisfy it -- which
     closes the other direction.
 
     Both rows go in under one transaction opened with BEGIN IMMEDIATE, so a second

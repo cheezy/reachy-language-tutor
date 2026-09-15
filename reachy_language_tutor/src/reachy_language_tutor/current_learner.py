@@ -38,6 +38,37 @@ below: while the threshold is unmeasured no identity is ever set from recognitio
 there is no identity to go stale. Solving re-identification is a precondition for
 flipping THRESHOLD_CALIBRATED, and it is recorded beside that flag.
 
+WHEN RECOGNITION CANNOT ANSWER, there is a configured fallback, and the shape of it
+is the whole point. The obvious implementation -- the robot asks "who is practising?",
+the person says a name, the model passes it to a tool -- is precisely the breach this
+codebase is built to prevent, and no amount of confirmation makes a spoken name into
+authentication. So the selection happens somewhere the conversation cannot reach: an
+instance-local settings file, written by an operator with the device or by the
+settings UI, read once at startup.
+
+WHY THAT IS OUT OF REACH, as a list of facts rather than an assurance. No tool takes
+a learner id or a name; PERMITTED_TOOL_PARAMETERS is an allow-list with nothing
+identity-shaped in it, and W16 shrank it rather than growing it. No tool takes a file
+path. No module under tools/ imports this one or startup_settings, and the tool
+import closure is checked by test. So the model has no route to the value, and what
+it says cannot influence it -- which is the only security property the fallback
+actually has.
+
+THE SCOPE OF THAT, precisely, because a boundary described too widely is one somebody
+later relies on where it does not hold: every one of those checks is a CI-time check
+over the tools in THIS repository. Nothing validates a tool's parameters as it loads,
+so a tool from config.TOOLS_DIRECTORY or a remote Space is outside all of it. The
+claim is "no tool in this repository can reach the identity", not "no tool can".
+
+WHAT IT IS WORTH, said plainly because it is weaker than recognition and must never
+be mistaken for it. It is a configuration, not a check. It does not establish who is
+present. In a one-person household it is exactly right and gives nothing away, since
+there is no second profile to reach. In a household with more than one learner it is
+WRONG BY CONSTRUCTION -- whoever sits down is served the configured person's lessons
+and progress -- and the app cannot detect that, so such a household needs recognition
+and this setting left unset. That is the honest answer plan.md anticipated, written
+down rather than dressed up as something stronger. _fall_back carries the rest.
+
 IF THE PERSON BEING SERVED IS ERASED MID-SESSION, the decision is to do nothing to
 the running process, and it is a decision rather than an omission. ToolDependencies
 is sealed, so the id stays until the bundle is rebuilt -- and a stale id reaches
@@ -109,6 +140,7 @@ RECOGNITION_DISPOSITIONS: tuple[str, ...] = (
     "too_close_to_call",
     "not_recognised",
     "declined_uncalibrated",
+    "configured_fallback",
 )
 
 # Upstream vocabularies mapped through verbatim, so a reason added to any of them
@@ -181,6 +213,30 @@ def _development_override() -> str | None:
     return named or None
 
 
+def _configured_fallback(instance_path: Any) -> str | None:
+    """Return the learner an operator configured to serve when recognition cannot.
+
+    WHERE IT COMES FROM, AND WHY THAT IS THE SAFE PLACE. An instance-local settings
+    file, written by an operator at the device or by the app's settings UI. The
+    conversation cannot reach it: no tool takes a path, no tool takes an identity,
+    PERMITTED_TOOL_PARAMETERS contains nothing identity-shaped, and no tool imports
+    this module. The value is read once, at startup, in the resolver -- never at
+    conversation time, because an identity a running conversation can influence is
+    not an identity boundary.
+
+    Never raises. An unreadable or malformed settings file must not brick a robot in
+    somebody's home; it means no fallback, which serves nobody.
+    """
+    try:
+        from reachy_language_tutor.startup_settings import read_startup_settings
+
+        return read_startup_settings(instance_path).fallback_learner
+    except Exception as exc:
+        # The type only. This value IS a learner id.
+        logger.warning("Could not read the configured fallback learner: %s", type(exc).__name__)
+        return None
+
+
 def recognise_current_learner(
     *,
     media: Any | None,
@@ -199,7 +255,10 @@ def recognise_current_learner(
     change the outcome for the same input rather than switching a feature on.
     """
     try:
-        return _recognise(media=media, camera_enabled=camera_enabled, instance_path=instance_path)
+        outcome = _recognise(media=media, camera_enabled=camera_enabled, instance_path=instance_path)
+        if outcome.learner_id is not None:
+            return outcome
+        return _fall_back(outcome, instance_path=instance_path)
     except Exception as exc:
         # THE CLAIM ABOVE, MADE TRUE. It said "never raises" and the function had no
         # try/except at all -- startup survived only because main's resolver wraps
@@ -209,7 +268,73 @@ def recognise_current_learner(
         # unguarded raise. The type only, never a value: this module handles a
         # person's identity.
         logger.warning("Recognition failed and the app is serving nobody: %s", type(exc).__name__)
-        return RecognitionOutcome(None, "recognition_unavailable")
+        return _fall_back(RecognitionOutcome(None, "recognition_unavailable"), instance_path=instance_path)
+
+
+def _fall_back(answered_nobody: RecognitionOutcome, *, instance_path: Any) -> RecognitionOutcome:
+    """Serve the configured learner when recognition named nobody, or pass the answer on.
+
+    ONE SEAM FOR EVERY NOBODY. Recognition has a dozen ways to answer nobody -- no
+    camera, no face, several faces, a store it could not read, an exception -- and a
+    household whose camera is covered deserves the same answer as one whose robot is
+    in shadow. Putting this above _recognise rather than inside it means a branch
+    added there is covered by construction rather than by remembering.
+
+    WHAT THIS IS WORTH, STATED PLAINLY BECAUSE IT IS WEAKER THAN WHAT IT REPLACES.
+    It is a configuration, not authentication, and no confirmation step could make it
+    one. It does not establish who is in front of the robot; it says who the operator
+    decided to serve when the robot cannot tell. In a one-person household that is
+    exactly right and costs nothing, because there is no other profile to reach. In a
+    household with more than one learner it is WRONG by construction: whoever sits
+    down is served the configured person's lessons and progress, and the app cannot
+    detect that. Such a household needs recognition, and this setting left unset.
+
+    WHAT IT DOES NOT PROTECT AGAINST, so nobody mistakes the disposition for a check:
+    it does not prove presence, it does not prove consent at the moment of use, and
+    it does not distinguish two members of the same family. It protects exactly one
+    thing -- that the identity did not come from anything anybody SAID -- because the
+    value is a file on disk and no tool takes a path or an identity.
+
+    AND THE PRECISION MATTERS IN A PARAGRAPH ABOUT NOT OVERCLAIMING. That holds for
+    every tool in this repository, checked over the whole tool import closure by
+    test. It is a CI-time check over merged code, not a runtime one: the allow-list
+    lives in the test suite, nothing validates a tool's parameters as it loads, and a
+    tool loaded from config.TOOLS_DIRECTORY or a remote Space is outside what any of
+    it has seen. So the honest form is "no tool in this repository can reach it",
+    which is what was meant and not what an earlier draft said.
+
+    The one thing this never does is invent an identity: with nothing configured, the
+    original answer passes through untouched, id and disposition both.
+    """
+    # NOT GATED ON THRESHOLD_CALIBRATED, and the first version of this function was.
+    # The reasoning that put it there sounds right and is wrong. That gate exists
+    # because an unmeasured threshold cannot be trusted to tell two people APART, so
+    # it withholds a match that might be the wrong person. This path makes no match:
+    # it serves whoever an operator named, and no threshold participates. Gating it
+    # would have made the feature dead on arrival -- the flag is false today -- and
+    # the household this exists for is precisely the one that declined face
+    # recognition and will never flip it. Requiring a face-matching measurement
+    # before a household with no faces can use the robot is the opposite of the
+    # point.
+    #
+    # What stands in for the gate is that nothing here is automatic: unset, this
+    # returns the original answer and the app serves nobody. Somebody with the device
+    # has to name a learner, and is told at that moment what it does not protect.
+    configured = _configured_fallback(instance_path)
+    if configured is None:
+        return answered_nobody
+
+    # WARNING, not INFO, and it says which path won. An operator reading a log must
+    # never mistake a configured fallback for a recognition. The disposition carries
+    # it too, so the distinction survives into anything that switches on the outcome
+    # rather than living only in prose. No id: this line is about a person.
+    logger.warning(
+        "Recognition answered nobody (%s), so the app is serving the learner configured "
+        "as the fallback. This is a setting, not a recognition: it does not establish "
+        "who is present.",
+        answered_nobody.disposition,
+    )
+    return RecognitionOutcome(configured, "configured_fallback")
 
 
 def _recognise(*, media: Any | None, camera_enabled: bool, instance_path: Any) -> RecognitionOutcome:

@@ -981,7 +981,7 @@ Who, to what, and when — in a form a person can be shown later.
 
 | column | meaning |
 |---|---|
-| `scope` | What was agreed to. `face_recognition` is the only value today; the column is an allow-list so that widening it is a decision somebody makes deliberately. |
+| `scope` | What was agreed to: `face_recognition`, or `local_profile` for a learning record with no face data. The column is an allow-list so that widening it is a decision somebody makes deliberately, and adding the second one took a schema migration. |
 | `statement_id` | Which wording, as a version id. |
 | `statement_text` | The wording **itself**, as it stood on the day. Stored as well as identified, deliberately: an id alone would let a later edit to the constant silently rewrite what a household was told, and the record would then answer a question about today rather than about that day. |
 | `granted_by` | `the_person_themselves` or `an_adult_of_the_household` — a **role**, never a second person's name. Recording which adult would store personal data about somebody who is not a learner here and was never asked. |
@@ -1040,6 +1040,99 @@ pages sit in the write-ahead log while the main file still holds the display nam
 
 Erasing a household member who has actually used the robot is a different promise with a
 different surface, and this is not it.
+
+## Serving somebody when recognition cannot say who
+
+plan.md asks what happens when the camera is covered, the room is dark, or a
+household declines face recognition altogether. The answer is a **configured
+fallback**, and the shape of it matters more than the feature.
+
+**The trap, named first.** The natural implementation — the robot asks "who is
+practising?", the person says a name, the model passes it to a tool — is precisely the
+breach this codebase is built to prevent. A spoken name is not authentication, and no
+confirmation step makes it one. So the selection happens somewhere the conversation
+cannot reach.
+
+**Where it lives.** `startup_settings.json`, in the instance directory, written by an
+operator at the device (`enrol --serve-when-unrecognised LEARNER_ID`) or by the
+settings UI, and read once at startup by `current_learner.py`.
+
+**Why the conversation cannot reach it**, as facts rather than assurance:
+
+- no tool takes a learner id or a name — `PERMITTED_TOOL_PARAMETERS` is an allow-list
+  with nothing identity-shaped in it, and W16 shrank it rather than growing it;
+- no tool takes a file path;
+- no module under `tools/` imports `startup_settings` or `current_learner`, checked
+  over the whole tool import closure by test;
+- the value is read at startup, never at conversation time.
+
+**What it is worth, plainly.** It is a configuration, not a check. It does not
+establish who is present. In a one-person household it is exactly right and gives
+nothing away, because there is no second profile to reach. In a household with more
+than one learner it is **wrong by construction** — whoever sits down is served the
+configured person's lessons and progress — and the app cannot detect that. Such a
+household needs recognition and this setting left unset. The operator is told this at
+the moment they configure it, not only in `--help`.
+
+**It is visible.** The disposition is `configured_fallback`, logged at WARNING, so a
+setting is never mistaken for a recognition by an operator reading a log or by
+anything switching on the outcome.
+
+**The scope of "the conversation cannot reach it", precisely.** Every one of those
+checks is a CI-time check over the tools in this repository. Nothing validates a
+tool's parameters as it loads, so a tool from `TOOLS_DIRECTORY` or a remote Space is
+outside all of it. The claim is *no tool in this repository can reach the identity* —
+not *no tool can*.
+
+**Settings are written whole, so every writer passes every field.** The settings UI
+saves profile and voice; both of its writers read the fallback back and pass it
+through. They did not at first, which meant changing the voice silently stopped the
+robot serving the configured person, with no message anywhere — a test now exercises
+both UI writers rather than the settings function they call, because it was the
+callers that were wrong.
+
+**It is not gated on `THRESHOLD_CALIBRATED`, and the first version was.** That gate
+exists because an unmeasured threshold cannot be trusted to tell two people *apart*.
+This path tells nobody apart — it serves whoever an operator named — so the gate does
+not apply, and applying it made the feature dead on arrival for precisely the
+household it exists for: the one that declined face recognition and will never flip
+that flag.
+
+### Being in the database without being recognised
+
+Before this, a household that declined face recognition could not be in the database
+**at all**: the only way to create a learner is `record_consent`, and the only thing
+to consent to was face recognition. Declining meant no profile and no way to use the
+app, which is the opposite of what an opt-in is for.
+
+`CONSENT_SCOPES` therefore has a second entry, `local_profile` — keeping a learning
+record on this device, with no camera and no face data — and its own notice, because
+showing somebody the face-recognition wording and storing their yes under a different
+scope would make the stored `statement_text` a false record of what they were
+promised. `enrol --name X --consent-from Y --without-face` registers somebody that way
+and never opens the camera.
+
+**The two scopes are not interchangeable, and the database enforces it.** The faceprint
+insert selects its rows from `consents` filtered to `face_recognition`, so somebody who
+agreed only to a learning record cannot be given a faceprint.
+
+**There is no upgrade path, and that is a real limitation.** An earlier draft of this
+section said such a person could be given a faceprint "after a second, separate yes".
+Measured, that does not work: `record_consent` is the only way to write a consent row
+and it always inserts a *new* learner, so a second yes for an existing person fails on
+the primary key. Adding face recognition later means registering them again and losing
+their history. Written down rather than left for the next person to discover.
+
+**This needed the first migration in the module.** Widening the scope list is a changed
+`CHECK`, and re-running `schema.sql` cannot deliver one: every statement there is
+`IF NOT EXISTS`, so an altered constraint reaches fresh installs and no robot that
+already has a database. `consent_scopes.v5.sql` rebuilds the table by SQLite's own
+documented procedure, copying consent rows column for column so what each person
+agreed to and when survives unchanged. Three tests cover it, and no single one covers all of
+it: one reconstructs the v4 shape, confirms it refuses the new scope, upgrades and
+checks the rows; a second forces the v4 shape and then checks the `ON DELETE CASCADE`
+that erasure depends on, on the rebuilt table; a third abandons the rebuild partway
+and checks nothing was lost.
 
 ## Forgetting a household member
 

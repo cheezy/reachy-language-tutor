@@ -450,7 +450,9 @@ def capture_faceprint(
     """Phase two: look at the person and store their faceprint. Consent must already exist.
 
     It does not verify that it does, and that is deliberate rather than an omission:
-    the store refuses a faceprint for a learner with no consent row, so a check here
+    the store refuses a faceprint for a learner with no standing face_recognition
+    consent row -- any consent row is NOT enough, and the scope is what the statement
+    filters on -- so a check here
     would be a second opinion about a decision that has already been made somewhere it
     cannot be bypassed. If consent is missing this returns `faceprint_not_stored`,
     which is the truth -- nothing was stored.

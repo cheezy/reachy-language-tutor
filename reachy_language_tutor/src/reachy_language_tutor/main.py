@@ -63,6 +63,10 @@ _DISPOSITION_LEVEL: dict[str, int] = {
     "no_one_close_enough": logging.INFO,
     "too_close_to_call": logging.INFO,
     "not_recognised": logging.INFO,
+    # WARNING, and for the same reason as override: the app is serving somebody on a
+    # weaker basis than recognition, and an operator must be able to see which path
+    # set the identity rather than infer it from silence.
+    "configured_fallback": logging.WARNING,
 }
 
 
@@ -254,9 +258,12 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
     """
     from reachy_language_tutor.faces import enrol, consent_statement
     from reachy_language_tutor.learners import (
+        LOCAL_PROFILE_STATEMENT,
+        LOCAL_PROFILE_STATEMENT_ID,
         get_profile,
         get_consents,
         forget_learner,
+        record_consent,
         delete_faceprint,
         store_is_available,
         forget_learner_entirely,
@@ -266,6 +273,7 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
     # package boundary, which deliberately publishes neither -- the same import run()
     # already makes below, for the same reason.
     from reachy_language_tutor.learners.store import ensure_learner_database, learner_db_path_for_instance
+    from reachy_language_tutor.startup_settings import set_fallback_learner
 
     instance_path = args.instance_path
     database = learner_db_path_for_instance(instance_path)
@@ -376,6 +384,27 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
         print("  Their record of having agreed is kept, so there is still an answer to what was agreed and when.")
         return 0
 
+    if getattr(args, "clear_fallback_learner", False):
+        # Clearing needs no learner to exist, so it is handled before any lookup: an
+        # operator undoing this after the person was forgotten must not be told
+        # "no such learner" and left with the setting still in place.
+        set_fallback_learner(instance_path, None)
+        print("Cleared. When recognition cannot name anybody, the app will serve nobody.")
+        return 0
+
+    if getattr(args, "fallback_learner_id", None) is not None:
+        profile = _named_learner(args.fallback_learner_id)
+        if profile is None:
+            return 1
+        set_fallback_learner(instance_path, args.fallback_learner_id)
+        print(f"When recognition cannot name anybody, the app will serve {profile.display_name}.")
+        # SAID AT THE MOMENT OF CONFIGURING IT, not buried in --help. An operator who
+        # sets this in a shared home has made a mistake the app cannot detect later.
+        print("  This is a setting, not a check. It does not establish who is present.")
+        print("  In a home where more than one person uses the robot, it will serve")
+        print("  this person to whoever sits down -- use recognition there instead.")
+        return 0
+
     if args.show_learner is not None:
         profile = _named_learner(args.show_learner)
         if profile is None:
@@ -412,7 +441,11 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
     ensure_learner_database(instance_path)
 
     print()
-    print(consent_statement())
+    # THE WORDING MATCHES WHAT IS BEING AGREED TO. A person registering without a
+    # face must not be shown the face-recognition notice: the stored statement_text
+    # is the evidence of what they were promised, so showing one and storing the
+    # other would make that evidence false.
+    print(LOCAL_PROFILE_STATEMENT if getattr(args, "without_face", False) else consent_statement())
     print()
     # A typed word, never a bare [y/N]. A default that means yes is not consent, and
     # the Cadillac Fairview finding docs/plan.md cites was about consent that was
@@ -421,6 +454,36 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
     if answer != "yes":
         print("Nothing was recorded.")
         return 2
+
+    if getattr(args, "without_face", False):
+        # NO CAMERA IS OPENED ON THIS PATH, which is the whole point rather than an
+        # optimisation: a person declining face recognition should not have a camera
+        # switched on to register them. record_consent is what creates the learner,
+        # so the scope it writes is the only thing that differs from the path below.
+        #
+        # The consent is deliberately NOT face_recognition, and the database enforces
+        # the difference: the faceprint insert selects from consents filtered to that
+        # scope, so this person cannot be given a faceprint at all. There is no
+        # upgrade path -- adding face recognition later means registering them again
+        # as a separate person, and their history does not come with them. The
+        # measured mechanism is in learners/models.py.
+        agreed = record_consent(
+            args.enrol_name,
+            scope="local_profile",
+            statement_id=LOCAL_PROFILE_STATEMENT_ID,
+            statement_text=LOCAL_PROFILE_STATEMENT,
+            granted_by=granted_by,
+            granted_via="operator_at_the_robot",
+            instance_path=instance_path,
+        )
+        if not agreed.recorded or agreed.learner_id is None:
+            print(f"Nothing was recorded ({agreed.reason}).")
+            return 1
+        print(f"Registered {args.enrol_name} with a learning record and no face data.")
+        print(f"  learner id: {agreed.learner_id}")
+        print("  To have the app serve them when recognition cannot name anybody:")
+        print(f"    enrol --serve-when-unrecognised {agreed.learner_id}")
+        return 0
 
     robot = None
     try:

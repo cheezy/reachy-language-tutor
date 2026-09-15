@@ -817,8 +817,10 @@ def test_the_schema_version_moved_with_the_schema() -> None:
     # table is how a structural check starts reporting on its own documentation.
     tables = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", re.sub(r"--[^\n]*", " ", schema))
 
-    assert store.SCHEMA_VERSION == 4, (
-        "version 2 added lesson content; version 3 added faceprints; version 4 added consents"
+    assert store.SCHEMA_VERSION == 5, (
+        "version 2 added lesson content; version 3 added faceprints; version 4 added consents; "
+        "version 5 widened the consent scope allow-list, which is a changed CHECK rather than a "
+        "new table and so is the first version to need a migration beside the re-run"
     )
     assert sorted(tables) == [
         "consents",

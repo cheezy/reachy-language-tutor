@@ -126,6 +126,40 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
         metavar="LEARNER_ID",
         help="Erase this person completely: faceprint, agreement, lesson history and their record.",
     )
+    # WHO THE ROBOT SERVES WHEN RECOGNITION CANNOT SAY. An operator flag, writing an
+    # instance-local settings file, and that placement IS the security property: the
+    # conversation has no tool that takes a path and none that takes an identity, so
+    # a spoken name can never reach this. It is a configuration rather than an
+    # authentication, and the help text says so rather than letting the flag imply
+    # more than it does.
+    # THE HOUSEHOLD THAT DECLINES FACE RECOGNITION, which could not otherwise be in
+    # the database at all: the only way to create a learner is to consent to
+    # something, and the only thing to consent to was face recognition. Declining
+    # meant no profile and no way to use the app, which is the opposite of what an
+    # opt-in is for. This records the other scope and never opens the camera.
+    enrol_parser.add_argument(
+        "--without-face",
+        dest="without_face",
+        action="store_true",
+        help="Register this person with a learning record only. No camera, no face data.",
+    )
+    enrol_parser.add_argument(
+        "--serve-when-unrecognised",
+        dest="fallback_learner_id",
+        default=None,
+        metavar="LEARNER_ID",
+        help=(
+            "Serve this learner when recognition cannot name anybody. A setting, not a check: "
+            "in a home where more than one person uses the robot it will serve this person to "
+            "whoever sits down, so use recognition there instead."
+        ),
+    )
+    enrol_parser.add_argument(
+        "--serve-nobody-when-unrecognised",
+        dest="clear_fallback_learner",
+        action="store_true",
+        help="Clear the fallback, so the app serves nobody when recognition cannot name anybody.",
+    )
     enrol_parser.add_argument(
         "--instance-path",
         dest="instance_path",
