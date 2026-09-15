@@ -248,8 +248,9 @@ cd ~/dev/reachy/learn_language/reachy_language_tutor
 
 - Web UI: **http://127.0.0.1:7860/**
 - `--no-camera` because a **standalone SDK script** gets no camera in simulation — not because
-  mockup-sim lacks one. The daemon there does open the Mac's webcam, and as of D24 deadlocks
-  while serving it (Troubleshooting, the 8443 timeout)
+  mockup-sim lacks one. The daemon there does open the Mac's webcam. D24 recorded that path as
+  deadlocking while serving it; W27 measured it working, and found the deadlock is conditional
+  rather than permanent (Troubleshooting, the 8443 timeout)
 - `--debug` for verbose logging, and the only way to get the conversation's actual
   words into the log. Without it the log records that a turn happened and how long
   it was (`role=user content=str(len=32)`) but not what was said, so a log captured
@@ -561,13 +562,54 @@ under development here was not even running. Do not add a workaround to this rep
 environmental fault in a dependency — that was D22's finding and D24 confirms it at the level of
 mechanism.
 
-**What it costs us.** Milestone 4 (face recognition) wants camera frames. Until this is fixed
-upstream, the daemon's camera path on this Mac is unusable: `/tmp/reachymini_camera_socket` is
-not a source you can build on, and neither is the daemon's own face detection. The
-`face_target` block on `/api/daemon/status` still answers, but three polls in this state all
-returned `{"detected": false, "x": null, "y": null, "roll": null, "ts": null}` — a null `ts`, so
-nothing has ever been detected. (Nobody was deliberately in frame, so that is consistent with
-starvation rather than proof of it.) Prototype against a camera directly instead.
+**What it costs us.** Milestone 4 (face recognition) wants camera frames. D24 concluded the
+daemon's camera path on this Mac was unusable and that one should "prototype against a camera
+directly instead". **W27 measured otherwise on 2026-09-14, and that verdict is withdrawn — the
+mechanism below stands, but it is conditional rather than permanent.** What was measured, against
+the desktop app running `--mockup-sim`, with `/api/media/status` reporting
+`{"available":true,"released":false}`:
+
+Both reads were measured, because both are used: `media.get_frame()` is what `faces/capture.py`
+calls for a raw BGR array, and `media.get_frame_jpeg()` is what the `camera` tool calls for the
+LLM's vision input. They behave identically, which is why they carry the same attempt budget.
+
+| Measured | `get_frame()` | `get_frame_jpeg()` |
+|---|---|---|
+| one read, cold | `(720, 1280, 3)` `uint8` BGR, in 0.00s | ~250 KB of JPEG |
+| 10 reads back to back | 3 / 10 | 3 / 10 |
+| 6 reads at 0.05s spacing | 4–5 / 6 (two runs; this is the jittery boundary) | 5 / 6 |
+| 6 reads at 0.10s spacing | **6 / 6** | **6 / 6** |
+| 18 reads at ≥ 0.10s spacing | **18 / 18** | **18 / 18** |
+
+So the path works, and `(720, 1280, 3)` `uint8` is exactly what `faces/embedding.py` consumes.
+
+**Two traps, both of which produce D24's symptom.** Knowing them is what turns that entry from a
+dead end into a procedure:
+
+1. **A `None` frame usually means "too early", not "no camera".** `get_frame()` waits 20ms for a
+   sample and the camera produces one every ~33ms at 30fps, so a read issued straight after a
+   successful one misses by construction. Only `media.camera is None` means there is no camera.
+   `faces/capture.py` is the module that tells those apart; do not re-derive the check.
+2. **`ReachyMini(media_backend="no_media")` against a live daemon RELEASES the daemon's media.**
+   Measured before/after: `/api/media/status` went `{"available":true,"released":false}` →
+   `{"available":false,"released":true}` and stayed there. This is the trap, because
+   `is_local_camera_available()` is a test for `/tmp/reachymini_camera_socket`, and once media is
+   released that socket goes away — so the *next* `media_backend="default"` auto-detects **WebRTC
+   instead of LOCAL**, and the WebRTC branch is the one that deadlocks on `ws://localhost:8443`
+   (observed again in W27: blocked until killed). A headless script run earlier in a session is
+   therefore enough to make the camera look permanently broken for everything after it.
+
+   Recover with `curl -X POST http://localhost:8000/api/media/acquire`, which restored
+   `{"available":true,"released":false}` both times it was needed.
+
+So: pin `media_backend="local"` in any probe script, never use `"no_media"` against a running
+desktop app, and check `/api/media/status` before concluding the camera is dead.
+
+The daemon's own face detection was not re-tested. The `face_target` block on
+`/api/daemon/status` still answered `{"detected": false, ..., "ts": null}` in D24's state — a null
+`ts`, so nothing had ever been detected. (Nobody was deliberately in frame, so that is consistent
+with starvation rather than proof of it.) Nothing in this app uses `face_target`; it reads frames
+itself.
 
 Which camera is worth knowing, because D22 recorded only one and there are **two**. Measured in
 D24 with `system_profiler SPCameraDataType` and GStreamer's device monitor, which agree:
@@ -580,6 +622,30 @@ D24 with `system_profiler SPCameraDataType` and GStreamer's device monitor, whic
 This machine has **no built-in FaceTime camera**, so those two are the whole inventory. Whether
 the daemon holds the USB webcam *exclusively* while it runs was **not** tested, so do not assume
 you can open it alongside the daemon — try it, and fall back to stopping the daemon first.
+
+#### Who owns the camera, and where it is released
+
+Worth writing down because it is the answer to "is the camera held open between frame grabs?" —
+and because the obvious place to release it is the wrong one.
+
+The **daemon** owns the physical camera. This app never opens a webcam; it reads frames off the
+daemon through the single `ReachyMini` handle built in `main.py` (or handed in by the daemon when
+the app runs under it). That handle is closed **exactly once**, in `run`'s shutdown `finally`,
+via `robot.media.close()`.
+
+`faces/capture.py` therefore holds nothing open between requests **because it opens nothing** — it
+borrows the handle, calls `get_frame()`, and returns. It deliberately does not close or release
+anything, and that is not an oversight:
+
+- `MediaManager.close()` closes the **audio** device as well as the camera, and that audio device
+  is the tutor's voice. A frame grab that released it would mute the lesson mid-sentence.
+- `ReachyMini.release_media()` is the daemon-level release behind `POST /api/media/release`.
+  Calling it per frame would tear down and rebuild audio on every recognition attempt — and, per
+  the trap above, would leave the next auto-detect resolving to the WebRTC path.
+
+Both halves are tested rather than asserted here: one test pins `get_frame` as the *only* method
+`capture.py` may call on the handle, and another reads `main.py` structurally to confirm the one
+real release is still in its shutdown `finally`.
 
 #### Negative results, recorded so nobody re-checks them
 

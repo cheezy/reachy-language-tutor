@@ -385,6 +385,21 @@ _PERMITTED_CALLS = frozenset(
         # this package's own
         "MatchOutcome", "_cosine_similarity", "_is_usable",
         "load_face_models", "loaded_face_models",
+        # capture.py, added deliberately when the frame source arrived. Each of these
+        # reads or decides; none of them can put bytes anywhere.
+        #   get_frame -- the SDK read itself. It RETURNS a frame and takes no
+        #     destination, and test_face_capture pins it as the only method capture.py
+        #     is allowed to call on the media handle at all.
+        #   getattr   -- reads `camera` off the handle to tell "no camera" from "no
+        #     frame yet". A getattr used to REACH a writer does not slip through here:
+        #     `getattr(f, "write")(...)` is a Call whose func is a Call, so the guard
+        #     records it as `None` and reports it.
+        #   debug     -- the only log level this module uses; what may be PASSED to it
+        #     is constrained separately by the log-shape allow-list below.
+        #   object, range, ValueError, FrameCapture -- a sentinel, the attempt budget,
+        #     the construction invariants, and this package's own result type.
+        "get_frame", "getattr", "debug",
+        "object", "range", "ValueError", "FrameCapture",
     }
 )
 
@@ -710,6 +725,39 @@ def test_a_produced_faceprint_is_plain_floats_the_store_can_hold() -> None:
     assert all(type(value) is float for value in vector), "plain floats, never numpy scalars"
     assert store._pack_vector(vector) is not None, "the store must be able to pack what this produces"
     assert store._cannot_be_an_embedding_model(EMBEDDING_MODEL_ID) is None
+
+
+@_needs_models
+def test_a_frame_the_camera_actually_produces_goes_straight_into_embed_face() -> None:
+    """The two halves of recognition meet here: what capture returns is what embedding takes.
+
+    The shape and dtype are not invented for the test. Measured on 2026-09-14 against
+    the desktop app's mockup simulation, `media.get_frame()` returned a (720, 1280, 3)
+    uint8 BGR array, and `faces.capture_frame` hands that object back untouched. So an
+    array of exactly that description must be something `embed_face` can be handed with
+    no conversion at the call site -- which is the acceptance criterion this pins.
+
+    A blank frame has no face in it, so `None` is the RIGHT answer; what is being
+    asserted is that it comes back as an answer rather than as an exception about
+    shapes, channels or dtype.
+    """
+    import numpy as np
+
+    from reachy_language_tutor.faces import capture_frame, embed_face
+
+    measured_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    class TheCameraAsMeasured:
+        camera = object()
+
+        def get_frame(self) -> object:
+            return measured_frame
+
+    shot = capture_frame(TheCameraAsMeasured(), camera_enabled=True)
+
+    assert shot.usable
+    assert shot.frame is measured_frame, "capture must not convert the frame on the way through"
+    assert embed_face(shot.frame) is None, "a blank frame has no face; the point is that it did not raise"
 
 
 def test_the_embedding_tests_are_not_silently_skipped_forever() -> None:

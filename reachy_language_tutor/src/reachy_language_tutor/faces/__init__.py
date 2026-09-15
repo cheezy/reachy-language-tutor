@@ -2,8 +2,10 @@
 
 This package is the boundary. Import from here, never from the modules underneath.
 
-It touches no camera and no database. `embedding.py` is handed a frame by whatever
-owns the camera, and `matching.py` is handed rows by whatever owns the store. That
+It touches no database, and it owns no hardware. `embedding.py` is handed a frame by
+whatever owns the camera, and `matching.py` is handed rows by whatever owns the store.
+`capture.py` is the one module that goes near a camera, and it borrows a handle rather
+than opening one -- it starts nothing, closes nothing, and keeps no frame. That
 separation is what lets the threshold be exercised in both error directions on every
 test run, with no hardware and no downloaded weights.
 
@@ -25,6 +27,11 @@ and it must never be extended to something that does without a liveness check
 arriving first.
 """
 
+from reachy_language_tutor.faces.capture import (
+    CAPTURE_REASONS,
+    FrameCapture,
+    capture_frame,
+)
 from reachy_language_tutor.faces.matching import (
     MATCH_REASONS,
     FACE_MATCH_MARGIN,
@@ -47,6 +54,7 @@ from reachy_language_tutor.faces.embedding import (
 
 
 __all__ = [
+    "CAPTURE_REASONS",
     "EMBEDDING_MODEL_ID",
     "EXPECTED_EMBEDDING_DIMENSION",
     "EnrolledFaceprint",
@@ -57,7 +65,9 @@ __all__ = [
     "FACE_MATCH_SIMILARITY_FLOOR",
     "MATCH_REASONS",
     "THRESHOLD_CALIBRATED",
+    "FrameCapture",
     "MatchOutcome",
+    "capture_frame",
     "embed_face",
     "loaded_face_models",
     "match_faceprint",

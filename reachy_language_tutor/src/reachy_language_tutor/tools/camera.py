@@ -8,6 +8,20 @@ from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 logger = logging.getLogger(__name__)
 
+# How many consecutive reads one picture may make before reporting no frame.
+#
+# The same arithmetic, and the same number, as faces/capture.py's _FRAME_ATTEMPTS:
+# the read waits ~20ms for a sample while the camera produces one every ~33ms at
+# 30fps, so a single read can miss simply by being early. Measured on 2026-09-14
+# against the desktop app's mockup simulation, for this call specifically rather than
+# inferred from the raw-frame one: 3 of 10 back-to-back get_frame_jpeg() calls returned
+# bytes, 6 of 6 spaced 100ms apart did, and 18 of 18 at 100ms or more. Both reads are
+# recorded side by side in the measurement table in docs/SETUP.md. Without this, asking the
+# robot to look twice in a row told the person there was no frame while the camera was
+# working perfectly. Deliberately duplicated rather than imported -- tools must not
+# depend on the faces package -- and a test asserts the two numbers stay equal.
+_FRAME_ATTEMPTS = 5
+
 
 class Camera(Tool):
     """Take a picture with the camera to see what is in front of the robot."""
@@ -53,7 +67,11 @@ class Camera(Tool):
             logger.error("Camera is disabled")
             return {"error": "Camera is disabled"}
 
-        jpeg_bytes = deps.reachy_mini.media.get_frame_jpeg()
+        jpeg_bytes = None
+        for _ in range(_FRAME_ATTEMPTS):
+            jpeg_bytes = deps.reachy_mini.media.get_frame_jpeg()
+            if jpeg_bytes is not None:
+                break
         if jpeg_bytes is None:
             logger.error("No frame available from camera")
             return {"error": "No frame available"}
