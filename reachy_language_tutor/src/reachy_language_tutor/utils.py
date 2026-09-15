@@ -47,6 +47,71 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
     remove_parser.add_argument("space_slug", help="Installed Hugging Face Space slug in the form owner/space-name")
 
     tool_spaces_subparsers.add_parser("list", help="List installed Space tool sources")
+
+    # Enrolment is a SUBCOMMAND and not a tool, and that is the whole security point
+    # rather than a packaging preference: it creates an identity, and the model must
+    # never be able to do that. Reaching it needs a shell on the machine the robot is
+    # running on. It is deliberately absent from the /rpc surface too, which is
+    # LAN-reachable and cannot be authenticated.
+    enrol_parser = subparsers.add_parser(
+        "enrol",
+        help="Enrol a household member's face, in person, after recording their consent",
+    )
+    enrol_parser.add_argument(
+        "--name",
+        dest="enrol_name",
+        default=None,
+        metavar="NAME",
+        help="The name this person goes by, in their own script.",
+    )
+    # No default, deliberately, and the requirement is enforced in the command rather
+    # than by argparse -- `required=True` here would make `--show` unusable, since
+    # reading back what somebody agreed to needs no new consent. This is the app's
+    # answer to who may consent for a child: the question is answered every time by
+    # whoever is standing at the robot, never inherited from a default nobody reads.
+    # `choices` is what makes a mis-typed role a parse error rather than a bad row.
+    enrol_parser.add_argument(
+        "--consent-from",
+        dest="consent_from",
+        choices=("the-person-themselves", "an-adult-of-the-household"),
+        default=None,
+        help="Who is giving permission. Required unless --show is used.",
+    )
+    enrol_parser.add_argument(
+        "--show",
+        dest="show_learner",
+        default=None,
+        metavar="LEARNER_ID",
+        help="Print what this learner has agreed to, and exit. Writes nothing.",
+    )
+    # The route the consent notice promises. Without it, "you can ask whoever set this
+    # robot up to delete all of it" was a sentence with no code behind it --
+    # delete_faceprint existed and had no caller anywhere in the app.
+    enrol_parser.add_argument(
+        "--forget",
+        dest="forget_learner_id",
+        default=None,
+        metavar="LEARNER_ID",
+        help="Delete this learner's faceprint. Their lesson history is kept.",
+    )
+    # The remedy for an enrolment whose rollback failed. --forget cannot do it: that
+    # deletes a faceprint, and such a learner has none by construction. This calls
+    # forget_learner, which removes the learner, their consent and any faceprint --
+    # and refuses anybody with lesson history, in the statement itself.
+    enrol_parser.add_argument(
+        "--remove",
+        dest="remove_learner_id",
+        default=None,
+        metavar="LEARNER_ID",
+        help="Remove a learner who has no lesson history, with their consent record. Undoes a half-finished enrolment.",
+    )
+    enrol_parser.add_argument(
+        "--instance-path",
+        dest="instance_path",
+        default=None,
+        metavar="DIR",
+        help="The app instance directory holding the learner database.",
+    )
     return parser.parse_known_args()
 
 

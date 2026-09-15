@@ -41,17 +41,26 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 -- non-Latin scripts, apostrophes and combining marks are all real names, and all were
 -- verified to still pass.
 --
--- The durable guard therefore belongs in the writer, not here, and does not exist yet
--- because no writer does: the only INSERT today is the app-owned seed, and the store
--- publishes no create-learner function. Enrolment (W28) is what adds one, and it is
--- where a name a person supplies must be validated in Python. Note a schema-side rule
--- added later reaches fresh installs ONLY -- CREATE TABLE IF NOT EXISTS is a no-op
--- against an existing table -- so the writer is the only place a rule can reach a
--- robot that already has a database.
+-- The durable guard therefore belongs in the writer, and as of enrolment (W28) it
+-- exists: store._cannot_be_a_display_name refuses, by Unicode general category, every
+-- character that is not a letter, a mark, a digit or one of five name punctuation
+-- marks. That is an allow-list, so it closes the NUL case, the control-character case
+-- and the bidi-override case together, and it is the ONLY rule that reaches a robot
+-- which already has a database -- CREATE TABLE IF NOT EXISTS is a no-op against an
+-- existing table, so nothing added below this line reaches one.
+--
+-- instr() is added here anyway, for fresh installs, and the choice of function is the
+-- whole point: length(), trim() and replace() all stop at the first NUL and so cannot
+-- see the hidden tail, while instr(display_name, char(0)) reads the whole value and
+-- returns 4 for 'Ana' + NUL + a path. Measured against this exact DDL before it was
+-- written. It is a backstop to the writer's guard and not a substitute for it: SQLite
+-- cannot express a Unicode category, so a lone non-breaking space and an embedded
+-- newline still satisfy every clause here and are refused only in Python.
 CREATE TABLE IF NOT EXISTS learners (
   id           TEXT PRIMARY KEY,
   display_name TEXT NOT NULL CHECK (length(trim(display_name)) > 0
-                                    AND length(CAST(display_name AS BLOB)) BETWEEN 1 AND 200),
+                                    AND length(CAST(display_name AS BLOB)) BETWEEN 1 AND 200
+                                    AND instr(display_name, char(0)) = 0),
   created_at   INTEGER NOT NULL
 ) STRICT;
 
@@ -321,3 +330,61 @@ CREATE TABLE IF NOT EXISTS faceprints (
   vector          BLOB    NOT NULL CHECK (vector IS NOT NULL AND length(vector) = dimension * 4),
   created_at      INTEGER NOT NULL
 ) STRICT;
+
+
+-- One row per act of permission, and the table enrolment writes BEFORE it computes a
+-- faceprint. The ordering is not a convention here: the faceprints INSERT below draws
+-- its rows FROM this table, so a faceprint for a learner with no consent row inserts
+-- nothing at all. That is what makes an interrupted enrolment safe -- the state it can
+-- leave behind is "a learner who agreed and has no faceprint", never "a faceprint
+-- nobody agreed to".
+--
+-- Append-only. A row records that somebody said yes, at a moment, to a specific
+-- wording, and it is never edited to say something else. There is deliberately no row
+-- shape for "no": a refusal writes nothing, which is why declining at any step leaves
+-- the database byte-identical.
+--
+-- statement_id AND statement_text, both, deliberately. An id alone would let a later
+-- edit to the constant in faces/enrollment.py silently rewrite what a household was
+-- told -- the record would then answer a question about today rather than about the
+-- day they agreed. Storing the words is what makes the record readable back.
+--
+-- granted_by is a ROLE and never a second person's name. Recording which adult
+-- consented for a child would add personal data about somebody who is not a learner
+-- here and was never asked; the household gets an answer to "who agreed" that is
+-- honest about what this prototype actually knows.
+--
+-- ON DELETE CASCADE costs the audit trail, and that is the intended trade rather than
+-- an oversight: docs/learner-database.md promises erasure, and keeping evidence about
+-- a person after they have asked to be forgotten is the wrong side of it.
+CREATE TABLE IF NOT EXISTS consents (
+  id             INTEGER PRIMARY KEY,
+  learner_id     TEXT    NOT NULL REFERENCES learners(id) ON DELETE CASCADE,
+  -- WHAT was agreed to, as a machine code. An allow-list of one today; widening it is
+  -- a decision somebody can be asked about rather than housekeeping.
+  scope          TEXT    NOT NULL CHECK (scope IN ('face_recognition')),
+  statement_id   TEXT    NOT NULL CHECK (statement_id IS NOT NULL
+                                         AND length(trim(statement_id)) BETWEEN 1 AND 64
+                                         AND statement_id NOT GLOB '*[^A-Za-z0-9._-]*'),
+  -- instr() rather than length(), for the reason the learners comment above measures:
+  -- length() stops at the first NUL and would not see a hidden tail here either.
+  statement_text TEXT    NOT NULL CHECK (statement_text IS NOT NULL
+                                         AND length(trim(statement_text)) BETWEEN 1 AND 4000
+                                         AND instr(statement_text, char(0)) = 0),
+  granted_by     TEXT    NOT NULL CHECK (granted_by IN ('the_person_themselves',
+                                                        'an_adult_of_the_household')),
+  -- HOW it was obtained, and this column is the security claim: an operator, in
+  -- person, at this robot. There is no conversational path and no network one.
+  granted_via    TEXT    NOT NULL CHECK (granted_via IN ('operator_at_the_robot')),
+  -- Epoch milliseconds UTC, stamped by the store. Never caller-supplied, for the
+  -- reason save_faceprint gives: a clock a caller chooses is a field a caller can get
+  -- wrong on a record about biometric data.
+  granted_at     INTEGER NOT NULL,
+  -- Present in the FIRST version of this table on purpose. A column added later never
+  -- reaches a robot that already has a database, so a withdrawal column introduced
+  -- when it is finally needed would reach only fresh installs. The faceprint gate
+  -- below already honours it; the writer that sets it is a later task.
+  withdrawn_at   INTEGER CHECK (withdrawn_at IS NULL OR withdrawn_at >= granted_at)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_consents_learner_scope ON consents (learner_id, scope);

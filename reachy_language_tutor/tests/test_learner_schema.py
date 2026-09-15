@@ -360,6 +360,10 @@ def test_seed_row_counts(tmp_path: Path) -> None:
         # be fabricated biometric data for a person who does not exist. Enrolment is the
         # only way a row gets in here, which is what W28 is for.
         "faceprints": 0,
+        # Nothing seeds a consent either, and for a sharper reason than the faceprint
+        # one: a shipped consent row would be a record that somebody agreed to
+        # something when nobody ever did. Enrolment is the only writer.
+        "consents": 0,
         # Content ships only for the converted lessons. The rest of the catalog has
         # none yet and has to keep working meanwhile, which is why these are counted
         # from the file rather than pinned to a number somebody would have to update.
@@ -1183,6 +1187,25 @@ def test_no_faceprint_column_can_hold_an_image_a_crop_or_a_path_to_one(tmp_path:
         connection.close()
 
 
+_TEST_CONSENT_SQL = (
+    "INSERT INTO consents (learner_id, scope, statement_id, statement_text, granted_by, granted_via, granted_at) "
+    "VALUES (?, 'face_recognition', 'test.v1', 'Wording used by the tests.', "
+    "'the_person_themselves', 'operator_at_the_robot', 0)"
+)
+
+
+def _agreed(connection: sqlite3.Connection, learner_id: str = "p") -> None:
+    """Give this learner a standing consent, so a faceprint can be stored for them.
+
+    Needed because save_faceprint's INSERT selects its rows FROM the consents table:
+    a learner with no consent row produces nothing to insert and the store answers
+    no_consent. A test about erasure or about the schema needs the consent to exist so
+    that it is testing the thing it names rather than the consent gate -- the gate has
+    its own tests, which assert the refusal directly.
+    """
+    connection.execute(_TEST_CONSENT_SQL, (learner_id,))
+
+
 def test_a_faceprint_check_that_trims_also_refuses_null(tmp_path: Path) -> None:
     """The CHECK, exercised where it can actually be reached.
 
@@ -1253,6 +1276,7 @@ def test_deleting_a_learner_leaves_no_faceprint_row_behind(tmp_path: Path) -> No
     connection = store.connect(tmp_path)
     try:
         connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p', 'P', 0)")
+        _agreed(connection)
         connection.commit()
     finally:
         connection.close()
@@ -1272,15 +1296,24 @@ def test_deleting_a_learner_leaves_no_faceprint_row_behind(tmp_path: Path) -> No
 
 
 def _downgrade_to_schema_2(instance_path: Path) -> None:
-    """Put a database back the way it looked before this change, and check it took."""
+    """Put a database back the way it looked before this change, and check it took.
+
+    Both later tables go, not just the one this fixture was written for. A downgrade
+    that left consents behind would test an upgrade path no robot ever takes, and
+    would quietly stop proving that the consents table reaches an installed robot at
+    all -- which is the claim enrolment's whole ordering guarantee rests on.
+    """
     connection = store.connect(instance_path)
     try:
         connection.execute("DROP TABLE faceprints")
+        connection.execute("DROP TABLE consents")
         connection.execute("PRAGMA user_version = 2")
         connection.commit()
     finally:
         connection.close()
-    assert "faceprints" not in _tables(instance_path), "the fixture must really remove it"
+    tables = _tables(instance_path)
+    assert "faceprints" not in tables, "the fixture must really remove it"
+    assert "consents" not in tables, "the fixture must really remove it"
 
 
 def test_the_faceprint_table_reaches_a_database_that_predates_it(tmp_path: Path) -> None:
@@ -1303,6 +1336,7 @@ def test_the_faceprint_table_reaches_a_database_that_predates_it(tmp_path: Path)
     assert result.ready is True
     assert result.schema_applied is True, "the bump is what re-ran the script"
     assert "faceprints" in _tables(tmp_path)
+    assert "consents" in _tables(tmp_path), "version 4's table has to reach an installed robot too"
 
     connection = store.connect(tmp_path)
     try:
@@ -1310,8 +1344,22 @@ def test_the_faceprint_table_reaches_a_database_that_predates_it(tmp_path: Path)
     finally:
         connection.close()
 
-    # The learner's existing history survived the upgrade, and the new table works.
+    # The learner's existing history survived the upgrade, and the new tables work --
+    # together, which is the part worth proving: the faceprint writer now draws its
+    # rows from the consents table, so a faceprint stored here is evidence that BOTH
+    # tables arrived and that the gate between them works on an upgraded database.
     assert _counts(tmp_path)["lesson_results"] == 3
+    assert store.save_faceprint("sample-learner", "m", [1.0], instance_path=tmp_path).saved is False, (
+        "an upgraded robot's existing learner has agreed to nothing yet"
+    )
+
+    connection = store.connect(tmp_path)
+    try:
+        _agreed(connection, "sample-learner")
+        connection.commit()
+    finally:
+        connection.close()
+
     assert store.save_faceprint("sample-learner", "m", [1.0], instance_path=tmp_path).saved is True
 
 
@@ -1492,6 +1540,7 @@ def test_a_deleted_faceprint_leaves_no_bytes_in_the_file(tmp_path: Path) -> None
     connection = store.connect(tmp_path)
     try:
         connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p','P',0)")
+        _agreed(connection)
         connection.commit()
     finally:
         connection.close()
@@ -1697,6 +1746,7 @@ def test_erasure_holds_while_another_connection_is_open(tmp_path: Path) -> None:
     connection = store.connect(tmp_path)
     try:
         connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p','P',0)")
+        _agreed(connection)
         connection.commit()
     finally:
         connection.close()
@@ -1737,6 +1787,7 @@ def test_a_deferred_erase_is_reported_rather_than_silent(tmp_path: Path, caplog:
     connection = store.connect(tmp_path)
     try:
         connection.execute("INSERT INTO learners (id, display_name, created_at) VALUES ('p','P',0)")
+        _agreed(connection)
         connection.commit()
     finally:
         connection.close()

@@ -621,6 +621,8 @@ Everything above describes the data. This is how the application reaches it.
 ```python
 from reachy_language_tutor.learners import (
     delete_faceprint,
+    forget_learner,
+    get_consents,
     get_faceprint,
     get_language_catalog,
     get_lesson,
@@ -628,6 +630,7 @@ from reachy_language_tutor.learners import (
     get_profile,
     get_practised_languages,
     get_progress,
+    record_consent,
     record_result,
     save_faceprint,
     split_catalog_by_material,
@@ -936,8 +939,136 @@ companions matter most on that upgrade path — a faceprint can sit in a world-r
 | `unknown_learner` | No such learner. Nothing is written. |
 | `invalid_model` | The embedding model name was not a non-empty string of at most 128 characters, made only of letters, digits, dot, underscore and hyphen, that encodes as UTF-8. Anything path-shaped lands here. Refused before the bind, so it is reported as the caller error it is. |
 | `invalid_vector` | The vector was not a non-empty sequence of at most 1024 numbers that `struct` can represent as float32. A sequence of `bool` lands here too, deliberately: `struct.pack("<f", True)` does not raise — it silently packs `1.0` — so without an explicit exclusion a vector of flags would be stored as a face. |
-| `rejected_by_database` | A constraint refused the row — a backstop behind the checks above, and the one that can still fire from a race: a learner deleted between the existence check and the insert fails the foreign key. |
+| `no_consent` | Nobody has agreed to face recognition for this learner, or the consent they gave has been withdrawn. Not a check `save_faceprint` performs: the INSERT selects its row **from** the `consents` table, so an unconsented learner produces nothing to insert. A refusal changes nothing — an existing faceprint survives it byte for byte. |
+| `rejected_by_database` | A constraint refused the row — a backstop behind the checks above. It no longer describes the deleted-between-check-and-insert race: deleting a learner cascades their consent away too, so the insert now matches no consent row and answers `no_consent` before the foreign key is ever consulted. Measured; the same harness produced `rejected_by_database` before the consent gate existed. |
 | `storage_unavailable` | The store could not be read or written. |
+
+## Consent
+
+A faceprint is biometric data about somebody who lives in the house, and this app will
+not hold one without a record that the person agreed. That record is a row in
+`consents`, and the ordering is enforced by the database rather than by the order
+somebody wrote two calls in.
+
+**Consent is written before the faceprint exists, not after it is stored.** The only
+way to create a learner is `record_consent`, which writes the learner row and the
+consent row in one transaction opened with `BEGIN IMMEDIATE`. There is no public
+create-learner function, so "a learner exists and nobody agreed to anything" is not a
+state this module's surface can produce. If enrolment is interrupted at any point, what
+it leaves behind is a person who agreed and has no faceprint — never a faceprint nobody
+agreed to.
+
+**The faceprint writer refuses anybody with no standing consent**, and not by checking.
+`_INSERT_FACEPRINT_SQL` selects its row **from** the `consents` table:
+
+```sql
+INSERT INTO faceprints (learner_id, embedding_model, dimension, vector, created_at)
+SELECT ?, ?, ?, ?, ? FROM consents
+ WHERE consents.learner_id = ? AND consents.scope = ? AND consents.withdrawn_at IS NULL
+ LIMIT 1
+```
+
+A learner with no consent row produces no row to insert. This is stronger than a
+function that takes a consent id and verifies it, because a caller can invent an id and
+cannot invent a row — and it holds for every future caller of `save_faceprint`, not
+just for enrolment. The refusal rolls back inside the replace transaction, so a refused
+save leaves an existing faceprint byte-identical rather than erasing it on the way to
+saying no.
+
+### What a consent row records
+
+Who, to what, and when — in a form a person can be shown later.
+
+| column | meaning |
+|---|---|
+| `scope` | What was agreed to. `face_recognition` is the only value today; the column is an allow-list so that widening it is a decision somebody makes deliberately. |
+| `statement_id` | Which wording, as a version id. |
+| `statement_text` | The wording **itself**, as it stood on the day. Stored as well as identified, deliberately: an id alone would let a later edit to the constant silently rewrite what a household was told, and the record would then answer a question about today rather than about that day. |
+| `granted_by` | `the_person_themselves` or `an_adult_of_the_household` — a **role**, never a second person's name. Recording which adult would store personal data about somebody who is not a learner here and was never asked. |
+| `granted_via` | `operator_at_the_robot`. This column is the security claim rather than a description: an operator, in person, at this robot. There is no conversational path and no network one. |
+| `granted_at` | Epoch milliseconds UTC, stamped by the store. Never caller-supplied, for the reason `save_faceprint` gives about `created_at`. |
+| `withdrawn_at` | `NULL` while the permission stands. The faceprint gate honours it already; the writer that sets it is a later task. The column ships now because a column added later never reaches a robot that already has a database. |
+
+`get_consents(learner_id)` returns them oldest first — an empty tuple when the person
+has agreed to nothing, `None` when the store could not be read. The two are not the
+same answer and must not be shown to a person as though they were.
+
+Rows cascade on learner deletion. That costs the audit trail, and it is the intended
+trade rather than an oversight: erasure is what this app promises a household, and
+keeping evidence about somebody after they have asked to be forgotten is the wrong side
+of it.
+
+### Who may consent for a child
+
+**Decided for the prototype:** enrolment is an operator action performed in person at
+the robot, and the operator must state which of the two roles applies, every time, with
+no default. For a child the answer is "an adult of the household, present at the robot".
+
+**Left open, and recorded here rather than left implied:** nothing verifies that the
+person asserting adulthood is one — physical presence at the robot is the whole control.
+Which adult is deliberately not recorded. `learners` has no age field, so the robot does
+not know who is a child and cannot enforce anything itself. The legal question is open;
+`docs/plan.md` already says to consult a privacy lawyer before any public launch, and
+in-home enrolment of minors is inside that sentence.
+
+### Consent reason codes
+
+`record_consent` never raises. When `recorded` is `False`, `reason` is one of:
+
+| `reason` | Cause |
+|---|---|
+| `name_not_usable` | The display name was not a name. An allow-list by Unicode general category — letters, marks and digits, plus space, both apostrophes, both hyphens, the full stop and the three name middle dots (U+30FB, U+FF65, U+00B7) — so accented and non-Latin names are accepted while NUL, control characters, bidi overrides, lone surrogates, zero-width and non-breaking spaces and every path-shaped value are refused together. The `learners.display_name` CHECK does **not** close this: SQLite's `length()` and `trim()` stop at the first NUL, so `Ana` + NUL + a path satisfies it as a three-character name and is stored whole — measured. |
+| `invalid_scope` | Not a published scope. |
+| `invalid_statement` | The wording could not be stored as evidence — a blank or over-long id, an id that is not letters, digits, dot, underscore and hyphen, or text carrying something other than printable characters, spaces and newlines. |
+| `invalid_granted_by` | Not one of the published roles. |
+| `invalid_granted_via` | Not a published route. |
+| `rejected_by_database` | A constraint refused the row — a backstop behind the checks above. |
+| `storage_unavailable` | The store could not be opened or written. |
+
+### Undoing an enrolment that did not finish
+
+`forget_learner` removes a learner **who has no lesson history**, and nothing more. It
+exists because consent is written first: a capture that fails afterwards would otherwise
+leave a learner and a consent row for somebody who never got a faceprint and does not
+know they are in the database. A learner with any history is refused by the statement
+itself, with `NOT EXISTS`, rather than by a read before the delete — a check and a
+delete in two statements is a race, and this is a row about a person.
+
+It returns a count, never a name, exactly as `delete_faceprint` does, and it checkpoints
+the WAL before reporting success for the same measured reason: without that, the removed
+pages sit in the write-ahead log while the main file still holds the display name.
+
+Erasing a household member who has actually used the robot is a different promise with a
+different surface, and this is not it.
+
+### Deleting a faceprint on request
+
+`enrol --forget LEARNER_ID` calls `delete_faceprint` and prints what happened. It is the
+route behind the sentence in `CONSENT_STATEMENT` that tells a household they can ask for
+their numbers to be deleted — a security review found that sentence had **no invocable
+surface at all** before this command existed: `delete_faceprint` was exported from the
+learners package and called from nowhere in the app, so a household asking for their
+child's faceprint to be removed could only be served by somebody opening the SQLite file
+by hand.
+
+**The consent row is deliberately kept.** Deleting it would destroy the answer to what
+was agreed and when, which is the record the household is owed; the notice promises the
+numbers go, and the numbers are what go. Lesson history is untouched for the same
+reason. The notice says all of this in as many words — a review found it still reading
+"delete all of it" after the route was added, which `--forget` does not do and the
+command's own output contradicted two lines later.
+
+`enrol --remove LEARNER_ID` is the other direction and a different promise: it calls
+`forget_learner`, which removes the learner, their consent and any faceprint, and
+refuses anybody with lesson history in the statement itself. It exists as the remedy for
+an enrolment whose rollback failed — such a learner has no faceprint, so `--forget`
+cannot clear them, and with cross-learner reads refused by design there would otherwise
+be no way to reach that row at all.
+
+Both branches, and `--show`, distinguish "no such learner" from "the database could not
+be read". `get_profile` returns `None` for both, and telling a household their child is
+not in the database when the truth is that the file could not be opened is the exact
+conflation `delete_faceprint`'s `None` return exists to prevent.
 
 ### Recording a result
 

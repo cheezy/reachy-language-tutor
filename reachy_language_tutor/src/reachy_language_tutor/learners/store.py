@@ -36,11 +36,13 @@ import json
 import math
 import stat
 import time
+import uuid
 import string
 import struct
 import logging
 import sqlite3
 import threading
+import unicodedata
 from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
@@ -49,14 +51,19 @@ from collections.abc import Sequence
 from reachy_language_tutor.logging_safety import SafeToLog, log_safe
 from reachy_language_tutor.learners.models import (
     OUTCOMES,
+    CONSENT_SCOPES,
+    CONSENT_GRANTED_BY,
+    CONSENT_GRANTED_VIA,
     Drill,
     Lesson,
     Faceprint,
     UsageNote,
     DialogueTurn,
     LessonSource,
+    ConsentRecord,
     LessonAttempt,
     LessonContent,
+    ConsentOutcome,
     LearnerProfile,
     CatalogLanguage,
     LanguageProgress,
@@ -73,7 +80,7 @@ logger = logging.getLogger(__name__)
 # bump is what carries a new TABLE out to a robot that already has a database. It
 # cannot carry a new COLUMN on an existing table -- see the note in schema.sql.
 # Version 2 added the lesson-content tables; version 3 added faceprints.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 # Bumped when the seed data changes -- including the converted lessons in
 # converted_lessons.json, whose bytes are part of the fingerprint a test pins to this
 # number. Version 3 gave every seeded lesson a provenance row; version 4 replaced the
@@ -1135,6 +1142,22 @@ _READER_ABSORBS = (sqlite3.Error, OSError, ValueError, OverflowError, RuntimeErr
 # conversation turn on.
 _FACEPRINT_ABSORBS = (*_READER_ABSORBS, struct.error)
 
+
+class _ConsentMissing(Exception):
+    """Raised inside the faceprint transaction so the enclosing DELETE rolls back.
+
+    Module-private and never raised out of this module: save_faceprint catches it and
+    answers with a reason code, like every other refusal it can give. It exists only
+    because a conditional INSERT that matches nothing is not an error to sqlite3 -- it
+    is a rowcount -- and a rollback needs an exception to trigger it.
+    """
+
+
+# The scope a faceprint requires somebody to have agreed to. A module constant rather
+# than a save_faceprint parameter, deliberately: which permission covers storing a
+# face is a fact about this table, not a choice a caller should be able to make.
+_FACEPRINT_CONSENT_SCOPE = "face_recognition"
+
 # One float32 per element, little-endian. Pinned here, in the "<" of the format string
 # below, and again by the length CHECK in schema.sql -- three places, because a silent
 # change of byte order turns every stored faceprint into a different person's numbers
@@ -1151,6 +1174,44 @@ _MAX_MODEL_NAME = 128
 # GLOB in schema.sql and pinned against it by a test: this is the clause that stops the
 # only caller-supplied TEXT column in the faceprints table holding a filesystem path.
 _MODEL_NAME_CHARACTERS = frozenset(string.ascii_letters + string.digits + "._-")
+
+# The byte bound the learners table declares, restated here because the guard has to
+# reach a robot whose table predates any CHECK added later.
+_MAX_DISPLAY_NAME_BYTES = 200
+
+# A generated id is 32 hex characters; the bound is what keeps a caller-supplied one
+# in the same family rather than unbounded text in a primary key.
+_MAX_LEARNER_ID = 64
+
+# The Unicode general categories a name may be made of: the five letter categories,
+# the three mark categories (a name in Devanagari or Arabic is letters plus marks, and
+# a decomposed "Jose" with an accent is a letter followed by Mn), and decimal digits,
+# which appear in real household names often enough -- "Ana 2" distinguishes two
+# people with one name.
+_NAME_CATEGORIES = frozenset({"Lu", "Ll", "Lt", "Lm", "Lo", "Mn", "Mc", "Me", "Nd"})
+
+# The punctuation a name may also contain, named one character at a time because each
+# one is a decision. Both apostrophes and both hyphens, because a keyboard and a word
+# processor produce different characters for what a person means as the same mark.
+#
+# The three middle dots are here because leaving them out refused a real name form: a
+# personal name written in katakana separates given and family name with U+30FB,
+# U+FF65 is the halfwidth key that produces the same mark, and U+00B7 does the same
+# job in several Latin-script conventions. All three are category Po, so no category
+# rule admits them -- they have to be named. This guard's whole reason for being
+# category-based rather than ASCII is that it must not refuse a name for not being
+# written in Latin script, and it was doing exactly that.
+#
+# U+FF65 is here for the same keyboard-variant reason as both apostrophes and both
+# hyphens above, and leaving it out had a sharper cost than it looks: halfwidth
+# katakana LETTERS are category Lo and already passed, so a halfwidth name was
+# accepted for its letters and refused for its separator.
+_NAME_PUNCTUATION = frozenset(" '\u2019-\u2010.\u30fb\uff65\u00b7")
+
+# Letters by category that occupy no space on screen. A name made only of these
+# passes every "is it a letter" test and renders as blank, which matters because the
+# display name is read back to a household as part of their consent record.
+_CHARACTERS_THAT_RENDER_AS_NOTHING = frozenset("\u3164\u115f\u1160\uffa0")
 
 
 class _StoreRefusal(SafeToLog, ValueError):
@@ -1328,6 +1389,181 @@ def _cannot_be_an_embedding_model(value: object) -> str | None:
     return None
 
 
+def _cannot_be_a_display_name(value: object) -> str | None:
+    """Say why this value could never be a household member's name, or None if it could.
+
+    The third sibling, and the one whose column a PERSON supplies. `learners.display_name`
+    has a CHECK, and the CHECK provably does not hold: SQLite's length() and trim() stop
+    at the first NUL, so 'Ana' + NUL + '/Users/secret/kid-face.jpg' satisfies
+    length(trim(display_name)) > 0 as a three-character name and is stored whole, all
+    thirty bytes of it. Measured against the real DDL before this guard was written, and
+    schema.sql has documented the mechanism since the faceprints table was added while
+    saying the writer that closes it did not exist yet. Enrolment is that writer.
+
+    An ALLOW-LIST, like _cannot_be_an_embedding_model -- but NOT that one's allow-list.
+    Copying `[A-Za-z0-9._-]` here would refuse Jose with an accent, O'Brien, and every
+    name not written in Latin script, which is the one column where that is unacceptable:
+    a household member's name is exactly the value that must not be ASCII-only. So the
+    permitted set is named by Unicode general CATEGORY instead of by character. Letters,
+    combining marks and digits are permitted, plus five punctuation marks that appear in
+    real names.
+
+    Naming categories is what makes this close a family rather than a list. NUL and
+    newline are Cc, the bidi overrides are Cf, a lone surrogate is Cs, a non-breaking
+    space is Zs, and every path separator is punctuation outside the permitted five --
+    none of them is a letter, a mark or a digit, so all are refused by one rule, along
+    with the spellings nobody has thought of yet. The space is permitted as a listed
+    character rather than by allowing category Zs, and that single choice is what keeps
+    a name made only of non-breaking spaces out.
+
+    Each reason names a shape, never the value -- this string reaches a log line, and
+    the value is a person's name.
+    """
+    if not isinstance(value, str):
+        return f"{type(value).__name__} is not a string"
+    if value != value.strip():
+        return "padded with whitespace"
+    if not value:
+        return "blank"
+    encoded = value.encode("utf-8", errors="surrogatepass")
+    if len(encoded) > _MAX_DISPLAY_NAME_BYTES:
+        return f"longer than {_MAX_DISPLAY_NAME_BYTES} bytes"
+    if not all(
+        character in _NAME_PUNCTUATION or unicodedata.category(character) in _NAME_CATEGORIES for character in value
+    ):
+        return "not made only of letters, marks, digits, spaces, apostrophes, hyphens, full stops and name middle dots"
+    if not any(_is_a_visible_letter(character) for character in value):
+        # Punctuation on its own is not a name. Without this, "..." and "--" satisfy
+        # every rule above -- both are made only of permitted characters.
+        #
+        # VISIBLE, not merely a letter, and that word was added after a security
+        # review measured what "letter" alone admitted: U+3164 HANGUL FILLER and
+        # U+115F/U+1160 carry category Lo, so "\u3164\u3164\u3164" satisfied this
+        # test and was stored as a display name that renders as blank space in the
+        # consent read-back. Nothing reaches a filesystem or a shell, so it was not a
+        # breach -- it was a record a household may one day have to rely on that
+        # cannot be read back, which is its own kind of failure on a consent record.
+        return "made only of punctuation or characters that render as nothing"
+    return None
+
+
+def _is_a_visible_letter(character: str) -> bool:
+    """Report whether this character is a letter or digit that actually shows up.
+
+    Separate from the category test so that "what counts as a letter" has one
+    definition. Default-ignorable code points are letters by category and nothing by
+    appearance; a name needs at least one character that is both.
+    """
+    if not unicodedata.category(character).startswith(("L", "N")):
+        return False
+    # The Hangul fillers are the default-ignorable letters that matter here, and they
+    # are named rather than detected: Python exposes no default-ignorable property,
+    # and a rule written against unicodedata.name() substrings would be a deny-list.
+    return character not in _CHARACTERS_THAT_RENDER_AS_NOTHING
+
+
+# What a consent statement may be made of. Letters, marks, numbers, punctuation and
+# symbols, plus the two whitespace characters a paragraph needs. Named as categories
+# for the same reason the name guard is: it refuses the control, format and surrogate
+# characters as a family rather than one remembered spelling at a time, and a notice
+# carrying a bidi override could be made to read differently from what it stores.
+_STATEMENT_CATEGORIES = frozenset(
+    {
+        "Lu",
+        "Ll",
+        "Lt",
+        "Lm",
+        "Lo",
+        "Mn",
+        "Mc",
+        "Me",
+        "Nd",
+        "Nl",
+        "No",
+        "Pc",
+        "Pd",
+        "Ps",
+        "Pe",
+        "Pi",
+        "Pf",
+        "Po",
+        "Sm",
+        "Sc",
+        "Sk",
+        "So",
+    }
+)
+_STATEMENT_WHITESPACE = frozenset(" \n")
+_MAX_STATEMENT_ID = 64
+_MAX_STATEMENT_TEXT = 4000
+
+
+def _cannot_be_a_learner_id(value: object) -> str | None:
+    """Say why this value could not be an id this store may mint, or None if it could.
+
+    The fourth sibling, and it exists because a parameter arrived after the others
+    and skipped the line they all stand in. `record_consent` gained an optional
+    `learner_id` so that an interrupted enrolment can name the row it must undo --
+    and that value goes straight into a PRIMARY KEY, while `display_name`, `scope`,
+    `statement_id`, `statement_text`, `granted_by` and `granted_via` were every one
+    of them checked a few lines above it.
+
+    Measured before this guard existed: "", "../../etc/passwd", a 5000-character
+    string, the int 42 and "Ana" + NUL + a path were all accepted and committed.
+    `learners.id` carries no CHECK of its own, unlike `display_name`, which gained
+    one in the same change that added this parameter.
+
+    The character rule is the one _cannot_be_an_embedding_model uses, for the reason
+    that docstring gives: naming the permitted characters refuses every spelling of
+    a path at once, where a list of "/" and "~" and ".." would be as complete as the
+    last person to think about it. It subsumes the NUL and whitespace cases too,
+    since every permitted character is printable ASCII.
+
+    Each reason names a shape, never the value.
+    """
+    if not isinstance(value, str):
+        return f"{type(value).__name__}, not a string"
+    if not 1 <= len(value) <= _MAX_LEARNER_ID:
+        return f"not between 1 and {_MAX_LEARNER_ID} characters"
+    if not set(value) <= _MODEL_NAME_CHARACTERS:
+        return "not made only of letters, digits, dot, underscore and hyphen"
+    return None
+
+
+def _cannot_be_a_consent_statement(statement_id: object, statement_text: object) -> str | None:
+    """Say why this wording could not be a consent statement, or None if it could.
+
+    The id is a machine name and gets the machine allow-list -- it is the same kind of
+    value as embedding_model, so it gets the same rule, letters digits dot underscore
+    hyphen, which is what keeps a filesystem path out of it.
+
+    The text is prose a person reads, so it gets the prose allow-list. The point of
+    checking it at all is that this string is stored to be shown back to a household
+    member years later as evidence of what they were told: a notice that arrives with
+    a NUL in it does not mean what it appears to mean when it is read back.
+    """
+    if not isinstance(statement_id, str):
+        return f"identified by a {type(statement_id).__name__} rather than a string"
+    if not statement_id.strip():
+        return "identified by a blank id"
+    if len(statement_id) > _MAX_STATEMENT_ID:
+        return f"identified by more than {_MAX_STATEMENT_ID} characters"
+    if not set(statement_id) <= _MODEL_NAME_CHARACTERS:
+        return "identified by something other than letters, digits, dot, underscore and hyphen"
+    if not isinstance(statement_text, str):
+        return f"a {type(statement_text).__name__} rather than a string"
+    if not statement_text.strip():
+        return "blank"
+    if len(statement_text) > _MAX_STATEMENT_TEXT:
+        return f"longer than {_MAX_STATEMENT_TEXT} characters"
+    if not all(
+        character in _STATEMENT_WHITESPACE or unicodedata.category(character) in _STATEMENT_CATEGORIES
+        for character in statement_text
+    ):
+        return "not made only of printable characters, spaces and newlines"
+    return None
+
+
 def _pack_vector(values: object) -> bytes | None:
     """Pack a face vector into little-endian float32 bytes, or None if it cannot be.
 
@@ -1366,14 +1602,19 @@ def _pack_vector(values: object) -> bytes | None:
         return None
 
 
-# The three tables that hold anything about a person, and the column in each that says
+# The four tables that hold anything about a person, and the column in each that says
 # which person. Everything else in this schema -- languages, lessons, schema_meta --
 # is shared reference data that no filter has to constrain.
 #
-# faceprints joined this set in the same change that created it, which is the only
-# order that is safe: _learner_scoped RAISES on a statement naming a personal table it
-# has not been told about, so a table added here late is a table whose statements were
-# unscoped for as long as it took somebody to notice.
+# faceprints joined this set in the same change that created it, and consents did the
+# same, which is the only order that is safe: _learner_scoped RAISES on a statement
+# naming a personal table it has not been told about, so a table added here late is a
+# table whose statements were unscoped for as long as it took somebody to notice.
+#
+# Note the column differs per table -- learners is attributed by `id`, the other three
+# by `learner_id` -- and _insert_is_attributed reads it from here rather than assuming
+# one spelling. It assumed "learner_id" until enrolment needed to write the learners
+# table and found the rule refusing the only insert that table can have.
 #
 # This is the rule's own copy, and it lives here because this module is where the rule
 # lives. The AST guard in the tests reuses this function rather than restating it.
@@ -1381,6 +1622,7 @@ _PERSONAL_TABLES: dict[str, str] = {
     "learners": "id",
     "lesson_results": "learner_id",
     "faceprints": "learner_id",
+    "consents": "learner_id",
 }
 
 # The columns that say which learner a row belongs to. Writing one re-attributes the
@@ -1877,9 +2119,24 @@ def _insert_is_attributed(sql: str, tokens: list[str], words: list[str]) -> str 
         return "an ON CONFLICT clause can rewrite a row this statement did not create"
     if "(" not in tokens:
         return "it names no column list, so nothing says which learner the row belongs to"
+    # Which column attributes the row is a per-table fact, and _PERSONAL_TABLES is
+    # where this module already keeps it. This used to be the literal "learner_id",
+    # which is the right answer for two of the three tables and the wrong one for
+    # learners, whose own column is `id` -- so the rule refused the one INSERT the
+    # learners table will ever need. Reading the answer from the table instead of
+    # restating one table's copy of it is the same fix the store's other sibling
+    # defects wanted: the rule now knows every personal table, including the ones
+    # added after it was written.
+    target = tokens[2].lower() if len(tokens) > 2 else ""
+    attributing = _PERSONAL_TABLES.get(target)
+    if attributing is None:
+        # Refused rather than passed over, like every other shape this rule cannot
+        # account for. A write to a relation it was never taught is exactly the case
+        # where silence would be a bypass.
+        return "it writes to a relation this rule was not taught, so nothing says which learner the row belongs to"
     opening = tokens.index("(")
-    if tokens[opening + 1 : opening + 2] != ["learner_id"]:
-        return "learner_id is not the first column it writes"
+    if tokens[opening + 1 : opening + 2] != [attributing]:
+        return f"{attributing} is not the first column it writes"
     depth = 0
     closing = opening
     for position in range(opening, len(tokens)):
@@ -2041,10 +2298,50 @@ _FACEPRINT_SQL = _learner_scoped(
 )
 # learner_id first, which is not cosmetic: the guard scopes a write by the column it
 # writes first, and any other order is refused.
+#
+# THIS IS THE CONSENT GATE, and it is the reason the statement selects instead of
+# taking a VALUES list. The rows it inserts come FROM the consents table, so a learner
+# with no standing consent row produces no row to insert and the statement writes
+# nothing -- rowcount 0. That makes the ordering a property of the database rather
+# than of the order somebody wrote two calls in: there is no argument a caller can
+# pass, and no code path anybody can add later, that stores a faceprint for a person
+# who has not agreed. A consent id passed as a parameter would not do this, because a
+# caller can invent an id and cannot invent a row.
+#
+# It is deliberately NOT scoped to enrolment. Every caller of save_faceprint, now and
+# later, passes through it -- which is the point, since the next writer to want a
+# faceprint is exactly the one that will not have read this comment.
 _INSERT_FACEPRINT_SQL = _learner_scoped(
-    "INSERT INTO faceprints (learner_id, embedding_model, dimension, vector, created_at) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO faceprints (learner_id, embedding_model, dimension, vector, created_at) "
+    "SELECT ?, ?, ?, ?, ? FROM consents "
+    "WHERE consents.learner_id = ? AND consents.scope = ? AND consents.withdrawn_at IS NULL "
+    "LIMIT 1"
 )
 _DELETE_FACEPRINT_SQL = _learner_scoped("DELETE FROM faceprints WHERE faceprints.learner_id = ?")
+
+# Enrolment's statements. The learner row and its consent row are written together in
+# one transaction by record_consent -- there is no public create-learner function, so
+# the state "a learner exists and nobody agreed to anything" cannot be reached through
+# this module's surface at all.
+_INSERT_LEARNER_SQL = _learner_scoped("INSERT INTO learners (id, display_name, created_at) VALUES (?, ?, ?)")
+_INSERT_CONSENT_SQL = _learner_scoped(
+    "INSERT INTO consents (learner_id, scope, statement_id, statement_text, granted_by, granted_via, granted_at) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?)"
+)
+_CONSENTS_SQL = _learner_scoped(
+    "SELECT id, learner_id, scope, statement_id, statement_text, granted_by, granted_via, granted_at, withdrawn_at "
+    "FROM consents WHERE consents.learner_id = ? ORDER BY consents.granted_at, consents.id"
+)
+# The two halves of undoing an enrolment that did not finish. The DELETE refuses a
+# learner with lesson history in the statement itself rather than in a prior read: a
+# check and a delete in two statements is a race, and this is a row about a person.
+_HISTORY_COUNT_SQL = _learner_scoped(
+    "SELECT count(*) AS attempts FROM lesson_results WHERE lesson_results.learner_id = ?"
+)
+_DELETE_LEARNER_SQL = _learner_scoped(
+    "DELETE FROM learners WHERE learners.id = ? "
+    "AND NOT EXISTS (SELECT 1 FROM lesson_results WHERE lesson_results.learner_id = ?)"
+)
 
 _LEARNER_SCOPED_SQL: tuple[str, ...] = (
     # NEXT_LESSON_SQL is scoped too ("r.learner_id = ?"), so it is registered rather
@@ -2059,6 +2356,11 @@ _LEARNER_SCOPED_SQL: tuple[str, ...] = (
     _FACEPRINT_SQL,
     _INSERT_FACEPRINT_SQL,
     _DELETE_FACEPRINT_SQL,
+    _INSERT_LEARNER_SQL,
+    _INSERT_CONSENT_SQL,
+    _CONSENTS_SQL,
+    _HISTORY_COUNT_SQL,
+    _DELETE_LEARNER_SQL,
 )
 
 
@@ -2703,6 +3005,12 @@ def save_faceprint(
     One faceprint per learner, so a second one replaces the first. There is no caller
     -supplied clock: created_at is stamped here, because a timestamp a caller chooses
     is a field a caller can get wrong on biometric data, and nothing needs it.
+
+    REFUSES A LEARNER WHO HAS NOT AGREED, and not as a check this function performs --
+    the INSERT draws its rows from the consents table, so there is nothing to insert.
+    A caller cannot pass anything that gets round it, because the permission is a row
+    and not an argument. The refusal is `no_consent`, and it changes nothing: an
+    existing faceprint survives a refused replace byte for byte.
     """
     refusal = _cannot_be_an_embedding_model(embedding_model)
     if refusal is not None:
@@ -2736,13 +3044,34 @@ def save_faceprint(
         # spellings of an upsert -- see the note beside the statements themselves. The
         # transaction is what makes "replace" atomic: without it a failed insert would
         # leave the learner with no faceprint at all, which is worse than the old one.
+        #
+        # It is also what makes the consent refusal safe. The INSERT selects from the
+        # consents table, so an unconsented learner inserts nothing and reports
+        # rowcount 0 -- quietly, with the DELETE above already done. Raising here and
+        # letting the context manager roll back is what turns "wrote nothing" into
+        # "changed nothing", so a refused save leaves an existing faceprint exactly as
+        # it was rather than erasing it on the way to saying no.
         with connection:
             connection.execute(_DELETE_FACEPRINT_SQL, (learner_id,))
-            connection.execute(_INSERT_FACEPRINT_SQL, (learner_id, embedding_model, dimension, blob, when))
+            written = connection.execute(
+                _INSERT_FACEPRINT_SQL,
+                (learner_id, embedding_model, dimension, blob, when, learner_id, _FACEPRINT_CONSENT_SCOPE),
+            )
+            if written.rowcount != 1:
+                raise _ConsentMissing
+    except _ConsentMissing:
+        # No learner id in the line. That this robot was asked to store a faceprint
+        # for somebody who has not agreed is worth a warning; who they are is not.
+        logger.warning("Could not store a faceprint: no standing consent covers it")
+        return SaveFaceprintOutcome(saved=False, reason="no_consent")
     except (sqlite3.IntegrityError, OverflowError) as exc:
-        # The schema's constraints as a backstop to the checks above, and the one
-        # refusal that can still arrive from a race: a learner deleted between the
-        # existence check and the insert fails the foreign key here.
+        # The schema's constraints as a backstop to the checks above. This used to be
+        # where the deleted-between-check-and-insert race landed; it is not any more,
+        # and the comment is corrected rather than left to mislead. Deleting a learner
+        # cascades their consent row away with them, so the insert above matches
+        # nothing and answers no_consent before the foreign key is consulted. The arm
+        # stays as defence in depth against a constraint the Python checks do not
+        # anticipate, which is what a backstop is for.
         logger.warning("The learner database refused a faceprint: %s", _log_safe(exc))
         return SaveFaceprintOutcome(saved=False, reason="rejected_by_database")
     except _FACEPRINT_ABSORBS as exc:
@@ -2848,6 +3177,220 @@ def delete_faceprint(learner_id: str, *, instance_path: str | Path | None = None
         return int(cursor.rowcount)
     except _FACEPRINT_ABSORBS as exc:
         logger.warning("Could not delete a faceprint: %s", _log_safe(exc))
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _consent_from_row(row: sqlite3.Row) -> ConsentRecord:
+    """Build a consent record from one database row."""
+    withdrawn = row["withdrawn_at"]
+    return ConsentRecord(
+        id=int(row["id"]),
+        learner_id=str(row["learner_id"]),
+        scope=str(row["scope"]),
+        statement_id=str(row["statement_id"]),
+        statement_text=str(row["statement_text"]),
+        granted_by=str(row["granted_by"]),
+        granted_via=str(row["granted_via"]),
+        granted_at=int(row["granted_at"]),
+        withdrawn_at=None if withdrawn is None else int(withdrawn),
+    )
+
+
+def record_consent(
+    display_name: str,
+    *,
+    scope: str,
+    statement_id: str,
+    statement_text: str,
+    granted_by: str,
+    granted_via: str,
+    learner_id: str | None = None,
+    instance_path: str | Path | None = None,
+) -> ConsentOutcome:
+    """Create a household member and record what they agreed to, in one transaction.
+
+    THE ONLY WAY TO CREATE A LEARNER, and it cannot be called without saying what the
+    person was told and who said yes. That is the ordering guarantee stated as a type
+    rather than as a convention: this module publishes no create-learner function, so
+    "a learner exists and nobody agreed to anything" is not a state its surface can
+    produce. The faceprint writer then refuses anybody with no consent row, which
+    closes the other direction.
+
+    Both rows go in under one transaction opened with BEGIN IMMEDIATE, so a second
+    enrolment running at the same time waits for the write lock rather than
+    interleaving between the two inserts. Without it the failure is not a lost write
+    but a worse one -- a learner row committed while its consent row is still pending.
+
+    Never raises. `display_name` is validated by _cannot_be_a_display_name before
+    anything is opened, and the three vocabulary arguments are checked against their
+    published tuples, because a value the database would accept but nobody can read
+    back is the failure these columns exist to prevent.
+
+    The learner id is a fresh uuid4 hex, derived from neither the name nor the clock:
+    an id anybody can guess from a name is an id that leaks the name. A caller may
+    supply one instead, and enrolment does -- see the note beside the assignment.
+    """
+    refusal = _cannot_be_a_display_name(display_name)
+    if refusal is not None:
+        # The shape, never the name. This is the one argument that IS a person's name.
+        logger.warning("Could not record consent: the name was %s", refusal)
+        return ConsentOutcome(recorded=False, reason="name_not_usable")
+    if scope not in CONSENT_SCOPES:
+        logger.warning("Could not record consent: the scope is not one this app publishes")
+        return ConsentOutcome(recorded=False, reason="invalid_scope")
+    if granted_by not in CONSENT_GRANTED_BY:
+        logger.warning("Could not record consent: who consented is not one of the published roles")
+        return ConsentOutcome(recorded=False, reason="invalid_granted_by")
+    if granted_via not in CONSENT_GRANTED_VIA:
+        logger.warning("Could not record consent: how consent was obtained is not a published route")
+        return ConsentOutcome(recorded=False, reason="invalid_granted_via")
+    # Rebound rather than given a name of its own, deliberately: the log guard in the
+    # tests permits a small set of generic names and pins each one to the producers it
+    # may be bound from. `refusal` is that name here, and both bindings come from a
+    # _cannot_be_* guard whose reasons name a shape and never a value.
+    refusal = _cannot_be_a_consent_statement(statement_id, statement_text)
+    if refusal is not None:
+        logger.warning("Could not record consent: the wording was %s", refusal)
+        return ConsentOutcome(recorded=False, reason="invalid_statement")
+
+    # The caller may supply the id, and enrolment does. Not for testing: it is what
+    # lets a caller know WHICH row to undo when it is interrupted between this
+    # function's COMMIT and its own assignment of the returned outcome. Minted here
+    # when nobody supplies one, so every other caller is unchanged.
+    if learner_id is not None:
+        refusal = _cannot_be_a_learner_id(learner_id)
+        if refusal is not None:
+            logger.warning("Could not record consent: the learner id was %s", refusal)
+            return ConsentOutcome(recorded=False, reason="rejected_by_database")
+
+    learner_id = learner_id or uuid.uuid4().hex
+    when = utc_now_ms()
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        # BEGIN IMMEDIATE takes the write lock up front rather than on the first write,
+        # so two operators enrolling at once serialise here instead of discovering the
+        # conflict halfway through. isolation_level is left alone: the explicit BEGIN
+        # is what defines the transaction, and COMMIT below closes it.
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(_INSERT_LEARNER_SQL, (learner_id, display_name, when))
+        connection.execute(
+            _INSERT_CONSENT_SQL,
+            (learner_id, scope, statement_id, statement_text, granted_by, granted_via, when),
+        )
+        connection.execute("COMMIT")
+    except (sqlite3.IntegrityError, OverflowError) as exc:
+        # The schema as a backstop to the checks above. Nothing is half-written: the
+        # driver rolls the open transaction back when the connection closes.
+        logger.warning("The learner database refused a consent: %s", _log_safe(exc))
+        return ConsentOutcome(recorded=False, reason="rejected_by_database")
+    except _FACEPRINT_ABSORBS as exc:
+        logger.warning("Could not record consent: %s", _log_safe(exc))
+        return ConsentOutcome(recorded=False, reason="storage_unavailable")
+    finally:
+        if connection is not None:
+            connection.close()
+
+    return ConsentOutcome(
+        recorded=True,
+        learner_id=learner_id,
+        consent=ConsentRecord(
+            id=0,
+            learner_id=learner_id,
+            scope=scope,
+            statement_id=statement_id,
+            statement_text=statement_text,
+            granted_by=granted_by,
+            granted_via=granted_via,
+            granted_at=when,
+        ),
+    )
+
+
+def get_consents(learner_id: str, *, instance_path: str | Path | None = None) -> tuple[ConsentRecord, ...] | None:
+    """Return everything this learner has agreed to, oldest first, or None.
+
+    An empty tuple means they have agreed to nothing; None means the store could not
+    be read and nothing can be said either way. The same distinction get_faceprint
+    draws, and for the same reason -- "you never consented" and "I cannot read my
+    database" must not be shown to a person as the same answer.
+
+    This is the read-back the household is owed: every row carries the words as they
+    stood on the day, so somebody can be shown what they actually agreed to rather
+    than what the constant says today.
+    """
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not read a learner id: %s", refusal)
+        return None
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        rows = connection.execute(_CONSENTS_SQL, (learner_id,)).fetchall()
+        return tuple(_consent_from_row(row) for row in rows)
+    except _FACEPRINT_ABSORBS as exc:
+        logger.warning("Could not read consents: %s", _log_safe(exc))
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def forget_learner(learner_id: str, *, instance_path: str | Path | None = None) -> int | None:
+    """Remove a learner who has no lesson history, returning how many rows went, or None.
+
+    UNDOES AN ENROLMENT THAT DID NOT FINISH, and nothing more. It exists because
+    consent is written first: a capture that fails afterwards would otherwise leave a
+    learner and a consent row for somebody who never got a faceprint and does not know
+    they are in the database.
+
+    It is deliberately not an erasure feature. A learner with any lesson history is
+    refused -- by the statement itself, with NOT EXISTS, rather than by a read before
+    the delete, because a check and a delete in two statements is a race and this is a
+    row about a person. Erasing a household member who has actually used the robot is
+    a different promise with a different surface, and it is not this.
+
+    A count, never a name, exactly as delete_faceprint returns one: 0 means nothing was
+    removed -- no such learner, or one with history -- and None means the store could
+    not be read. The consent rows and any faceprint go with the learner by ON DELETE
+    CASCADE.
+
+    Checkpoints before returning, for the reason delete_faceprint measures at length:
+    without it the removed pages sit in the write-ahead log while the main database
+    file still holds the display name and the vector, with this function already
+    reporting them gone.
+    """
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not read a learner id: %s", refusal)
+        return 0
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect(instance_path)
+        with connection:
+            cursor = connection.execute(_DELETE_LEARNER_SQL, (learner_id, learner_id))
+        checkpoint = connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        if checkpoint is not None:
+            _, log_frames, checkpointed = (int(value) for value in tuple(checkpoint)[:3])
+            if checkpointed < log_frames:
+                # Counts only: no path, no learner id, no name. The same deferral
+                # delete_faceprint reports, and it is reported here for the same
+                # reason -- a display name left in the file is personal data too.
+                logger.warning(
+                    "A learner was removed but their pages are still in the write-ahead "
+                    "log: %d of %d frames checkpointed. They leave the database file at "
+                    "the next checkpoint no reader is holding open.",
+                    checkpointed,
+                    log_frames,
+                )
+        return int(cursor.rowcount)
+    except _FACEPRINT_ABSORBS as exc:
+        logger.warning("Could not remove a learner: %s", _log_safe(exc))
         return None
     finally:
         if connection is not None:

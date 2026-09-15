@@ -10,6 +10,7 @@ import threading
 import traceback
 from typing import TYPE_CHECKING, Any, Optional
 from pathlib import Path
+from datetime import datetime, timezone
 from collections.abc import Callable, Awaitable
 
 from fastapi import FastAPI, Request, Response
@@ -159,6 +160,213 @@ def build_tool_dependencies(
 UI_BIND_HOST = "127.0.0.1"
 
 
+# The two spellings of the consent roles: hyphens on the command line because that is
+# what a person types, underscores in the database because that is what the column
+# holds. Mapped in one place so neither side has to know about the other's style.
+_CONSENT_ROLE_ARGUMENTS = {
+    "the-person-themselves": "the_person_themselves",
+    "an-adult-of-the-household": "an_adult_of_the_household",
+}
+
+
+def handle_enrol_command(args: argparse.Namespace) -> int:
+    """Enrol a household member, in person, after showing them what they are agreeing to.
+
+    AN OPERATOR COMMAND, NOT A TOOL, and the distinction is the security boundary this
+    app is built around: the model never supplies an identity, so it must not be able
+    to create one either. Running this needs a shell on the machine. Nothing here is
+    registered on the /rpc surface, which is LAN-reachable and cannot be authenticated.
+
+    IT WRITES NO IMAGE. It borrows the media handle for the length of the capture,
+    turns frames into numbers, and closes the handle on the way out.
+
+    IT PRINTS A NAME, and that is a considered departure from
+    scripts/calibrate_faceprints.py, which prints none. There, names are incidental to
+    a threshold table; here the name IS the record being confirmed, and a consent
+    read-back that cannot say who consented does not meet what the household is owed.
+    The LOGGER still never receives a name -- print to an operator's terminal is not
+    logging -- but an operator who pipes this into a shared file has put personal data
+    there, so the help text says so.
+    """
+    from reachy_language_tutor.faces import enrol, consent_statement
+    from reachy_language_tutor.learners import (
+        get_profile,
+        get_consents,
+        forget_learner,
+        delete_faceprint,
+        store_is_available,
+    )
+
+    # Bootstrap and the path helper come from the storage module rather than the
+    # package boundary, which deliberately publishes neither -- the same import run()
+    # already makes below, for the same reason.
+    from reachy_language_tutor.learners.store import ensure_learner_database, learner_db_path_for_instance
+
+    instance_path = args.instance_path
+    database = learner_db_path_for_instance(instance_path)
+    # Printed before anything else, every time. An operator running this from a
+    # terminal and an app launched by the daemon can easily be looking at two
+    # different files, and the failure has no symptom until recognition never works
+    # for the person who was enrolled into the wrong one.
+    print(f"Learner database: {database}")
+    if not database.exists():
+        print("No learner database there yet. Start the app once first, or pass --instance-path.")
+        return 1
+
+    def _named_learner(learner_id: str):
+        """Look a learner up, telling 'no such learner' apart from 'cannot read'.
+
+        get_profile returns None for BOTH, and its own docstring says the two must
+        not be described to a person the same way. Telling a household their child is
+        not in the database, when the truth is that the database could not be opened,
+        is the exact conflation delete_faceprint's None return exists to avoid -- and
+        a pre-check that collapses them undoes that care one layer up. One helper
+        rather than the same three lines in each branch, because this was already the
+        same bug twice.
+        """
+        profile = get_profile(learner_id, instance_path=instance_path)
+        if profile is not None:
+            return profile
+        if store_is_available(instance_path):
+            print("No such learner.")
+        else:
+            print("The learner database could not be read, so nothing can be promised either way.")
+        return None
+
+    if getattr(args, "remove_learner_id", None) is not None:
+        # Removes the learner, their consent and any faceprint -- the remedy for an
+        # enrolment whose rollback failed, which --forget cannot clear because such a
+        # learner has no faceprint to delete.
+        profile = _named_learner(args.remove_learner_id)
+        if profile is None:
+            return 1
+        removed = forget_learner(args.remove_learner_id, instance_path=instance_path)
+        if removed is None:
+            print("The learner database could not be read, so nothing can be promised either way.")
+            return 1
+        if removed == 0:
+            print(f"{profile.display_name} was not removed. A learner with lesson history is kept deliberately.")
+            return 1
+        print(f"Removed {profile.display_name}, their agreement and any faceprint.")
+        return 0
+
+    if getattr(args, "forget_learner_id", None) is not None:
+        # The promise in CONSENT_STATEMENT, kept. A security review found the sentence
+        # "you can ask ... to delete all of it" had no invocable route behind it:
+        # delete_faceprint was exported and never called from anywhere in the app, so
+        # a household asking for their child's faceprint to be removed could only be
+        # served by somebody opening the SQLite file by hand.
+        profile = _named_learner(args.forget_learner_id)
+        if profile is None:
+            return 1
+        removed = delete_faceprint(args.forget_learner_id, instance_path=instance_path)
+        if removed is None:
+            print("The learner database could not be read, so nothing can be promised either way.")
+            return 1
+        if removed == 0:
+            print(f"{profile.display_name} had no faceprint. Nothing to delete.")
+            return 0
+        # Said plainly, because this is the sentence the household was promised. The
+        # count is what delete_faceprint returns; it erases and checkpoints the WAL
+        # before reporting, so the bytes are gone from the file and not merely
+        # unreachable.
+        print(f"Deleted the faceprint for {profile.display_name}.")
+        print("  This robot can no longer recognise them. Their lesson history is untouched.")
+        print("  Their record of having agreed is kept, so there is still an answer to what was agreed and when.")
+        return 0
+
+    if args.show_learner is not None:
+        profile = _named_learner(args.show_learner)
+        if profile is None:
+            return 1
+        consents = get_consents(args.show_learner, instance_path=instance_path)
+        if consents is None:
+            print("The learner database could not be read.")
+            return 1
+        print(f"\n{profile.display_name} has agreed to {len(consents)} thing(s).\n")
+        for record in consents:
+            when = datetime.fromtimestamp(record.granted_at / 1000, tz=timezone.utc).isoformat()
+            standing = "withdrawn" if record.withdrawn_at is not None else "standing"
+            print(f"  {record.scope} ({standing})")
+            print(f"    agreed by : {record.granted_by}")
+            print(f"    agreed via: {record.granted_via}")
+            print(f"    agreed at : {when}")
+            print(f"    wording   : {record.statement_id}")
+            # The words as they stood on the day, not the constant as it reads today.
+            for line in record.statement_text.splitlines():
+                print(f"      | {line}")
+            print()
+        return 0
+
+    if args.enrol_name is None:
+        print("Nobody to enrol: pass --name.")
+        return 1
+    if args.consent_from is None:
+        # No default, deliberately. This is the question about who may consent for a
+        # child, and it is asked every time rather than inherited.
+        print("Say who is giving permission: --consent-from the-person-themselves|an-adult-of-the-household")
+        return 1
+    granted_by = _CONSENT_ROLE_ARGUMENTS[args.consent_from]
+
+    ensure_learner_database(instance_path)
+
+    print()
+    print(consent_statement())
+    print()
+    # A typed word, never a bare [y/N]. A default that means yes is not consent, and
+    # the Cadillac Fairview finding docs/plan.md cites was about consent that was
+    # technically obtained and not meaningful.
+    answer = input('Type "yes" to agree, or anything else to stop: ').strip().lower()
+    if answer != "yes":
+        print("Nothing was recorded.")
+        return 2
+
+    robot = None
+    try:
+        robot = ReachyMini()
+        media = robot.media
+        outcome = enrol(
+            args.enrol_name,
+            media,
+            granted_by=granted_by,
+            camera_enabled=not args.no_camera,
+            instance_path=instance_path,
+        )
+    except Exception as exc:
+        # The shape only: this line can reach a log, and the exception from a media
+        # backend can carry a device path.
+        print(f"Could not reach the robot's camera ({type(exc).__name__}). Nothing was enrolled.")
+        return 1
+    finally:
+        if robot is not None:
+            # Mirrors run()'s shutdown finally. Closing media also closes the audio
+            # device, which is why it is done here at the end of the command rather
+            # than anywhere inside the faces package.
+            try:
+                robot.media.close()
+            except Exception:
+                pass
+            try:
+                robot.client.disconnect()
+            except Exception:
+                pass
+
+    if not outcome.enrolled:
+        print(f"Not enrolled: {outcome.error}")
+        if outcome.learner_id is not None:
+            # The rollback_failed sentence points at "the learner id printed below",
+            # and this is that line. Without it the remedy named a value the operator
+            # had never been shown, and there is no way to list learners -- so the
+            # orphan would have been unreachable from the app surface entirely.
+            print(f"  learner id: {outcome.learner_id}")
+        return 1
+
+    print(f"Enrolled {args.enrol_name}.")
+    print(f"  learner id: {outcome.learner_id}")
+    print("  Their faceprint is on this robot only. Delete it at any time on request.")
+    return 0
+
+
 def main() -> None:
     """Entrypoint for the Reachy Mini conversation app."""
     args, _ = parse_args()
@@ -170,6 +378,17 @@ def main() -> None:
             raise SystemExit(handle_tool_spaces_command(args))
         except Exception as exc:
             logger.error("tool-spaces command failed: %s", log_safe(exc))
+            raise SystemExit(1) from exc
+    if args.command == "enrol":
+        logger = setup_logger(args.debug)
+        try:
+            raise SystemExit(handle_enrol_command(args))
+        except SystemExit:
+            raise
+        except Exception as exc:
+            # No name and no path in this line: the argument that failed is a person's
+            # name, and log_safe is what keeps the exception from quoting it.
+            logger.error("enrol command failed: %s", log_safe(exc))
             raise SystemExit(1) from exc
     run(args)
 

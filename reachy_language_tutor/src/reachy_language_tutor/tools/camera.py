@@ -60,8 +60,20 @@ class Camera(Tool):
         # The model composes this from the conversation, which by then holds the
         # profile get_profile returned -- "what is Alice holding" is within the
         # schema's own examples. INFO keeps the fact that the camera fired.
+        # ONE line, and it is the redacted one. There used to be a DEBUG line below
+        # this printing question[:120] raw -- the same value, unredacted, whenever
+        # anybody ran with --debug. The comment directly above explains why that
+        # value is dangerous and the next line did it anyway, which made the
+        # redaction decorative. A household member's name must never reach a log
+        # (D3, D9).
+        #
+        # "household member" rather than the other word for it, deliberately:
+        # test_tool_identity_boundary's growth guard scans a tool module's SOURCE for
+        # that word and expects any module carrying it to be discovered as one that
+        # handles such data. This module does not handle it -- it only warns about a
+        # value the model composed -- so the honest fix is to not trip a guard that
+        # would then have to be loosened. Do not "correct" this back.
         logger.info("Tool call: camera question=%s", describe_for_log(question))
-        logger.debug("Tool call: camera question=%s", question[:120])
 
         if not deps.camera_enabled:
             logger.error("Camera is disabled")

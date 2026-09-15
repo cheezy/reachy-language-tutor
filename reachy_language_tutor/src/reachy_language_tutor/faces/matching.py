@@ -188,6 +188,29 @@ def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float |
     return dot / (left_magnitude * right_magnitude)
 
 
+def faceprint_similarity(left: Sequence[float], right: Sequence[float]) -> float | None:
+    """How alike two faceprints are, or None when the question has no answer.
+
+    The published form of this module's own comparison, so that enrolment can ask
+    whether a person's frames agree with each other without reaching past the package
+    boundary into a private helper -- the boundary whose violation
+    scripts/calibrate_faceprints.py records as the defect in its own first version.
+
+    It is the SAME comparison match_faceprint uses, not a second one written to look
+    like it. That matters: enrolment checks a person's frames against each other using
+    the floor this module publishes, so a print that would not clear the floor against
+    its own owner is refused at enrolment rather than discovered later by a household
+    member the robot cannot recognise.
+
+    None when the comparison is undefined -- different lengths, a zero-magnitude
+    vector, or anything that is not a vector of finite real numbers. Never 0.0 for
+    those, which would read as "maximally dissimilar" and quietly pass a floor test.
+    """
+    if not _is_usable(left) or not _is_usable(right):
+        return None
+    return _cosine_similarity(left, right)
+
+
 def match_faceprint(
     candidate: Sequence[float],
     enrolled: Sequence[EnrolledFaceprint],

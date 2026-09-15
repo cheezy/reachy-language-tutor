@@ -2,7 +2,10 @@
 
 This package is the boundary. Import from here, never from the modules underneath.
 
-It touches no database, and it owns no hardware. `embedding.py` is handed a frame by
+It owns no hardware, and until enrolment arrived it touched no database either. It
+now reaches one on exactly one path -- `enrollment.py`, which writes a person's
+agreement and then their faceprint, in that order and no other -- and that path writes
+numbers and never pixels. Everything else here is still handed what it needs: `embedding.py` is handed a frame by
 whatever owns the camera, and `matching.py` is handed rows by whatever owns the store.
 `capture.py` is the one module that goes near a camera, and it borrows a handle rather
 than opening one -- it starts nothing, closes nothing, and keeps no frame. That
@@ -12,6 +15,13 @@ test run, with no hardware and no downloaded weights.
 WHAT IS STORED, AND WHAT IS NOT. A faceprint is 128 float32 numbers. No image, no
 crop, no thumbnail and no path to one is written by anything in this package, at any
 point, including temporarily.
+
+NOBODY IS ENROLLED WITHOUT AGREEING FIRST, and `enrollment.py` is not where that is
+enforced -- it is enforced beneath it, by a store that publishes no way to create a
+learner except alongside their consent and a faceprint INSERT that draws its rows from
+the consents table. Enrolment is an operator action performed in person, never a
+conversation tool: a tool that could create an identity is the same boundary breach as
+one that accepts an identity, one step earlier.
 
 **THERE IS NO LIVENESS CHECK, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.** A
 photograph held up to the camera, or a face on a television or a phone screen, is
@@ -42,19 +52,41 @@ from reachy_language_tutor.faces.matching import (
     MatchOutcome,
     EnrolledFaceprint,
     match_faceprint,
+    faceprint_similarity,
 )
 from reachy_language_tutor.faces.embedding import (
+    EMBEDDING_REASONS,
     EMBEDDING_MODEL_ID,
     FACE_EMBEDDING_AVAILABLE,
     EXPECTED_EMBEDDING_DIMENSION,
+    FaceEmbedding,
     embed_face,
+    describe_face,
     warm_face_models,
     loaded_face_models,
+)
+from reachy_language_tutor.faces.enrollment import (
+    CONSENT_SCOPE,
+    CONSENT_STATEMENT,
+    ENROLMENT_REASONS,
+    CONSENT_STATEMENT_ID,
+    EnrolmentOutcome,
+    enrol,
+    capture_faceprint,
+    consent_statement,
+    record_consent_for_enrolment,
 )
 
 
 __all__ = [
     "CAPTURE_REASONS",
+    "CONSENT_SCOPE",
+    "CONSENT_STATEMENT",
+    "CONSENT_STATEMENT_ID",
+    "EMBEDDING_REASONS",
+    "ENROLMENT_REASONS",
+    "EnrolmentOutcome",
+    "FaceEmbedding",
     "EMBEDDING_MODEL_ID",
     "EXPECTED_EMBEDDING_DIMENSION",
     "EnrolledFaceprint",
@@ -67,8 +99,14 @@ __all__ = [
     "THRESHOLD_CALIBRATED",
     "FrameCapture",
     "MatchOutcome",
+    "capture_faceprint",
     "capture_frame",
+    "consent_statement",
+    "describe_face",
     "embed_face",
+    "enrol",
+    "faceprint_similarity",
+    "record_consent_for_enrolment",
     "loaded_face_models",
     "match_faceprint",
     "warm_face_models",

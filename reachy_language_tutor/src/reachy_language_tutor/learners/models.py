@@ -39,6 +39,37 @@ FACEPRINT_REASONS: tuple[str, ...] = (
     "unknown_learner",
     "invalid_model",
     "invalid_vector",
+    "no_consent",
+    "rejected_by_database",
+    "storage_unavailable",
+)
+
+# What a household member can be asked to agree to. One entry today, and an allow-list
+# rather than free text on purpose: widening what a stored yes covers is a decision
+# somebody should have to make deliberately, not a string a caller can invent.
+CONSENT_SCOPES: tuple[str, ...] = ("face_recognition",)
+
+# Who did the agreeing, as a ROLE and never a name. "an_adult_of_the_household" is the
+# prototype's whole answer to parental consent: an adult was standing at the robot and
+# said yes for a child. Which adult is deliberately not recorded -- they are not a
+# learner here, and naming them would store personal data about somebody who was never
+# asked. Nothing verifies the claim; physical presence at the robot is the control.
+CONSENT_GRANTED_BY: tuple[str, ...] = ("the_person_themselves", "an_adult_of_the_household")
+
+# How the yes was obtained, and this is the security claim rather than a description:
+# an operator, in person, at this robot. There is no conversational path -- the model
+# can no more create a consent than it can create a learner -- and no network path,
+# because /rpc refuses every writer on it.
+CONSENT_GRANTED_VIA: tuple[str, ...] = ("operator_at_the_robot",)
+
+# Why a consent could not be recorded. Same shape as FACEPRINT_REASONS, and the same
+# rule: a caller switches on these and never on a message.
+CONSENT_REASONS: tuple[str, ...] = (
+    "name_not_usable",
+    "invalid_scope",
+    "invalid_statement",
+    "invalid_granted_by",
+    "invalid_granted_via",
     "rejected_by_database",
     "storage_unavailable",
 )
@@ -316,3 +347,47 @@ class SaveFaceprintOutcome:
     saved: bool
     reason: str | None = None
     faceprint: Faceprint | None = None
+
+
+@dataclass(frozen=True)
+class ConsentRecord:
+    """One act of permission, in a form a person can read back later.
+
+    Who, to what, and when -- which is what the household is owed and what an auditor
+    would ask for. `statement_text` is the wording as it stood on the day, stored
+    rather than looked up: an id alone would let a later edit to the constant in
+    faces/enrollment.py silently rewrite what somebody was told, and the record would
+    then answer a question about today instead of about that day.
+
+    `granted_by` is a role from CONSENT_GRANTED_BY, never a second person's name.
+    `withdrawn_at` is None while the permission stands; the faceprint writer refuses
+    once it is set.
+    """
+
+    id: int
+    learner_id: str
+    scope: str
+    statement_id: str
+    statement_text: str
+    granted_by: str
+    granted_via: str
+    granted_at: int
+    withdrawn_at: int | None = None
+
+
+@dataclass(frozen=True)
+class ConsentOutcome:
+    """What happened when consent was recorded, and the learner it created.
+
+    Returned rather than raised, like every other outcome here. `reason` is one of
+    CONSENT_REASONS when `recorded` is False, and None when it is True.
+
+    `learner_id` is set only on success, and it is the whole handle the caller gets:
+    enrolment needs it to store a faceprint, and there is no other public way to
+    obtain one for a person who did not exist a moment ago.
+    """
+
+    recorded: bool
+    reason: str | None = None
+    learner_id: str | None = None
+    consent: ConsentRecord | None = None

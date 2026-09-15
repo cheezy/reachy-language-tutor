@@ -184,7 +184,20 @@ Publish the app once as a Hugging Face Space. Each user installs it from their r
 Only names, emails, and learning progress leave the home. Faceprints stay on each robot. Still needed:
 
 - A clear privacy policy and a way to delete accounts and data.
-- Parental consent if children in these homes will use it.
+- **Parental consent — decided for the prototype, still open in law.** Enrolment is an
+  operator action performed in person at the robot, never reachable from the
+  conversation and never over the network. Whoever runs it must say which of two roles
+  applies, every time, with no default: `the_person_themselves` or
+  `an_adult_of_the_household`. For a child the answer is the second, and it is stored
+  on the consent row. What that does **not** establish, written down rather than left
+  implied: nothing verifies that the person asserting adulthood is one — physical
+  presence at the robot is the whole control; which adult is deliberately not recorded,
+  because they are not a learner here and naming them would store personal data about
+  somebody who was never asked; and `learners` has no age field, so the robot does not
+  know who is a child and cannot enforce anything itself. Consult a privacy lawyer
+  about in-home enrolment of minors before any public launch. The mechanism is in
+  `docs/learner-database.md` under "Consent"; the wording a person is shown is
+  `faces/enrollment.py`'s `CONSENT_STATEMENT`.
 
 ## 9. Lesson content: the FSI/DLI public-domain courses
 

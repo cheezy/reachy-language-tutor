@@ -9,9 +9,14 @@ imported, so "no timer" is a property of the file rather than a promise in a com
 
 WHO OWNS THE CAMERA. Not this module. It opens nothing and closes nothing; it borrows
 a media handle somebody else already has. The daemon owns the physical camera, this
-app reaches it through the one `ReachyMini` built in `main.py` (or handed in by the
-daemon), and that handle is released exactly once, in `run`'s shutdown `finally`,
-where `robot.media.close()` is called. Closing it from here would be actively wrong
+app reaches it through a `ReachyMini` built in `main.py` (or handed in by the daemon),
+and whoever built it releases it in their own shutdown `finally`, where
+`robot.media.close()` is called. There are two such owners now rather than one --
+`run` for the app, and the enrolment command, which builds its own robot because it
+is invoked from a shell and not from the running app -- and a test derives that set
+from `main.py` rather than counting it, so a third owner is held to the same rule
+without this sentence needing to be right about the number. Closing it from here
+would be actively wrong
 rather than merely out of scope: `MediaManager.close()` closes the audio device too,
 and that audio device is the tutor's voice -- a frame grab that muted the lesson would
 be a strange way to recognise somebody.

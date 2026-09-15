@@ -20,6 +20,7 @@ is broken without anyone editing the sentence.
 from __future__ import annotations
 import logging
 from typing import Any
+from dataclasses import dataclass
 
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,74 @@ _DETECTION_CONFIDENCE_FLOOR = 0.9
 _LOADED_MODELS: tuple[Any, Any] | None = None
 
 
+# Why no faceprint came out of a frame. Machine codes, the same shape and the same
+# contract as capture.py's CAPTURE_REASONS: a caller switches on these, and enrolment
+# turns them into something an operator can act on.
+#
+# Kept apart because the remedy differs, which is the same test capture.py applies:
+#   recognition_unavailable -- no library, or the models are not loaded. Never retry.
+#   no_face                 -- nobody is in shot. Ask them to look at the robot.
+#   several_faces           -- more than one person is in shot. Ask one to step out.
+#   not_confident           -- something face-shaped, below the detector's floor.
+#   frame_unreadable        -- the frame was not something the detector could read.
+EMBEDDING_REASONS: tuple[str, ...] = (
+    "recognition_unavailable",
+    "no_face",
+    "several_faces",
+    "not_confident",
+    "frame_unreadable",
+)
+
+
+# eq=False for the same load-bearing reason FrameCapture carries it, and the two types
+# are deliberately identical in shape: a generated __eq__ would compare the vector
+# elementwise, and frozen+eq would generate a __hash__ over a tuple of floats that
+# reads as harmless right up until somebody puts one in a set. Identity is the honest
+# answer for a value wrapping somebody's face, and __repr__ below is the same sweep --
+# the generated one renders all 128 numbers into any log line or assertion diff.
+@dataclass(frozen=True, eq=False)
+class FaceEmbedding:
+    """One faceprint, or the one reason there isn't one.
+
+    Exactly one of `vector` and `reason` is ever set, and __post_init__ refuses any
+    other combination -- so "an empty faceprint" is not a value this type can hold.
+    `reason` is one of EMBEDDING_REASONS. There is no exception path, for the reason
+    FrameCapture gives: the tutor has to keep talking whatever the camera is doing.
+    """
+
+    vector: tuple[float, ...] | None = None
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        """Refuse any combination that would let a caller mistake nothing for a face."""
+        if self.vector is None and self.reason is None:
+            raise ValueError("a FaceEmbedding carries either a vector or a reason, and this has neither")
+        if self.vector is not None and self.reason is not None:
+            raise ValueError("a FaceEmbedding carries either a vector or a reason, and this has both")
+        if self.reason is not None and self.reason not in EMBEDDING_REASONS:
+            # The TYPE, never the value -- FaceEmbedding(reason=<vector>) is a
+            # plausible argument-order slip, and !r would put somebody's faceprint
+            # into whatever logs or re-raises this message.
+            raise ValueError(f"reason must be one of {EMBEDDING_REASONS}, not a {type(self.reason).__name__}")
+
+    @property
+    def usable(self) -> bool:
+        """True when there is a faceprint to work with, so no caller needs the vocabulary."""
+        return self.vector is not None
+
+    def __repr__(self) -> str:
+        """Describe the shape of the answer and never a number of it.
+
+        THIS IS A PRIVACY CONTROL, not formatting, and it is the same one FrameCapture
+        carries one layer up. A faceprint is biometric data about a person; the
+        generated dataclass repr would render all of it into any log line, f-string or
+        failing assertion that ever touched this object.
+        """
+        if self.vector is None:
+            return f"FaceEmbedding(reason={self.reason!r})"
+        return f"FaceEmbedding(vector=<{len(self.vector)} floats>)"
+
+
 def load_face_models() -> tuple[Any, Any]:
     """Load the detector and the recognizer, downloading them once if needed.
 
@@ -139,42 +208,67 @@ def warm_face_models() -> bool:
     return True
 
 
-def embed_face(image: Any) -> tuple[float, ...] | None:
-    """Return the faceprint of the single face in this frame, or None.
+def describe_face(image: Any) -> FaceEmbedding:
+    """Turn this frame into a faceprint, or say which of five things stopped it.
 
-    None means "no faceprint from this frame", and it covers every reason: the library
-    is absent, the models are not loaded, there is no face, there is more than one
-    face, or the detection was not confident enough. A caller that needs to tell those
-    apart is asking the wrong layer -- what it can do about any of them is the same,
-    which is to try another frame or ask who is practising.
+    The one implementation; embed_face is a thin wrapper over it. Enrolment needs the
+    reason because an operator's remedy differs per cause -- "nobody is in shot" and
+    "two people are in shot" are different instructions to give a person standing at
+    the robot -- while the tutor's voice loop does not, and keeps the narrower call.
+    Splitting the reason out rather than adding a second detection call site is what
+    keeps there being exactly one place a frame is looked at.
 
-    MORE THAN ONE FACE IS REFUSED, deliberately. Two people in frame has no single
-    right answer, and picking the largest or the most central would silently decide
-    which household member the robot is talking to on the strength of who leaned in.
+    MORE THAN ONE FACE IS REFUSED, deliberately and unchanged. Two people in frame has
+    no single right answer, and picking the largest or the most central would silently
+    decide which household member the robot is talking to on the strength of who
+    leaned in.
 
     Returns plain floats. The numpy array never leaves this function.
     """
     if not FACE_EMBEDDING_AVAILABLE:
-        return None
+        return FaceEmbedding(reason="recognition_unavailable")
     models = loaded_face_models()
     if models is None:
-        return None
+        return FaceEmbedding(reason="recognition_unavailable")
     detector, recognizer = models
 
     try:
         height, width = int(image.shape[0]), int(image.shape[1])
         detector.setInputSize((width, height))
+        # THE FIRST RETURN VALUE IS A SUCCESS FLAG, NOT A FACE COUNT. Measured against
+        # the pinned YuNet model: on a blank 240x320 frame detect() returns
+        # (1, None) -- retval 1, and no faces. So `if retval == 0` reads "one face"
+        # off an empty frame, and len() raises on the None. The count comes from the
+        # array, and the array being None IS the zero.
         _, faces = detector.detect(image)
-        if faces is None or len(faces) != 1:
-            return None
+        found = 0 if faces is None else len(faces)
+        if found == 0:
+            return FaceEmbedding(reason="no_face")
+        if found > 1:
+            return FaceEmbedding(reason="several_faces")
         face = faces[0]
         if float(face[-1]) < _DETECTION_CONFIDENCE_FLOOR:
-            return None
+            return FaceEmbedding(reason="not_confident")
         aligned = recognizer.alignCrop(image, face)
         feature = recognizer.feature(aligned)
-        return tuple(float(value) for value in feature.flatten().tolist())
+        return FaceEmbedding(vector=tuple(float(value) for value in feature.flatten().tolist()))
     except Exception as exc:
         # Never the frame, never the vector, never a path. The type alone is enough to
         # tell a maintainer which layer failed.
         logger.warning("Could not produce a faceprint: %s", type(exc).__name__)
-        return None
+        return FaceEmbedding(reason="frame_unreadable")
+
+
+def embed_face(image: Any) -> tuple[float, ...] | None:
+    """Return the faceprint of the single face in this frame, or None.
+
+    The narrow form, and the contract every existing caller already has: None means
+    "no faceprint from this frame" and covers every reason -- the library is absent,
+    the models are not loaded, there is no face, there is more than one face, the
+    detection was not confident enough, or the frame could not be read. A caller that
+    needs to tell those apart calls describe_face; a caller on the voice loop does
+    not, because what it can do about any of them is the same.
+
+    Returns plain floats. The numpy array never leaves describe_face.
+    """
+    return describe_face(image).vector

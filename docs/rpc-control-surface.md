@@ -84,6 +84,20 @@ choosing.
   half of the idea survived and did land; the token half cannot be built. Anyone tempted to
   re-file it should read that section first.
 
+- **Enrolment is deliberately absent from this surface, and that is a decision rather
+  than an omission.** W28 added a flow that creates a learner and stores their
+  faceprint — biometric data about somebody who lives in the house. Every writer on
+  `/rpc` is refused outright by the policy recorded above, and `test_no_writer_is_
+  reachable_over_the_network` enforces it, so putting enrolment here would mean
+  overturning that policy for the most sensitive writer this app has. It is an
+  operator command instead (`enrol`), which needs a shell on the machine the robot
+  runs on. Nothing about enrolment is registered in `console.py`, and no change was
+  needed to keep it that way: `test_the_exposed_method_set_is_exactly_what_was_signed_
+  off` fails the moment any method is registered without being added to the signed-off
+  set. Anyone tempted to add a "enrol from the dashboard" button should read the
+  "Why there is no credential" section first — the iframe cannot be told apart from
+  anyone else on the network.
+
 ## What was done about it (D20)
 
 D15 had bound the app's own UI port to loopback to keep these methods off the household

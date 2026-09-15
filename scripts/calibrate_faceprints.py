@@ -49,7 +49,7 @@ from reachy_language_tutor.faces import (
     FACE_EMBEDDING_AVAILABLE,
     FACE_MATCH_SIMILARITY_FLOOR,
     EnrolledFaceprint,
-    embed_face,
+    describe_face,
     match_faceprint,
     warm_face_models,
 )
@@ -98,11 +98,17 @@ def main(argv: list[str]) -> int:
             if image is None:
                 print(f"  unreadable, skipped: {label} image {index}")
                 continue
-            vector = embed_face(image)
-            if vector is None:
-                print(f"  no single confident face, skipped: {label} image {index}")
+            # describe_face rather than embed_face, so the operator is told WHICH
+            # problem their photograph has. Both return the same faceprint; only this
+            # one says why there isn't one. An operator curating a folder can act on
+            # "two faces in shot" and cannot act on "no single confident face" -- and
+            # that collapsed message was hiding five different causes, which is the
+            # same defect enrolment was written to stop showing a household.
+            described = describe_face(image)
+            if not described.usable:
+                print(f"  skipped ({described.reason}): {label} image {index}")
                 continue
-            vectors.append(vector)
+            vectors.append(described.vector)
         if len(vectors) >= 2:
             people[label] = vectors
         elif vectors:

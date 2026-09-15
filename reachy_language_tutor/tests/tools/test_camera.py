@@ -119,3 +119,46 @@ def test_the_two_frame_budgets_stay_equal() -> None:
         "the camera tool and the frame source disagree about how many reads one request may make; "
         "they are describing the same 30fps camera"
     )
+
+
+def test_the_question_is_logged_only_through_the_redaction() -> None:
+    """The model composes this string from a conversation that holds a person's name.
+
+    There used to be TWO log lines here: an INFO through describe_for_log and, one
+    line below it, a DEBUG printing question[:120] raw. The comment above them said
+    in as many words why the value is dangerous -- "what is Alice holding" is within
+    the schema's own examples -- and the second line did it anyway, so the redaction
+    was decorative for anybody running with --debug. That is the D3/D9 rule, which
+    this project treats as its loudest.
+
+    Asserted structurally rather than by capturing output, so it holds for the DEBUG
+    level without the test having to enable it.
+    """
+    import ast
+    from pathlib import Path
+
+    from reachy_language_tutor.tools import camera as camera_module
+
+    tree = ast.parse(Path(camera_module.__file__).read_text(encoding="utf-8"))
+    unredacted: list[str] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or getattr(node.func, "attr", None) not in {
+            "debug", "info", "warning", "error", "exception", "critical", "log"
+        }:
+            continue
+        for argument in node.args:
+            mentions_question = any(
+                isinstance(inner, ast.Name) and inner.id == "question" for inner in ast.walk(argument)
+            )
+            redacted = (
+                isinstance(argument, ast.Call)
+                and getattr(argument.func, "id", getattr(argument.func, "attr", None)) == "describe_for_log"
+            )
+            if mentions_question and not redacted:
+                unredacted.append(f"line {node.lineno}")
+
+    assert unredacted == [], (
+        f"camera.py logs the model-composed question without redaction at {unredacted}; "
+        "the model builds that string from a conversation holding a person's name"
+    )

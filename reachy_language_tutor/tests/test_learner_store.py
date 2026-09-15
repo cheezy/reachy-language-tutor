@@ -45,6 +45,29 @@ def _add_learner(instance_path: Path, learner_id: str, name: str = "Someone") ->
         connection.close()
 
 
+def _add_consent(instance_path: Path, learner_id: str) -> None:
+    """Give this learner a standing consent to face recognition.
+
+    Deliberately NOT folded into _add_learner. save_faceprint refuses a learner with
+    no consent row -- its INSERT selects from the consents table -- so "a learner who
+    has agreed" and "a learner who has not" are now two different fixtures, and a test
+    has to say which one it means. Folding them together would hide the gate from
+    every test that stores a faceprint, which is most of them.
+    """
+    connection = store.connect(instance_path)
+    try:
+        connection.execute(
+            "INSERT INTO consents "
+            "(learner_id, scope, statement_id, statement_text, granted_by, granted_via, granted_at) "
+            "VALUES (?, 'face_recognition', 'test.v1', 'Wording used by the tests.', "
+            "'the_person_themselves', 'operator_at_the_robot', 0)",
+            (learner_id,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def _add_result(instance_path: Path, learner_id: str, lesson_id: str, outcome: str, when: int = 1) -> None:
     connection = store.connect(instance_path)
     try:
@@ -577,6 +600,7 @@ def test_record_result_never_raises_whatever_the_timestamp(instance: Path) -> No
 _PUBLISHED_VOCABULARIES = [
     ("RecordResultOutcome", learners.RECORD_REASONS),
     ("SaveFaceprintOutcome", learners.FACEPRINT_REASONS),
+    ("ConsentOutcome", learners.CONSENT_REASONS),
 ]
 
 
@@ -837,7 +861,7 @@ def test_every_registered_statement_is_still_accepted() -> None:
     during store's import. Saying it again here is what makes the failure name the
     statement instead of arriving as a collection error against every test in the file.
     """
-    assert len(store._LEARNER_SCOPED_SQL) == 10
+    assert len(store._LEARNER_SCOPED_SQL) == 15
 
     for sql in store._LEARNER_SCOPED_SQL:
         assert store._learner_scoped(sql) == sql
@@ -2964,6 +2988,15 @@ def test_package_exports_only_the_interface() -> None:
         "get_faceprint",
         "save_faceprint",
         "delete_faceprint",
+        "CONSENT_SCOPES",
+        "CONSENT_REASONS",
+        "CONSENT_GRANTED_BY",
+        "CONSENT_GRANTED_VIA",
+        "ConsentRecord",
+        "ConsentOutcome",
+        "record_consent",
+        "get_consents",
+        "forget_learner",
         "split_catalog_by_material",
     }
     for leaked in ("connect", "NEXT_LESSON_SQL", "ensure_learner_database", "SEED_LESSONS"):
@@ -3782,6 +3815,7 @@ def test_a_faceprint_round_trips_byte_identically(instance: Path) -> None:
     nothing to do with storage.
     """
     _add_learner(instance, "someone")
+    _add_consent(instance, "someone")
     values = (0.5, -0.25, 1.0)
 
     outcome = store.save_faceprint("someone", "arcface-r100", values, instance_path=instance)
@@ -3809,6 +3843,7 @@ def test_the_vector_is_little_endian_float32_and_says_so_in_bytes(instance: Path
     unpack with whatever it packed with. This one names the bytes.
     """
     _add_learner(instance, "someone")
+    _add_consent(instance, "someone")
     store.save_faceprint("someone", "m", [1.0], instance_path=instance)
 
     stored = bytes(_faceprint_rows(instance, "someone")[0][3])
@@ -3824,6 +3859,7 @@ def test_a_second_faceprint_replaces_the_first(instance: Path) -> None:
     count of 2 if the table ever stops keying on the learner.
     """
     _add_learner(instance, "someone")
+    _add_consent(instance, "someone")
     store.save_faceprint("someone", "old-model", [1.0, 2.0], instance_path=instance)
     store.save_faceprint("someone", "new-model", [3.0, 4.0, 5.0], instance_path=instance)
 
@@ -3950,6 +3986,7 @@ def test_deleting_a_faceprint_counts_rather_than_names(instance: Path) -> None:
     reported as "it is gone" (1).
     """
     _add_learner(instance, "someone")
+    _add_consent(instance, "someone")
 
     assert store.delete_faceprint("someone", instance_path=instance) == 0, "had none"
 
@@ -4114,20 +4151,30 @@ def test_a_learner_deleted_between_the_check_and_the_insert_is_refused_not_raise
     """The edge case the testing strategy names, and the arm that had no test.
 
     save_faceprint checks the learner exists and then inserts. Between those two the
-    row can go, and the foreign key refuses the insert. Both the code comment and
-    docs/learner-database.md state that this comes back as rejected_by_database -- a
-    specific behavioural claim, so it is executed here rather than asserted on trust.
+    row can go, and the insert must refuse rather than raise.
 
-    The important half is that it does not RAISE: this is called from a tool layer
-    driven by a model, and an exception here ends the conversation turn.
+    THE CODE THIS RACE TAKES CHANGED when the consent gate arrived, and this test
+    records the new answer rather than the old one. The insert now selects its row
+    FROM the consents table, and deleting a learner cascades their consent away with
+    them -- so by the time the insert runs there is no consent row to select, it
+    matches nothing, and the refusal is `no_consent`. The foreign key is never
+    consulted, because nothing is offered to it. Measured here, not reasoned about:
+    before the gate this same harness produced `rejected_by_database`.
+
+    The important half is unchanged and is what this test is really for: it does not
+    RAISE. This is called from a tool layer driven by a model, and an exception here
+    ends the conversation turn. Nothing is written either way.
     """
     _add_learner(instance, "racy")
+    _add_consent(instance, "racy")
 
     outcome, raced = _save_into_a_deleted_learner(instance, "racy")
 
     assert raced is True, "the harness never reached the interleaving it exists to create"
     assert outcome.saved is False  # type: ignore[union-attr]
-    assert outcome.reason == "rejected_by_database", "the foreign key refused it"  # type: ignore[union-attr]
+    assert outcome.reason == "no_consent", (  # type: ignore[union-attr]
+        "the learner's consent cascaded away with them, so the insert matched nothing"
+    )
     assert outcome.faceprint is None  # type: ignore[union-attr]
     assert _faceprint_rows(instance, "racy") == [], "and nothing was written"
 
@@ -4359,6 +4406,9 @@ _SAFE_PRODUCERS = frozenset(
         "_cannot_be_a_catalog_code",
         "_cannot_be_a_path",
         "_cannot_be_an_embedding_model",
+        "_cannot_be_a_display_name",
+        "_cannot_be_a_consent_statement",
+        "_cannot_be_a_learner_id",
         "_cannot_name_a_learner",
         "_cannot_name_a_lesson",
         "_unconstrained_personal_relation",

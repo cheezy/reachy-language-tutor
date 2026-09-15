@@ -169,10 +169,19 @@ def test_the_only_thing_ever_called_on_the_media_handle_is_get_frame() -> None:
 def test_the_real_release_of_the_camera_handle_still_happens_in_main_shutdown() -> None:
     """capture.py owns nothing because main.py does; if that one release goes, this says so.
 
-    The claim in capture.py's docstring -- that the handle is released exactly once, in
-    run's shutdown finally -- is only true while main.py actually does it. Asserted
+    The claim in capture.py's docstring -- that it releases nothing because whoever
+    built the robot does -- is only true while main.py actually does it. Asserted
     structurally rather than by running the app, the same way test_lesson_feedback pins
     main.py's warm-up call.
+
+    THIS USED TO PIN "EXACTLY ONCE", and that pin was right until there were two
+    owners. Enrolment is an operator command that builds its own ReachyMini outside
+    run(), so it must close its own media too, and a count of one would now be a rule
+    against doing the correct thing. The count is replaced by the property the count
+    was standing in for, which is also the stronger one: EVERY function here that
+    constructs a ReachyMini closes .media in a finally. A third owner added later
+    without a release fails this, where a count of two would simply have been bumped
+    to three.
     """
     from reachy_language_tutor import main
 
@@ -192,10 +201,36 @@ def test_the_real_release_of_the_camera_handle_still_happens_in_main_shutdown() 
 
     everywhere = closes_media(tree)
     assert everywhere, "main.py no longer closes the media handle; capture.py's docstring names it as the owner"
-    # EXACTLY once, because that is what capture.py's docstring claims. Two releases would
-    # mean the ownership story in that docstring is no longer the whole story.
-    assert len(everywhere) == 1, (
-        f"capture.py's docstring says the handle is released exactly once; main.py closes it {len(everywhere)} times"
+
+    # Every builder releases. The set of owners is DERIVED from the file rather than
+    # listed here, so a function that starts building a robot tomorrow is judged by
+    # this rule without anybody remembering to add it.
+    def builds_a_robot(scope: ast.AST) -> bool:
+        return any(
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "ReachyMini"
+            for node in ast.walk(scope)
+        )
+
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    owners = [function for function in functions if builds_a_robot(function)]
+    assert owners, "nothing in main.py builds a ReachyMini any more, so this test proves nothing"
+
+    unreleased = [
+        function.name
+        for function in owners
+        if not any(
+            closes_media(ast.Module(body=block.finalbody, type_ignores=[]))
+            for block in ast.walk(function)
+            if isinstance(block, ast.Try)
+        )
+    ]
+    assert unreleased == [], (
+        f"these build a ReachyMini and never release its media in a finally: {unreleased}. "
+        "capture.py borrows a handle and closes nothing, so whoever opens one has to."
     )
 
     # And in run's shutdown finally specifically -- not merely in some try/finally

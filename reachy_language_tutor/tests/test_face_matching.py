@@ -8,6 +8,7 @@ attached, and it is why a change to the threshold shows up here immediately.
 """
 
 import ast
+import sys
 import math
 import inspect
 from pathlib import Path
@@ -400,6 +401,65 @@ _PERMITTED_CALLS = frozenset(
         #     the construction invariants, and this package's own result type.
         "get_frame", "getattr", "debug",
         "object", "range", "ValueError", "FrameCapture",
+        # embedding.py's split of "no faceprint" into five reasons, added deliberately
+        # when enrolment needed to tell an operator WHICH of them happened.
+        #   FaceEmbedding -- the result type, the sibling of FrameCapture above.
+        #   describe_face -- the one implementation; embed_face now wraps it.
+        "FaceEmbedding", "describe_face",
+        # enrollment.py, added deliberately when the flow arrived. Each of these reads,
+        # decides, or writes NUMBERS to the learner database; none can put bytes
+        # anywhere a frame could land, which is the property this guard exists for.
+        #   EnrolmentOutcome, _refused -- this module's own result type and its builder.
+        #   record_consent, record_consent_for_enrolment -- write the agreement. Text
+        #     and codes only; the statement they store is a module constant.
+        #   save_faceprint -- writes the 128 floats. It takes a vector and an instance
+        #     path and has no parameter that could name a file to create.
+        #   forget_learner -- deletes a learner row; it returns a count and takes no
+        #     destination.
+        #   capture_frame, _gather_faceprints, _medoid, capture_faceprint,
+        #     faceprint_similarity, warm_face_models -- read a frame, compare numbers,
+        #     choose one. None of them opens anything.
+        #   info -- the third log level this package uses, beside capture.py's debug
+        #     and the warning that embedding.py, matching.py and _roll_back all use.
+        #     WHAT may be passed to it is constrained by the log-shape allow-list
+        #     below, exactly as debug and warning are.
+        #   sleep -- time.sleep between capture attempts. Takes a float, returns None.
+        #   sum, max, any, append, enumerate -- arithmetic and list building over
+        #     floats already in memory.
+        #   _roll_back_left_something -- removes the learner an unfinished enrolment
+        #     created and reports whether one was LEFT. It calls
+        #     forget_learner and logs two fixed sentences; it takes a learner id and a
+        #     path to the instance DIRECTORY, never a filename it could create.
+        "EnrolmentOutcome", "_refused", "_roll_back_left_something",
+        #   uuid4 -- mints the learner id BEFORE the guarded region, which is what
+        #     lets an interrupt landing between record_consent's COMMIT and its
+        #     return still name the row it has to undo. Returns a value; takes no
+        #     destination and reads nothing.
+        "uuid4",
+        #   print -- the ONE place this package writes to a stream, and it is stderr
+        #     on the interrupt path only. It is here rather than in main.py because
+        #     that path RE-RAISES: the outcome object never reaches the caller, so
+        #     the caller cannot report it, and the operator who just pressed Ctrl-C
+        #     is the only person who can act on a learner row left behind.
+        #     THE JUSTIFICATION THIS COMMENT FIRST CARRIED WAS FALSE, and is left
+        #     recorded because the way it was false is the lesson. It argued that
+        #     print could not reach a file "because `open` is not on this list, so
+        #     there is no way to obtain one". `open` was never needed:
+        #     `print(frame, file=sys.stderr)` needs no Call at all -- sys.stderr is
+        #     an ast.Attribute, which this guard never inspects -- and
+        #     `enrol 2> capture.log` then puts a frame on disk. A review disproved it
+        #     by putting exactly that line in the package and watching both guards
+        #     report zero offenders.
+        #     What actually keeps it safe is the same thing that keeps logger safe:
+        #     its ARGUMENTS are pinned, by the log-shape allow-list below, which now
+        #     inspects print as well as the logger methods.
+        "print",
+        "record_consent", "record_consent_for_enrolment",
+        "save_faceprint", "forget_learner",
+        "capture_frame", "_gather_faceprints", "_medoid", "capture_faceprint",
+        "faceprint_similarity", "warm_face_models",
+        "info", "sleep",
+        "sum", "max", "any", "append", "enumerate",
     }
 )
 
@@ -435,7 +495,8 @@ def test_nothing_in_the_faces_package_writes_an_image() -> None:
     )
 
 
-def test_every_log_argument_in_the_package_is_a_permitted_shape() -> None:
+
+def _log_shape_offenders(package: Path) -> list[str]:
     """Shapes and counts only, as an ALLOW-LIST of what a log argument may BE.
 
     This was a deny-list of nine variable names, and a review disproved it by
@@ -448,9 +509,71 @@ def test_every_log_argument_in_the_package_is_a_permitted_shape() -> None:
     `type(x).__name__`. A new local called `best_per_learner` is refused because it is
     not one of those shapes, rather than because somebody remembered to forbid it.
     """
-    package = Path(faces.__file__).parent
     offenders: list[str] = []
     module_constants: set[str] = set()
+
+    def _stream_name(node: ast.AST) -> str | None:
+        """Render `sys.stderr` as its dotted name, so a `file=` target can be checked."""
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            return f"{node.value.id}.{node.attr}"
+        return None
+
+    def _print_shape(node: ast.AST) -> str | None:
+        """Name the two print argument shapes the interrupt path is allowed to use.
+
+        Shapes, not values: anything that is not exactly one of these falls through
+        to the ordinary log-shape rule and is refused unless it is a literal, a len()
+        or a type name.
+        """
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "_REFUSALS"
+            and isinstance(node.slice, ast.Constant)
+            # A claim about the VALUE, not the shape. The first version stopped at
+            # "a literal subscript of _REFUSALS" -- and the dict is mutable, so
+            # `_REFUSALS["leak"] = described.vector` followed by printing that key
+            # walked a faceprint past both guards, because a subscript ASSIGNMENT is
+            # not a Call and nothing inspected one. That is the same defect class as
+            # the original print rationale: a statement about a shape standing in for
+            # a statement about what is behind it.
+            # The whole BINDING, not one key. Resolving the key closed the new-key
+            # form (`_REFUSALS["leak"] = vector`) and left its sibling open:
+            # OVERWRITING an existing literal key with a vector satisfied a key test
+            # and reached stderr. So the shape is permitted only in a module where
+            # the dict is never mutated after its literal definition -- which closes
+            # the family instead of one member of it, and is the same inversion the
+            # project's deny-list rule keeps asking for.
+            and not refusals_are_mutated
+            and node.slice.value in literal_refusals
+        ):
+            return "_REFUSALS[<literal>]"
+        if isinstance(node, ast.JoinedStr):
+            interpolated = [part.value for part in node.values if isinstance(part, ast.FormattedValue)]
+            if len(interpolated) == 1:
+                only = interpolated[0]
+                # The id the operator needs to clear an orphan, in either spelling
+                # it has had: the local minted before the guarded region, and the
+                # attribute of the returned outcome.
+                #
+                # A claim about the BINDING, not the spelling. The first version
+                # matched the exact name and nothing else, and its comment boasted
+                # that "a frame bound to a similarly-named local cannot ride
+                # through" -- true as written, false in what it implied: a frame
+                # bound to that EXACT name rode through both guards, proved by
+                # inserting `learner_id = described.vector` above the print. Same
+                # inversion as the _REFUSALS arm above, and the same defect class --
+                # a statement about a shape standing in for one about a value.
+                if isinstance(only, ast.Name) and only.id == "learner_id" and learner_id_is_trustworthy:
+                    return "f-string of the learner id"
+                if (
+                    isinstance(only, ast.Attribute)
+                    and only.attr == "learner_id"
+                    and isinstance(only.value, ast.Name)
+                    and only.value.id == "agreed"
+                ):
+                    return "f-string of the learner id"
+        return None
 
     def _is_permitted(node: ast.AST) -> bool:
         """True when this expression can only ever yield a shape, a count or a type."""
@@ -490,6 +613,74 @@ def test_every_log_argument_in_the_package_is_a_permitted_shape() -> None:
 
         # The names this file binds to literals at module level. That is what makes
         # the constant arm above a claim about values rather than about spelling.
+        # Whether _REFUSALS is touched anywhere after its literal definition: a
+        # subscript assignment, an augmented assignment, or a mutating method. Any
+        # of those and the literal-key resolution below stops being a statement
+        # about what the printed value IS.
+        refusals_are_mutated = any(
+            (
+                isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign))
+                and any(
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "_REFUSALS"
+                    for target in (
+                        node.targets if isinstance(node, ast.Assign) else [node.target]
+                    )
+                )
+            )
+            or (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "_REFUSALS"
+                # An allow-list of the READS, not a list of the mutators. The first
+                # version treated every method call as a mutation and refused the
+                # module's own `_REFUSALS.get(reason, ...)`; a list of mutators
+                # instead would have been the deny-list this project has been bitten
+                # by four times, and would have missed popitem or |= or whatever a
+                # future dict grows. Anything not known to be a read counts as one.
+                and node.func.attr not in {"get", "keys", "values", "items", "copy"}
+            )
+            for node in ast.walk(tree)
+        )
+
+        # Whether every binding of `learner_id` in this module comes from something
+        # that cannot be a frame: a uuid hex, a parameter, or an X.learner_id
+        # attribute. Anything else and the f-string arm stops describing a value.
+        def _is_an_id_producer(node: ast.AST) -> bool:
+            if isinstance(node, ast.Attribute) and node.attr in {"hex", "learner_id"}:
+                return True
+            if isinstance(node, ast.BoolOp):
+                return all(_is_an_id_producer(value) for value in node.values)
+            if isinstance(node, ast.Name) and node.id == "learner_id":
+                return True
+            # A None sentinel, which is what a keyword default is initialised to.
+            # It cannot be a frame, and refusing it would refuse the real module.
+            if isinstance(node, ast.Constant) and node.value is None:
+                return True
+            return False
+
+        learner_id_is_trustworthy = all(
+            _is_an_id_producer(node.value)
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            if isinstance(target, ast.Name) and target.id == "learner_id"
+        )
+
+        # The _REFUSALS keys this module maps to literal strings. Resolved from the
+        # file, so the permitted-shape arm above is a statement about values.
+        literal_refusals = {
+            key.value
+            for statement in tree.body
+            if isinstance(statement, (ast.Assign, ast.AnnAssign))
+            for target in ([statement.target] if isinstance(statement, ast.AnnAssign) else statement.targets)
+            if isinstance(target, ast.Name) and target.id == "_REFUSALS" and isinstance(statement.value, ast.Dict)
+            for key, value in zip(statement.value.keys, statement.value.values)
+            if isinstance(key, ast.Constant) and isinstance(value, (ast.Constant, ast.JoinedStr))
+        }
+
         module_constants = {
             target.id
             for statement in tree.body
@@ -507,7 +698,51 @@ def test_every_log_argument_in_the_package_is_a_permitted_shape() -> None:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            if getattr(node.func, "attr", None) not in {"debug", "info", "warning", "error", "exception", "log", "critical"}:
+            # print IS a sink here, and adding it is the fix for a false rationale
+            # rather than a widening. When print was permitted in _PERMITTED_CALLS the
+            # comment claimed it could not reach a file without `open`; a review
+            # disproved that by execution -- `print(frame, file=sys.stderr)` needs no
+            # Call, because sys.stderr is an Attribute, and `enrol 2> capture.log`
+            # then writes the frame to disk. Its arguments have to be pinned exactly
+            # as a logger's are, or the package has one sink nothing checks.
+            #
+            # An ast.Name arm as well as the attribute one, because print is a bare
+            # name: matching only node.func.attr skipped it entirely.
+            is_logger_call = getattr(node.func, "attr", None) in {
+                "debug", "info", "warning", "error", "exception", "log", "critical"
+            }
+            # Both spellings. Matching only the bare Name left `builtins.print(...)`
+            # skipped here AND waved through by the write-guard, which permits the
+            # name `print` -- re-opening the frame-to-stderr bypass one attribute
+            # lookup away from where it was closed.
+            is_print_call = (isinstance(node.func, ast.Name) and node.func.id == "print") or (
+                isinstance(node.func, ast.Attribute) and node.func.attr == "print"
+            )
+            if not (is_logger_call or is_print_call):
+                continue
+            if is_print_call:
+                # THE OPERATOR'S TERMINAL IS NOT A LOG, and this is the one place in
+                # the package that writes to it: the interrupt path, where a failed
+                # rollback has left a person in the database and the only human who
+                # can clear it is the one who just pressed Ctrl-C. They need the id
+                # to pass to `enrol --remove`, so the id is permitted HERE and
+                # nowhere else -- a learner id in a logger call is still refused by
+                # the arm above, which is the rule the project actually states.
+                #
+                # Named shapes rather than a blanket pass for print, so a frame or a
+                # vector still cannot go through it. The self-check below proves
+                # both: print(face) and print(feature, file=sys.stderr) are refused.
+                permitted_print_arguments = {
+                    "_REFUSALS[<literal>]",
+                    "f-string of the learner id",
+                }
+                for position, argument in enumerate(node.args):
+                    shape = _print_shape(argument)
+                    if shape not in permitted_print_arguments and not _is_permitted(argument):
+                        offenders.append(f"{path.name}:{node.lineno} print arg {position} is not a permitted shape")
+                for keyword in node.keywords:
+                    if keyword.arg != "file" or _stream_name(keyword.value) not in {"sys.stderr", "sys.stdout"}:
+                        offenders.append(f"{path.name}:{node.lineno} print keyword {keyword.arg} is not permitted")
                 continue
             for position, argument in enumerate(node.args):
                 if not _is_permitted(argument):
@@ -532,12 +767,46 @@ def test_every_log_argument_in_the_package_is_a_permitted_shape() -> None:
                     label = keyword.arg or "**kwargs"
                     offenders.append(f"{path.name}:{node.lineno} keyword {label} is not a permitted log shape")
 
-    assert offenders == [], (
-        "a log argument here may only be a literal, len(...), or type(x).__name__: " + str(offenders)
-    )
+    return offenders
 
-    # And the allow-list is not vacuous: each of these shapes is refused.
-    for source, label in [
+
+def _offences_in(source: str, tmp_path: Path) -> list[str]:
+    """Run ONE synthetic module through the very rule the package scan uses.
+
+    Through `_log_shape_offenders`, not through a copy of its logic. An earlier
+    version of the print self-check re-implemented the rule in a subprocess, and the
+    consequence was measured rather than imagined: disabling the real print arm left
+    that self-check green, because it was checking its own copy. A guard whose
+    self-check cannot detect the guard being switched off is decoration.
+    """
+    module = tmp_path / "probe.py"
+    module.write_text(
+        "import sys\nimport builtins\n"
+        '_REFUSALS = {"rollback_failed": "could not be removed"}\n'
+        "EXPECTED_MATCH_DIMENSION = 128\n"
+        "def f(candidate, enrolled, scored, best_per_learner, face, feature, exc, learner_id, "
+        "LEARNER, a, b, shot, described, profile, agreed, reason):\n    " + source + "\n",
+        encoding="utf-8",
+    )
+    try:
+        return _log_shape_offenders(tmp_path)
+    finally:
+        module.unlink()
+
+
+def test_every_log_argument_in_the_package_is_a_permitted_shape() -> None:
+    """The real package, scanned by the shared rule above."""
+    assert _log_shape_offenders(Path(faces.__file__).parent) == []
+
+
+def test_the_log_shape_rule_refuses_what_it_claims_to(tmp_path: Path) -> None:
+    """The allow-list is not vacuous, checked through the whole rule.
+
+    Every line here is a shape that has to be refused, and each was chosen because
+    some version of this guard let it through. They run through the same function the
+    package scan calls, so switching an arm off fails this test too.
+    """
+    must_refuse = [
         ("logger.warning('%s', candidate)", "a bare personal name"),
         ("logger.warning('%s', enrolled)", "the enrolled rows"),
         ("logger.warning('%s', scored)", "the scored list"),
@@ -548,37 +817,87 @@ def test_every_log_argument_in_the_package_is_a_permitted_shape() -> None:
         ("logger.warning('%s', learner_id)", "a lowercase identifier that is not a constant"),
         ("logger.warning('%s', LEARNER)", "an UPPER_CASE rebind of a personal value"),
         ("logger.warning('%s %s', a, b)", "two bare names"),
-    ]:
-        call = ast.parse(source).body[0].value
-        assert not all(_is_permitted(a) for a in call.args), f"{label} must be refused"
+        ("logger.warning('scores', extra={'vector': list(candidate)})", "extra= carrying a vector"),
+        ("logger.warning('failed', exc_info=exc)", "exc_info printing the whole traceback"),
+        ("logger.warning('x', exc_info=True)", "exc_info=True, a permitted SHAPE that still dumps a traceback"),
+        # The print sink, which needs no open() to reach a file: `enrol 2> capture.log`
+        # is the whole exploit, and sys.stderr is an Attribute the write-guard never sees.
+        ("print(shot.frame, file=sys.stderr)", "a frame printed to stderr"),
+        ("print(described.vector)", "a faceprint printed to stdout"),
+        ('print(f"{described.vector}", file=sys.stderr)', "a faceprint smuggled through an f-string"),
+        ("print(f'name={profile.display_name}', file=sys.stderr)", "a name in an f-string"),
+        ("print('ok', file=open('/tmp/leak.log', 'w'))", "a print straight into a file"),
+        ("print(_REFUSALS[reason])", "a refusal looked up by a variable rather than a literal"),
+        (
+            '_REFUSALS["leak"] = described.vector\n    print(_REFUSALS["leak"], file=sys.stderr)',
+            "stuffing a vector into the permitted dict under a NEW key",
+        ),
+        (
+            '_REFUSALS["rollback_failed"] = described.vector\n'
+            '    print(_REFUSALS["rollback_failed"], file=sys.stderr)',
+            "OVERWRITING an existing permitted key -- the sibling of the case above",
+        ),
+        (
+            '_REFUSALS.update({"rollback_failed": described.vector})\n'
+            '    print(_REFUSALS["rollback_failed"], file=sys.stderr)',
+            "mutating the dict through a method rather than a subscript",
+        ),
+        ("builtins.print(shot.frame, file=sys.stderr)", "a frame through the builtins.print alias"),
+        (
+            'learner_id = described.vector\n    print(f"  learner id: {learner_id}", file=sys.stderr)',
+            "a faceprint rebound to the exact name the id arm permits",
+        ),
+        ("builtins.print(profile.display_name)", "a name through the builtins.print alias"),
+    ]
+    for source, label in must_refuse:
+        assert _offences_in(source, tmp_path), f"{label} must be refused, and was not"
 
-    for source, label in [
+
+def test_the_log_shape_rule_permits_what_the_package_actually_needs(tmp_path: Path) -> None:
+    """The other direction, so the rule cannot pass by refusing everything."""
+    must_permit = [
         ("logger.warning('%d rows', len(enrolled))", "a count"),
         ("logger.warning('failed: %s', type(exc).__name__)", "an exception type"),
         ("logger.warning('nothing interpolated')", "a plain literal"),
         ("logger.warning('expected %d', EXPECTED_MATCH_DIMENSION)", "a named module constant"),
-    ]:
-        call = ast.parse(source).body[0].value
-        assert all(_is_permitted(a) for a in call.args), f"{label} must be permitted"
+        ("print('nothing was recorded')", "a fixed sentence"),
+        ('print(_REFUSALS["rollback_failed"], file=sys.stderr)', "the refusal the interrupt path prints"),
+        ('print(f"  learner id: {learner_id}", file=sys.stderr)', "the id the operator needs to clear an orphan"),
+        ('print(f"  learner id: {agreed.learner_id}", file=sys.stderr)', "the same id via the outcome object"),
+    ]
+    for source, label in must_permit:
+        assert _offences_in(source, tmp_path) == [], f"{label} must be permitted, and was refused"
 
-    # And the keyword path, which is where both reviews got a learner id out.
-    for source, label in [
-        ("logger.warning('scores', extra={'vector': list(candidate)})", "extra= carrying a vector"),
-        ("logger.warning('failed', exc_info=exc)", "exc_info printing the whole traceback"),
-    ]:
-        call = ast.parse(source).body[0].value
-        assert not all(_is_permitted(k.value) for k in call.keywords), f"{label} must be refused"
 
-    # exc_info=True is a LITERAL, so the shape rule alone lets it through while it dumps
-    # the live traceback. Pinned separately because it is the one case where a permitted
-    # shape is still a leak, and a review found it by executing exactly this.
-    for source in ("logger.warning('x', exc_info=True)", "logger.warning('x', stack_info=True)"):
-        call = ast.parse(source).body[0].value
-        assert all(_is_permitted(k.value) for k in call.keywords), "the literal itself is a permitted shape"
-        assert {k.arg for k in call.keywords} & {"exc_info", "stack_info"}, (
-            "which is why these two are refused by name rather than by shape"
-        )
+def test_the_print_arm_still_refuses_a_frame_or_a_vector(tmp_path: Path) -> None:
+    """The print arm, exercised through the REAL rule rather than a copy of it.
 
+    This test used to shell out to a re-implementation of the rule, and the copy had
+    already drifted: it answered ALLOWED for builtins.print of a frame, for
+    builtins.print of a name, and for the _REFUSALS overwrite -- three of the four
+    bypasses the real rule was hardened against -- so it could not have detected the
+    real arm being switched off, which was the entire reason it was extracted. It
+    now calls _offences_in, the same entry point the package scan uses.
+    """
+    forbidden = [
+        "print(shot.frame, file=sys.stderr)",
+        "print(described.vector)",
+        'print(f"name={profile.display_name}", file=sys.stderr)',
+        "print(feature.tolist())",
+        'print("ok", file=open("/tmp/leak.log", "w"))',
+        "print(_REFUSALS[reason])",
+        "builtins.print(shot.frame, file=sys.stderr)",
+    ]
+    permitted = [
+        'print(_REFUSALS["rollback_failed"], file=sys.stderr)',
+        'print(f"  learner id: {learner_id}", file=sys.stderr)',
+        'print("nothing was recorded")',
+    ]
+
+    for line in forbidden:
+        assert _offences_in(line, tmp_path), f"the print arm let this through: {line}"
+    for line in permitted:
+        assert _offences_in(line, tmp_path) == [], f"the print arm refused a shape the flow needs: {line}"
 
 def test_the_model_identifier_is_storable_by_the_learner_database() -> None:
     """The two tasks have to agree, and this is where that is checked.
