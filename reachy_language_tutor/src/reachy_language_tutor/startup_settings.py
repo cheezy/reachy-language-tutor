@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 STARTUP_SETTINGS_FILENAME = "startup_settings.json"
 
+# Matching learners/store.py's _OWNER_ONLY and memory.py's, because this file joined
+# them in holding something that names a person.
+_OWNER_ONLY = 0o600
+
 
 @dataclass(frozen=True)
 class StartupSettings:
@@ -113,7 +117,24 @@ def write_startup_settings(
     if settings.fallback_learner is not None:
         payload["fallback_learner"] = settings.fallback_learner
 
-    settings_path.write_text(f"{json.dumps(payload, indent=2, sort_keys=True)}\n", encoding="utf-8")
+    # OWNER ONLY, for the reason the learner database and the memory file are: since
+    # fallback_learner landed, this file can hold a learner id, which names a person
+    # to anybody who can also read the database. A review found it at 0o644 while its
+    # two siblings in the same directory were 0o600 -- the unswept-sibling shape this
+    # repository pays for more than any other, and it was unswept in the same change
+    # that fixed one of them.
+    #
+    # Created with the mode rather than chmod'd after, so there is no window in which
+    # the contents exist at the umask default.
+    descriptor = os.open(settings_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _OWNER_ONLY)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(f"{json.dumps(payload, indent=2, sort_keys=True)}\n")
+    # O_CREAT sets the mode only on creation, so an existing file keeps whatever it
+    # had -- including one written by a version of this function that predates this.
+    try:
+        os.chmod(settings_path, _OWNER_ONLY)
+    except OSError as exc:
+        logger.warning("Could not restrict permissions on the startup settings: %s", type(exc).__name__)
 
 
 def load_startup_settings_into_runtime(instance_path: str | Path | None) -> StartupSettings:

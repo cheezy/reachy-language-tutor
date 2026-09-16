@@ -134,6 +134,11 @@ def _read_memory_file(path: Path) -> list[MemoryFact]:
     return facts[:MAX_FACTS]
 
 
+# The mode the memory file is kept at, matching learners/store.py's _OWNER_ONLY for
+# the same reason: this file holds facts about the people in one household.
+_OWNER_ONLY = 0o600
+
+
 def _write_memory_file(path: Path, facts: list[MemoryFact]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -142,7 +147,31 @@ def _write_memory_file(path: Path, facts: list[MemoryFact]) -> None:
     }
     tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # OWNER ONLY, AND FROM THE MOMENT IT EXISTS. Found while writing
+        # docs/privacy-and-consent.md: this file was -rw-r--r-- while the learner
+        # database beside it is -rw-------, and it holds the same kind of thing -- a
+        # fact the robot was asked to remember can name a household member and say
+        # something about them. The threat is the one learners/store.py already names
+        # for the database: another local account, an unencrypted backup, or the SD
+        # card out of a Reachy Wireless.
+        #
+        # The FIRST fix wrote the file and chmod'd it afterwards, and claimed in this
+        # comment that the contents were "never world-readable even briefly". A review
+        # measured that false: write_text creates the temp at the umask default, so
+        # under the usual umask 022 it sat at 0o644 -- already holding the fact --
+        # for the window between the two calls. os.open with the mode is what makes
+        # the claim true, because the permission is applied as the file is created
+        # rather than after.
+        descriptor = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _OWNER_ONLY)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        # O_CREAT applies the mode only when it CREATES the file, and this temp name
+        # carries the pid, so a leftover from a crashed run of the same pid could be
+        # reused with whatever mode it already had. Cheap to close, so it is closed.
+        try:
+            os.chmod(tmp_path, _OWNER_ONLY)
+        except OSError as exc:
+            logger.warning("Could not restrict permissions on the memory file: %s", type(exc).__name__)
         tmp_path.replace(path)
     finally:
         try:

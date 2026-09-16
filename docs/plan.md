@@ -181,9 +181,20 @@ Publish the app once as a Hugging Face Space. Each user installs it from their r
 
 ### Privacy
 
+**What the app actually does now is written down in
+[privacy-and-consent.md](privacy-and-consent.md)** — what is captured, what is stored,
+where it stays, how long it lives, how to erase it, and, beside that, what has *not*
+been done. Every specific claim there was checked against the code in the session that
+wrote it, and a test suite re-measures the ones that can be re-measured. The paragraphs
+below are the commitments this section made; that document is the record of how far
+they are kept, and it is the one to hand a privacy lawyer.
+
 Only names, emails, and learning progress leave the home. Faceprints stay on each robot. Still needed:
 
-- A clear privacy policy and a way to delete accounts and data.
+- A clear privacy policy and a way to delete accounts and data. **Partly done:** the
+  deletion paths exist and are measured (`enrol --forget`, `--forget-everything`,
+  `--remove`); the written policy is `privacy-and-consent.md`; no lawyer has reviewed it,
+  and there is still no factory reset for a resold robot.
 - **Parental consent — decided for the prototype, still open in law.** Enrolment is an
   operator action performed in person at the robot, never reachable from the
   conversation and never over the network. Whoever runs it must say which of two roles

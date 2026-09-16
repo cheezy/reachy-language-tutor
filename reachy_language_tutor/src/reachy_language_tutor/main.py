@@ -273,7 +273,7 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
     # package boundary, which deliberately publishes neither -- the same import run()
     # already makes below, for the same reason.
     from reachy_language_tutor.learners.store import ensure_learner_database, learner_db_path_for_instance
-    from reachy_language_tutor.startup_settings import set_fallback_learner
+    from reachy_language_tutor.startup_settings import set_fallback_learner, read_startup_settings
 
     instance_path = args.instance_path
     database = learner_db_path_for_instance(instance_path)
@@ -285,6 +285,19 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
     if not database.exists():
         print("No learner database there yet. Start the app once first, or pass --instance-path.")
         return 1
+
+    def _clear_fallback_if_it_names(where: object, learner_id: str) -> bool:
+        """Drop the configured fallback when it names this person. True if it did.
+
+        Only when it names THEM: an operator who configured somebody else keeps their
+        setting. The resolver already refuses a dangling id, so this is about not
+        leaving an identifier behind for somebody who asked to be forgotten, rather
+        than about correctness.
+        """
+        if read_startup_settings(where).fallback_learner != learner_id:
+            return False
+        set_fallback_learner(where, None)
+        return True
 
     def _named_learner(learner_id: str):
         """Look a learner up, telling 'no such learner' apart from 'cannot read'.
@@ -325,7 +338,13 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
         if not outcome.erased:
             print("No such learner. Nothing was erased.")
             return 1
+        also_cleared = _clear_fallback_if_it_names(instance_path, args.forget_everything_id)
+
         print(f"Forgot {display_name} completely.")
+        if also_cleared:
+            # Printed AFTER the headline it is indented under. It used to print above
+            # it, where the two-space indent read as a detail of the database path.
+            print("  Also cleared them as the learner served when recognition cannot answer.")
         print(
             f"  removed: {outcome.learners} person, {outcome.faceprints} faceprint, "
             f"{outcome.consents} agreement, {outcome.results} lesson result(s)"
@@ -350,6 +369,12 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
         if profile is None:
             return 1
         removed = forget_learner(args.remove_learner_id, instance_path=instance_path)
+        # THE SIBLING. --forget-everything was taught to clear a fallback naming the
+        # person it erased, and this command -- which also deletes the learner row --
+        # was not, so the erased id stayed in the settings file. Measured. Fixing one
+        # member of a set and leaving the other is this board's most common defect,
+        # and it was raised against this very change once already.
+        also_cleared = removed == 1 and _clear_fallback_if_it_names(instance_path, args.remove_learner_id)
         if removed is None:
             print("The learner database could not be read, so nothing can be promised either way.")
             return 1
@@ -357,6 +382,8 @@ def handle_enrol_command(args: argparse.Namespace) -> int:
             print(f"{profile.display_name} was not removed. A learner with lesson history is kept deliberately.")
             return 1
         print(f"Removed {profile.display_name}, their agreement and any faceprint.")
+        if also_cleared:
+            print("  Also cleared them as the learner served when recognition cannot answer.")
         return 0
 
     if getattr(args, "forget_learner_id", None) is not None:
