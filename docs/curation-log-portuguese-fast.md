@@ -13,10 +13,11 @@ length.
 `docs/converting-a-course.md` is the method. This file is the record of the decisions
 themselves.
 
-**Status: Steps 0, 1 and 2 of the method are done — the course is chosen, fetched and
-checked, and the rights position below is written. Mapping the volume, screening units,
-per-unit curation and the `converted_lessons.json` entry are out of scope for the task
-that wrote this and have not been started. No Portuguese lesson has been converted.**
+**Status: Steps 0 to 3 of the method are done — the course is chosen, fetched and
+checked, the rights position is written, the volume is mapped and every lesson is
+screened and judged. Six lessons are shortlisted. Per-unit curation, the
+`converted_lessons.json` entry and the `APPROVED_UNITS` registration have not been
+started, and no Portuguese lesson has been converted.**
 
 ## The source
 
@@ -374,10 +375,452 @@ the institute twice.
 with a task and no title, four with a title that names no employer — and this log
 resolves none of them.** That, and not any single line, is the contractor question left
 open here. And the volume is an edited edition by its own unsigned admission, carrying
-twenty-one third-party photographs whose obligations nobody has looked at.
+twenty-one third-party photographs whose obligations nobody has looked at — **and five
+song lyrics reproduced in full, which the screening section below found and this
+section did not.** Two are credited to Antonio Carlos Jobim and Vinícius de Moraes, one
+to André Filho; see "What reading found that the screen cannot see". Nothing in the
+rights work above looked for text that was not the course's own, which is the gap that
+section closes.
 
 That is a description of what was and was not found. It is deliberately not a
 conclusion about the law, and it is not a finding that the course is clear.
+
+## Screening the volume
+
+Step 3 of the method, and it is two jobs. Map the volume so a printed page number can
+be turned into a PDF page number. Then screen every lesson for the vocabulary that
+disqualifies it — in Portuguese and in English, because the content is bilingual and an
+English-only screen sees half of it — and **read** whatever the screen did not
+disqualify. The screen ranks; it does not clear.
+
+### The page map, and why there is no single offset
+
+The method says to find "the offset between printed page numbers and PDF page numbers —
+there is always one." **For this volume there is no single offset, and looking for one
+would have produced a wrong map.** The table of contents says so itself: *"Each lesson
+is paginated separately. On tapes, lessons are referred to by lesson number and page
+number."* Printed pages are `lesson.page` — `6.1`, `12.22` — and each of the twelve
+lessons restarts at 1, so there are twelve offsets.
+
+| Lesson | Title | Printed | PDF | Pages | Offset |
+|---|---|---|---|---|---|
+| 1 | Checking in | 1.1–1.31 | 18–48 | 31 | +17 |
+| 2 | Ordering Breakfast | 2.1–2.25 | 50–74 | 25 | +49 |
+| 3 | Making a Long Distance Call | 3.1–3.30 | 76–105 | 30 | +75 |
+| 4 | Inquiring about your Laundry | 4.1–4.24 | 106–129 | 24 | +105 |
+| 5 | Checking for Messages | 5.1–5.26 | 130–155 | 26 | +129 |
+| 6 | Asking for Directions | 6.1–6.29 | 156–184 | 29 | +155 |
+| 7 | Asking for Directions (Inside a Building) | 7.1–7.27 | 186–212 | 27 | +185 |
+| 8 | Taking a Taxi | 8.1–8.23 | 214–236 | 23 | +213 |
+| 9 | Answering the Phone | 9.1–9.26 | 238–263 | 26 | +237 |
+| 10 | Leaving a Message | 10.1–10.23 | 264–286 | 23 | +263 |
+| 11 | Making an Appointment | 11.1–11.17 | 288–304 | 17 | +287 |
+| 12 | Ordering Lunch | 12.1–12.22 | 306–327 | 22 | +305 |
+
+PDF page = printed page + the lesson's offset. 303 of the 329 pages are lesson pages;
+the remaining 26 are front matter and the image appendix.
+
+**The map was built from the file rather than from the table of contents, and then
+checked against it.** Every page carries its `lesson.page` marker in the footer; those
+were extracted and the spans derived from them, and the resulting lengths match the
+table of contents for all twelve lessons. Of the ten blank pages the rights section
+above counts, **eight are section dividers standing before a lesson** — PDF 17, 49,
+75, 185, 213, 237, 287 and 305, the first of which sits before Lesson 1 rather than
+between two lessons. Where a lesson is preceded by a divider its offset is that blank
+page's own number, one more than the previous lesson's last page: Lesson 1 ends at PDF
+48 and Lesson 2's offset is 49. The four lessons with no divider before them — 4, 5, 6
+and 10 — take the previous lesson's last page as their offset. The other two blanks,
+PDF 3 and 5, are in the front matter.
+
+**Checked by opening a page, not by arithmetic.** PDF page 156 was rendered and read:
+it is printed page `6. 1`, the São Paulo opener of Lesson 6. Three more boundaries were
+confirmed the same way — PDF 18 is `1. 1`, PDF 304 is `11. 17`, PDF 327 is `12.22`.
+
+**On naming.** The task that produced this section asks for units named by "the roman
+numeral the course itself uses". **This course uses no roman numerals for its lessons.**
+It prints `LESSON 8`, `LESSON 12`, and footers `6. 1` and `12.22`. Units are therefore
+named here by the arabic lesson number the course itself prints, which is also how
+`tests/approved_units.py` already keys the Spanish course.
+
+### The screen, published so the counts reproduce
+
+The method's exclusion table is given in Italian and English. **There is no Portuguese
+row anywhere in `converting-a-course.md`**, so these terms were derived, and they are
+printed here because a count nobody can reproduce is not a count.
+
+Matching is on **stems**, not whole words, and is **accent-insensitive**, because this
+is an OCR text layer that drops and mangles accents:
+
+| Family | Portuguese and English stems |
+|---|---|
+| `mil` | militar, exercito, quartel, quarteis, soldado, marinha, aeronautica, tropa, sargento, coronel, tenente, almirante, forcas armadas, armada, arma de fogo, guerra, caserna, batalhao, regimento, patente · military, army, navy, air force, soldier, barracks, sergeant, colonel, admiral, lieutenant, troops, armed forces, warfare, regiment, battalion |
+| `emb` | embaixad, consulad, consul, diplomat, chancelaria, adido, legacao · embassy, consulate, chancery, attache, foreign service, ministry of foreign |
+| `unif` | polici, policia, delegacia, delegado, guarda, fiscal, inspetor, inspector, autoridade, agente da lei, oficia, xerife, patrulha · police, officer, constable, patrol, sheriff, authorit, official |
+| `bord` | alfandeg, fronteir, passaport, imigra, despachante, visto de, declarar na, isencao, franquia · border, frontier, customs, passport, visa, immigration, declare, duty-free, duty free, port of entry |
+
+Four terms were kept **out** of the pattern on purpose, following the rule the Spanish
+log records after its own screen over-fired:
+
+- **`geral` / `general`** — an ordinary Portuguese adverb stem; `generalmente` would
+  score every lesson. Spanish excluded its equivalent for the same reason.
+- **`capitao` / `captain`** — also a ship's or a team's captain; it would have ranked the
+  taxi lesson as military.
+- **`servico`** — `serviço militar` matters, but `serviço` alone is room service and
+  laundry service, which is most of this volume.
+- **bare `visto`** — the past participle of *ver*, "seen". Only `visto de` (entry visa)
+  is screened.
+
+Those omissions cost nothing measurable here: across the volume, `servico` and bare
+`visto` add no hit the pattern misses, `capita` finds only "private capital", and the
+ranks the pattern genuinely does not name — Major, Marechal, Fuzileiro Naval — occur
+only in Lesson 9, which the screen and the reading both caught anyway.
+
+**How a match is classified.** Each match is judged by the **word it sits inside**, not
+by the line around it. That matters, and the first version of this section got it wrong
+in both directions: an accented host (`consultórios`) slipped past the filter, and an
+innocent word elsewhere on the line (`aguardando`) cancelled a real hit (`Consul Geral`).
+The hosts treated as innocent, each read on the page first, are: `consultorio(s)`,
+`consultoria`, `televisao`, `visao`, `avisar` and its forms, `bordered`, `attached`, and
+`aguardar` and its forms. Two whole lines are excepted because the host word is itself
+a proper name: the surnames *Silveira* and *Guerra*, two adjacent columns of a
+pronunciation list at printed 11.8, and the CMTC
+trolleybus paint scheme *"white, navy and blue"*.
+
+**One of those two exceptions did not fire when it was first written, and the reason is
+worth keeping.** The OCR renders the surname column with run-together spacing —
+`Silveira          Guerra` — while the rule tested for the single-spaced literal, so it
+never matched and Lesson 11's single `mil` hit was counted as a military term rather
+than as the surname it is. The published rule was not the rule that ran. It is fixed by
+collapsing runs of whitespace in the line before the test, and it is recorded because
+this repository has a name for it: a guard has to mean the same thing as the code it
+protects. The table below is the run after the fix; Lesson 11 moves from 13 lines to
+12.
+
+### What the screen found, and what reading found after it
+
+Three numbers per lesson. **Raw** is every match. **FP** is the matches thrown out
+because the host word is innocent. **Lines** is the distinct lines that remain — the
+unit of work for whoever has to replace them.
+
+| Lesson | Title | Printed | mil | emb | unif | bord | Raw | FP | Lines | Outcome |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Checking in | 1.1–1.31 | 1 | 41 | 0 | 13 | 55 | 0 | 46 | dropped |
+| 2 | Ordering Breakfast | 2.1–2.25 | 0 | 8 | 0 | 6 | 14 | 1 | 10 | **SHORTLIST** |
+| 3 | Making a Long Distance Call | 3.1–3.30 | 0 | 14 | 0 | 6 | 20 | 1 | 13 | dropped |
+| 4 | Inquiring about your Laundry | 4.1–4.24 | 0 | 6 | 0 | 8 | 14 | 3 | 10 | dropped |
+| 5 | Checking for Messages | 5.1–5.26 | 0 | 1 | 0 | 2 | 3 | 1 | 2 | **SHORTLIST** |
+| 6 | Asking for Directions | 6.1–6.29 | 0 | 0 | 0 | 4 | 4 | 2 | 2 | **SHORTLIST** |
+| 7 | Directions (Inside a Building) | 7.1–7.27 | 0 | 17 | 0 | 1 | 18 | 10 | 5 | **SHORTLIST** |
+| 8 | Taking a Taxi | 8.1–8.23 | 1 | 3 | 0 | 0 | 4 | 1 | 3 | **SHORTLIST** |
+| 9 | Answering the Phone | 9.1–9.26 | 20 | 8 | 5 | 4 | 37 | 6 | 26 | dropped |
+| 10 | Leaving a Message | 10.1–10.23 | 9 | 38 | 1 | 1 | 49 | 2 | 32 | dropped |
+| 11 | Making an Appointment | 11.1–11.17 | 1 | 12 | 1 | 0 | 14 | 1 | 12 | dropped |
+| 12 | Ordering Lunch | 12.1–12.22 | 0 | 2 | 0 | 0 | 2 | 0 | 2 | **SHORTLIST** |
+
+**Lesson 7 is why the screen is a ranking and not a verdict.** It scores 18 raw — the
+fifth highest in the volume — and **nine** of those matches are the word `consultório`,
+"doctor's office", which contains `consul`. Read on the page, Lesson 7 is a person
+looking for a lawyer's office in a twenty-five-storey building and giving up on the
+lift. It is one of the cleanest units here, and a screen read as a verdict would have
+dropped it for a word that means the opposite of what the pattern was looking for.
+
+**And the same unit shows the screen's other failure mode.** Twice — on PDF 190 and
+PDF 199 — the OCR renders the word split across a space, as `consu Itórios` and
+`consu Itório`. Those are a tenth and eleventh occurrence and the pattern does not see
+either. A stem list misses what the scan breaks, which is the same reason the rights
+section above had to read pages as images.
+
+The other false positives the published pattern produces, all read in context:
+`televisão` and `avisar` matching `visa`; the magazine *Visão*; `bordered by Avenida
+Atlântica` matching `border`; `attached to words` matching `attache`; `aguardando`
+matching `guarda`; the trolleybus *"white, navy and blue"*; and the two adjacent
+surnames *Silveira* and *Guerra*. There are 28 of them in the volume out of 234
+matches; the remaining 206 matches fall on 163 distinct lines.
+
+**Nothing in this volume scored zero.** The method's instruction is to re-read a
+zero-scoring unit specifically for a miss; no such unit exists here, so that check was
+run against the lowest instead. Three lessons tie at two distinct lines — 5, 6 and 12
+— and all three were read end to end; Lesson 12 is also the lowest on raw matches, at
+two against Lesson 5's three.
+What it found is in "What reading found that the screen cannot see" below, and it is
+the most useful thing in this section.
+
+### The shortlist — six lessons, each read in full
+
+**The rule, stated so it can be argued with.** A lesson is approved when **(a)** its
+dialogue — the part a robot would actually speak with a learner — is clear of all four
+families; **(b)** its premise, the *Setting the Scene* paragraph, is clear of them too;
+and **(c)** every remaining contaminated line is individually enumerated below, with
+**where it sits** recorded, because a line of running prose in a Cultural Note costs
+more to replace than an item in a drill list. It is not a threshold on the count, and the
+table proves it in the sharpest possible way: **Lesson 4 is dropped at 10 lines and
+Lesson 2 is approved at the same 10** — an exact tie with opposite outcomes, decided by
+clause (b). Lesson 3 is dropped at 13 despite a dialogue as clean as any approved
+lesson's.
+
+Every approved lesson was read page by page, all **152** pages. **One** dropped
+lesson, Lesson 3, was read in full as well, which makes **182 of the volume's 303
+lesson pages read end to end**.
+
+**Lesson 12 — Ordering Lunch (printed 12.1–12.22, PDF 306–327). 2 lines, both drills.**
+A person orders a sandwich and a juice in a *lanchonete*, is told the roast beef has run
+out, asks what a *bauru* is, and pays at the till. It carries a full menu as additional
+vocabulary — juices, sandwiches, ice creams — and a Cultural Note on Brazilian dining
+etiquette and on how to offer and refuse food politely. The two lines: *"Como é o
+Embaixador?"* as a Language Note example of *Como é …?*, and *"… à festa da embaixada?"*
+as one item of **four** in a Brief Exchange — the others being a
+*reunião*, a *cerveja* and *comer mais um pouco*.
+
+**Lesson 6 — Asking for Directions (6.1–6.29, PDF 156–184). 2 lines, one drill item.**
+A person asks a passer-by the way to a bank and is walked through it street by street.
+Streets, turnings, blocks, landmarks, distances. The two lines are one drill item that
+the page layout splits across two lines — *"… alfândega?"* and its gloss *"(customs)"*
+— the customs house appearing once among **five** places in drill 8, the others being a
+church, a *largo*, a museum and a theatre. **But see the next section: Lesson 6 carries
+something in its Cultural Notes that this count does not reach.**
+
+**Lesson 5 — Checking for Messages (5.1–5.26, PDF 130–155). 2 lines, both drills.**
+A person collects a phone message at a hotel desk and finds the caller's number was not
+written down. It carries the volume's most extensive telling-the-time material, and
+three closing sets of everyday expressions — an unheaded run of reassurances, then
+*Expressing Relief* and *Expressing Surprise*. (The matching *Expressing disagreement*
+set is Lesson 8's, at printed 8.23, and *Expressing Agreement* is Lesson 7's at 7.26.)
+The two lines: *consulado* as one response in a list drill, and *o passaporte* as one
+item in a singular/plural drill.
+
+**Lesson 8 — Taking a Taxi (8.1–8.23, PDF 214–236). 3 lines: 2 drills and 1 note.**
+A person hails a taxi in rush hour, discusses the traffic, gets out at a square and
+tells the driver to keep the change. Transport vocabulary, money, *estar com pressa /
+fome / frio*. Two drill items — *"… à festa da embaixada?"* and *"Você vai ao
+consulado?"* — and, **not a drill item**, a clause of running prose in the Cultural Note
+at printed 8.21: *"The Consulate General in Rio recommends that persons arriving at
+Rio's Galeão airport use taxis operating on fixed fees, paid in advance."* That one is
+prose in a section the pipeline carries, so it is a rewrite rather than a substitution.
+
+**Lesson 7 — Directions Inside a Building (7.1–7.27, PDF 186–212). 5 lines, all
+drills.** A person looks for a lawyer's office in a big building and takes the stairs.
+Floors and ordinals, professions, *este/esse/aquele*. Five drill lines: the ambassador's
+office as one of six floor-directory items, a *consulado* pair in a where-is drill,
+*embaixatriz ou embaixadora?* and *cônsul/consulesa?* in two profession drills, and the
+`(consul)` gloss printed on its own line beneath the second of those — the same layout
+split Lesson 6 has, counted the same way.
+**`embaixatriz` is glossed "ambassador's wife" and is a dated-premise problem in its own
+right, separate from the embassy question.**
+
+**Lesson 2 — Ordering Breakfast (2.1–2.25, PDF 50–74). 10 lines on printed
+2.12–2.17: nine in drills and exchanges, one in a Pronunciation Practice word
+list.** A person calls the front desk and orders
+breakfast to the room. It is the most contaminated of the six and it is here because
+the rule above is not a threshold: its dialogue and its premise are both clear, and
+every one of the ten lines is a substitutable item. It also carries what the rest of
+the shortlist does not — the cardinal numbers to 1000, the days of the week and the
+Brazilian date order, the regular and irregular verb paradigms, and a full page of
+courtesy exchanges — *Parabéns*, *Benvindo/a*, *Que prazer em vê-lo/la*,
+*Obrigado/a*, *O prazer é meu* — **and two that are not that at all; see printed
+2.25 below**. The ten: the consulate's address, a *passaporte diplomático*, the
+consulate's telephone number twice, a Double Exchange pair built on knowing the
+embassy's and the consulate's numbers, *"abre as malas na alfândega?"* with its
+*(customs)* gloss, two *passaportes* in a signing drill, and — the one that is not a
+drill — the bare word `consulado` in the Pronunciation Practice word list on printed
+2.12, where it is being used to practise a vowel.
+
+### Why each dropped lesson was dropped
+
+**Lesson 1, Checking in (46).** The dialogue is the disqualification, not the drills:
+*"A senhora é do Consulado Americano?" — "Sou, sim."*, and then *"com o desconto do
+consulado"* and *"Seu passaporte, por favor."* A consulate employee checking in on a
+consular rate. This is the Identity defect `plan.md` names, in the first line a learner
+would hear.
+
+**Lesson 3, Making a Long Distance Call (13). Read in full, dropped on its premise.**
+*Setting the Scene* reads **"You wish to advise the DCM\* that you have arrived in
+Brazil"**, footnoted *"Deputy Chief of Mission at an Embassy"*. That fails clause (b),
+and it fails it in the same way Lesson 4 does. Everything else about the unit argues for
+it: the dialogue is a telephone operator placing a person-to-person call and is entirely
+clean, it is the only place in the volume where a learner **gives their own name**
+(*"Meu nome é …"*, *"Eu me chamo …"*), and its Cultural Notes on Brazilian naming,
+envelopes and salutations are among the best in the book. Its other twelve lines are
+three examples in the contraction table (*do consulado*, *nos consulados*, *na
+embaixada*), two drill items, and six passports. **If the shortlist proves too thin at
+curation, this is the unit to reconsider first, and reconsidering it means rewriting a
+premise rather than swapping lines.**
+
+**Lesson 4, Inquiring about your Laundry (10).** *Setting the Scene* is an introductory
+meeting with the Consul General — clause (b) again. The drills answer the telephone as
+*"Aqui é do Consulado Americano"* and *"Aqui é da Embaixada Americana"*, and one runs
+*"o consulado vai mandar o visto"* — the consulate will send the visa.
+
+**Lesson 9, Answering the Phone (26).** The Additional Vocabulary is a cabinet list
+including *Ministro da Aeronáutica*, *Ministro da Marinha*, *Ministro do Exército* and
+*Chefe do Gabinete Militar*, followed by *Oficiais-Generais das Forças Armadas* and a
+rank ladder — Brigadeiro, General, Coronel, Tenente, Sargento, Soldado, Almirante. Its
+Cultural Note is *"Norms for addressing officials of the government, the church and the
+private sector"*. Military and officials, by decision.
+
+**Lesson 10, Leaving a Message (32).** The dialogue is *"o Adido Financeiro James Weber
+da Embaixada Americana"* telephoning a ministry. `adido` occurs eighteen times in the
+unit. One page carries the *Quartel General do Estado Maior das Forças Armadas*, captioned
+as the place "where military parades take place".
+
+**Lesson 11, Making an Appointment (12).** The dialogue is making an appointment with
+the *Adido Comercial*; the Additional Vocabulary is the sections of a mission — *Seção
+Consular, Cultural, Política, Econômica, Comercial*.
+
+### What reading found that the screen cannot see
+
+This is the part the four families do not reach, and it is why the method says to read.
+
+**Lesson 6's Cultural Notes are about child pickpockets and road deaths, and this is
+the most important thing in this section.** Printed 6.28 opens: *"'Trombadinhas' —
+Brazilian pickpockets à la Oliver Twist range in age from seven to twenty. Usually,
+these youthful street operators are poorly dressed and wear tennis shoes for quick
+getaways … the trombadinhas dash off into the middle of the streets, risking their
+lives darting around cars."* The same page continues *"O pedestre não tem vez"* —
+pedestrians have no rights — with *"about 400 traffic accidents per day, resulting in
+about 61,000 injuries and 3,000 deaths a year"*, streets *"very dangerous to cross"*,
+and *"it takes real acrobatics to get to the other side of the street alive"*. The
+exclusion screen scores this page **zero**; nothing in the four families names it.
+
+**It is worse than the two items below, and the reason is mechanical.** Those are photo
+captions, and the conversion pipeline takes dialogue, notes and drills — so captions do
+not travel. **A Cultural Note does.** Lesson 6 is approved above on two drill lines, and
+that count does not describe this page. **Whoever curates Lesson 6 has to decide about
+printed 6.28 explicitly; it is not covered by "replace two drill items".**
+
+**Lesson 5 carries two photograph captions about child poverty.** Printed 5.21: *"An
+ice-cream vendor. Children in Brazil start working at a very young age. The money is
+brought home to help the family."* Printed 5.22: *"A common scene in Rio de Janeiro — a
+barefoot-child brings home the groceries as he passes through the favelas. In the
+background an improvised water system is the only source of water available. Houses are
+made out of scraps of tin, cardboard and newspaper."* Captions on substituted
+photographs, so the pipeline would not carry them — a property of the pipeline, not a
+judgement that the text is fine.
+
+**Alcohol appears in two approved lessons, in five places in one of them.** Lesson 12:
+*"Para mim, um chope"* (draft beer) at printed 12.14, *"Uma cervejinha bem gelada, por
+favor"* at 12.19, *cerveja* in two drills at 12.11 and 12.16, and — the one that is
+spirits rather than beer, and sits in a Thought Translation exercise the learner is
+asked to render into Portuguese — *"Would you like to order a cocktail while you're
+waiting?"* at 12.17. Lesson 2's Cultural Note describes the hotel minibar's *"liquor,
+beer, soft drinks"* and recommends *"a refreshing cold Brazilian beer … when you walk
+in from the hot carioca sun"*. Ordinary in an adult course; a decision for whoever
+converts it, not a screen hit.
+
+**Lesson 2's courtesy page teaches condolences, and this log points the next task
+straight at it.** Printed 2.25 is twelve exchanges long, and ten of them are what
+the name says — *Parabéns!*, *Benvindo/a!*, *Divirta-se!*, *Que prazer em vê-lo/la!*
+The other two are **_"Meus pêsames!/Meus sentimentos!"_ glossed *"(My condolences!)"*
+and _"Estimo as suas melhoras!"_ glossed *"(Hope you get better!)"*.** The screen scores
+the page zero and no exclusion family reaches it.
+
+**What makes this worth its own entry is not the content but where this log sends
+people.** The shortlist has no introductions unit, so both the handoff below and the
+Lesson 2 entry above nominate this page as the material for `pt-01-greetings` — a
+child's first spoken Portuguese lesson. A curator following that instruction and
+reading "courtesy page" would assemble it from a list that includes offering
+condolences on a death. **That needs an explicit decision at curation, the same as
+printed 6.28, and not a line swap.** It is the only bereavement content in the approved
+152 pages.
+
+**And one line about what children drink, on that same Lesson 2 page.** Printed 2.24,
+in running prose in the Cultural Note: *"Even children drink café com leite as well as
+cafezinhos (sweetened, strong black coffee served in demitasses)."* It is the only
+child-directed consumption claim in the approved set, it is prose rather than a drill
+item, and the page it sits on is one this log already quotes — so it was read, and
+reporting it is the point.
+
+**Two approved lessons reproduce a song lyric in full, and this one is a rights matter
+rather than a content one.** Printed 5.25 is a Cultural Note carrying the complete
+lyric of *"A felicidade"*, credited on the page to **Antonio Carlos Jobim e Vinicius de
+Morais**. Printed 6.1 opens Lesson 6 with eight lines of *"São Paulo da Garoa"*. Three
+more sit in dropped lessons: *"Cidade Maravilhosa"* credited to **André Filho** at
+printed 1.2, *"Garota de Ipanema"* credited to **Vinícius de Moraes – Tom Jobim** at
+3.13, and an uncredited carnaval song at 4.15. **Five lyrics in the volume, two of them
+in units this log approves.** These sit in Cultural Notes and lesson openers, which the
+pipeline carries — the photo-caption exemption does not reach them — and the rights
+section above inventories only photographs, so nothing else in this log would have
+caught them. **Whether any of the five is in copyright was not checked, and nothing
+here is a view on it.**
+
+**One footnote about slavery, in an approved lesson.** Printed 12.14 glosses the
+*feijoada* drill: *"Feijoada is the name of a Brazilian dish introduced in the
+northeast of Brazil by black slaves."* It is a footnote on a drill page, so unlike the
+Lesson 5 captions the pipeline would carry it. Not disqualifying, and not something to
+transcribe into a child's lesson without someone having decided how to say it.
+
+**Dated practicalities, measured.** Prices are in **Cr$** — the cruzeiro, which Brazil
+replaced in 1994 — on **nine** pages including the Lesson 1 room rate. Lesson 3 teaches
+the public telephone in *fichas*, the grooved tokens that bought three minutes, and the
+*orelhão*. Lesson 5's message vocabulary includes **telex**. Lesson 8 describes the
+CMTC trolleybus fleet and *"a two-door Volkswagen with no right front seat"* as the
+commonest cab in Brazil. None of this is disqualifying; all of it has to be rewritten
+rather than transcribed.
+
+**A human instructor, everywhere.** Every one of the twelve lessons instructs the
+learner to repeat after *your teacher*, to have the teacher select items orally, and to
+enact the dialogue with the teacher; each lesson ends with *"Instructor interviews"* and
+*"Briefings for your instructor"*. Counted per lesson as the strings `your teacher`
+and `instructor` together, the total runs from six — Lessons 4, 5, 7, 8 and 9 — to ten,
+in Lessons 1 and 2. The robot **is** that instructor, so this framing is rewritten in every
+unit that ships.
+
+**A wider net was run over the approved units, and found nothing.** Because the stem
+list is derived rather than given, the six approved lessons were re-screened against a
+much broader vocabulary — ranks (marechal, brigadeiro, fuzileiro, marinheiro),
+institutions (ministério, palácio, congresso, prefeitura, governo, tribunal), uniformed
+roles (farda, uniforme, bombeiro, detetive, delegado, juiz, vigia), weapons and war
+(fuzil, bomba, desfile, alistamento), and border and identity terms (aduana, vistoria,
+estrangeiro, cidadania, identidade, checkpoint). It returns only place names and
+city-facts prose: *Praça da Bandeira*, *Praça das Bandeiras*, *Palácio Tiradentes*,
+*Avenida Presidente Vargas*, *"Governor's palace"* as an example landmark in the taxi
+note, the word *crime* in a São Paulo city-facts list and again in a pronunciation
+minimal-pair set. Nothing in any named family.
+
+**A coverage gap, and it is the one that matters for this app.** The six approved
+lessons cover numbers to a thousand, days of the week and dates, telling the time,
+directions, floors and professions, transport and money, ordering food, and a page of
+courtesy exchanges. **What they do not contain is an introductions lesson**, and the
+only place in the volume where a learner gives their own name is Lesson 3, which is
+dropped. The app's Portuguese syllabus opens at `pt-01-greetings`. Either that first
+lesson is assembled from what the approved units carry (*Bom dia*, *Com licença*,
+*Obrigado/a*, *Por favor*, *Pois não*, *Não há de quê*, and Lesson 2's courtesy page —
+**which is not wholly courtesy; see printed 2.25**),
+or Lesson 3's premise is rewritten and the unit brought back. This log does not decide
+it.
+
+### What this screening did NOT do
+
+- **It did not curate anything.** No lesson was rewritten, no dialogue turn extracted,
+  no drill converted. The shortlist is six lesson numbers and the reasons for them.
+- **It did not read the five outright-dropped lessons end to end.** Lessons 1, 4, 9, 10
+  and 11 were screened, and every screen hit in each was read in its page context, and
+  the pages the quotations above come from were read in full. That is enough to drop a
+  unit whose dialogue or premise carries the family, and it is not enough to have judged
+  everything else in it. Lessons 2 and 3 **were** read end to end, because their
+  dialogues are clean and the count alone should not have decided them.
+- **The first version of this section claimed a full read it had not done.** It said all
+  127 pages of a five-lesson shortlist were read page by page; in fact two pages of
+  Lesson 6 and six of Lesson 8 had not been opened, and one of the two unread Lesson 6
+  pages is printed 6.28 — the trombadinhas note above, the worst content in the
+  approved set. It is recorded here rather than quietly fixed, because a reading claim
+  is exactly the kind of claim this log exists to make checkable.
+- **It did not check OCR fidelity.** The accents in the text layer are damaged in places
+  — the screen is accent-insensitive for that reason, and `consu Itórios` on PDF 190
+  shows the scan breaking a word in half — and no measurement of how bad it is was made.
+  That belongs to the curation task, and it is the failure mode `plan.md` calls the worst
+  one for a language course.
+- **It did not settle the variety anywhere a learner can see.** The course is Brazilian
+  Portuguese and the app's catalog says "Portuguese". The lesson objectives written for
+  these six units have to say Brazilian; see "What this log does not settle".
+- **It did not verify the derived Portuguese stems against a second source.** They were
+  derived here and published above so that somebody can disagree with a specific term
+  rather than with the result.
+- **It did not check the copyright status of the five song lyrics.** They are recorded
+  above with the credits the pages carry, and that is all: nobody looked up any of the
+  five, and the rights section's position was formed before they were found.
+- **It did not populate `APPROVED_UNITS`.** That registry's own test asserts its entries
+  are cited by shipped lessons, so registering six units before a Portuguese lesson
+  exists would fail it. The shortlist lives here until curation.
 
 ## What this log does not settle
 
@@ -388,7 +831,25 @@ Two things are named above that a later task has to carry, and neither is done:
    `learners/store.py:129` and in the `get_progress` and `start_lesson` tool enums. This
    file is a developer document; a learner and a parent never see it, so mentioning the
    variety here does not discharge the requirement that they be told.
-2. **Steps 3 onward** — mapping the volume, screening units, per-unit curation and the
-   `converted_lessons.json` entry, including the `rights` value that entry has to carry.
-   When that value is written, it should be a summary of the section above: a
-   description of what was found, not a conclusion about the law.
+2. **Steps 4 onward** — per-unit curation of the six shortlisted lessons, the
+   `converted_lessons.json` entry including the `rights` value it has to carry, and the
+   `APPROVED_UNITS` registration in `reachy_language_tutor/tests/approved_units.py`.
+   That registry is deliberately **not** populated here: its own test asserts the
+   entries match units actually cited by shipped lessons, so registering six units
+   before a single Portuguese lesson exists would fail it. When the `rights` value is
+   written it should be a summary of "Rights: what was actually checked": a description
+   of what was found, not a conclusion about the law.
+3. **Where the first Portuguese lesson comes from.** The shortlist has no
+   introductions unit: the only place in the volume where a learner gives their own
+   name is Lesson 3, which is dropped on its embassy premise. `pt-01-greetings` is the
+   app's first Portuguese lesson today. Whoever curates has to decide whether it is
+   assembled from what the approved units carry — including Lesson 2's courtesy page,
+   with the caveat recorded at printed 2.25 —
+   or whether Lesson 3's premise is rewritten and the unit brought back. This log does
+   not decide it.
+4. **Printed 6.28 and printed 2.25.** Two pages of approved lessons need an explicit
+   decision at curation rather than a line swap, and neither is reachable by any
+   exclusion family: Lesson 6's Cultural Note about child pickpockets and road deaths,
+   and the two bereavement exchanges on Lesson 2's courtesy page — which is the page
+   item 3 above sends a curator to. Both are recorded under "What reading found that
+   the screen cannot see".
