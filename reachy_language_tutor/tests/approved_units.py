@@ -49,9 +49,14 @@ APPROVED_UNITS: Mapping[str, frozenset[str]] = MappingProxyType(
         # post looks like -- and docs/curation-log-spanish.md says which and why.
         # This list says what SHIPPED, not what passed a screen, so a seventh Cycle
         # means curating it first.
-        "FSI Spanish Familiarization and Short-Term Training": frozenset(
-            {"2", "5", "10", "14", "25", "38"}
-        ),
+        "FSI Spanish Familiarization and Short-Term Training": frozenset({"2", "5", "10", "14", "25", "38"}),
+        # Six of 12 lessons in Brazilian Portuguese FAST Volume I. Half the volume is
+        # dropped on its dialogue or its premise -- a consulate check-in, a call to the
+        # Deputy Chief of Mission, a meeting with the Consul General, a cabinet list with
+        # a rank ladder, and two attaches -- and docs/curation-log-portuguese-fast.md says
+        # which and why. Units are named by the arabic lesson number the course prints;
+        # this volume uses no roman numerals for its lessons.
+        "FSI Brazilian Portuguese FAST, Volume I": frozenset({"2", "5", "6", "7", "8", "12"}),
     }
 )
 

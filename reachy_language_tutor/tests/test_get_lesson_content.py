@@ -214,7 +214,7 @@ async def test_the_no_material_answer_carries_the_languages_it_tells_the_model_t
     # merely the same shape. The derivation is copied in four places rather than shared,
     # so a shape-only pin here would let this one copy drift while the others held --
     # and the second reviewer of D33 named that as the residual after the first fix.
-    assert set(offered) == {"Italian", "Spanish"}
+    assert set(offered) == {"Italian", "Portuguese", "Spanish"}
 
 
 @pytest.mark.asyncio

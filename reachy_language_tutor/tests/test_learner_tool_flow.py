@@ -283,7 +283,7 @@ async def test_the_empty_language_signal_survives_the_real_dispatch_path(instanc
     empty = await _call("start_lesson", {"language": "French"}, deps)
     assert empty["started"] is False
     assert empty["reason"] == "lesson_not_written_yet"
-    assert set(empty["languages_with_material"]) == {"Italian", "Spanish"}
+    assert set(empty["languages_with_material"]) == {"Italian", "Portuguese", "Spanish"}
     # Nothing was pinned, so the tutor cannot then record a lesson it never started.
     assert deps.lesson_session.read_for(SEEDED_LEARNER) is None
 
@@ -298,5 +298,5 @@ async def test_the_empty_language_signal_survives_the_real_dispatch_path(instanc
     # And the not-taught answer splits the catalog rather than listing five names as
     # if the robot could teach five languages.
     unknown = await _call("get_progress", {"language": UNTAUGHT_NAME}, deps)
-    assert set(unknown["languages_with_material"]) == {"Italian", "Spanish"}
-    assert set(unknown["languages_without_material_yet"]) == {"French", "German", "Portuguese"}
+    assert set(unknown["languages_with_material"]) == {"Italian", "Portuguese", "Spanish"}
+    assert set(unknown["languages_without_material_yet"]) == {"French", "German"}

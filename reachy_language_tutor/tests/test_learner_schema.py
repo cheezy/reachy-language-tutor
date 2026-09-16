@@ -974,6 +974,7 @@ SHIPPED_CATALOGS = {
     4: "1ae76c0c18e1843da97f71a42d0da66df41c39073e5bef06ffe6b2b36ab57b4f",  # + six Italian lessons converted from FSI Italian FAST
     5: "b76b35d14afd2c32237b82dd6469c877195019c06702b72bbe3b3574b4194158",  # those lessons regrouped under a courses list; no content changed
     6: "88b65ed855be0929d8b374959e8e0444121852a7db6db0c090fdd4945cde455b",  # + six Spanish Cycles converted from the FSI Spanish FAST; the six Spanish placeholders moved 1-6 -> 7-12
+    7: "3260f24e34523574793ba2838d9246fc9c619c072d6278cb58e06b0950b5934e",  # + six Brazilian Portuguese lessons converted from the FSI Portuguese FAST; the six Portuguese placeholders moved 1-6 -> 7-12
 }
 
 

@@ -352,18 +352,25 @@ Seeded so the app is demonstrable before any real learner exists.
 | `it` | Italian |
 | `pt` | Portuguese |
 
-### Lessons (42 total)
+### Lessons (48 total)
 
 Thirty of these are the original title-and-objective placeholders, six per language.
-The other twelve are **converted units** carrying real dialogue, usage notes and
-drills, marked **C** below: six Italian from the FSI Italian FAST and six Spanish from
-the FSI Spanish FAST. A converted unit takes a position at the FRONT of its language,
-so the placeholders behind it moved up — Italian's and Spanish's now sit at 7-12, while
-French, German and Portuguese are untouched at 1-6 because nothing has been converted
-for them yet.
+The other eighteen are **converted units** carrying real dialogue, usage notes and
+drills, marked **C** below: six Italian from the FSI Italian FAST, six Spanish from the
+FSI Spanish FAST, and six Brazilian Portuguese from the FSI Portuguese FAST. A
+converted unit takes a position at the FRONT of its language, so the placeholders
+behind it moved up — Italian's, Spanish's and Portuguese's now sit at 7-12, while
+French and German are untouched at 1-6 because nothing has been converted for them
+yet.
 
-That asymmetry is the current state of the content gap, not a design: three of the five
+That asymmetry is the current state of the content gap, not a design: two of the five
 languages the catalog advertises still have no material at all.
+
+One thing the table shows that the counts do not. Portuguese's converted units are
+**Brazilian** and its placeholders are **European** — *adeus*, *chamo-me…*,
+*levanto-me* — so positions 1-6 and 7-12 of the same language teach different
+varieties of it. See docs/curation-log-portuguese-fast.md, "What this log does not
+settle".
 
 | ID | Language | Position | Title | Objective |
 |---|---|---|---|---|
@@ -403,12 +410,18 @@ languages the catalog advertises still have no material at all.
 | `de-04-ordering-food` | German | 4 | At the bakery | Order a coffee and a pastry, then ask for the bill: ich hätte gern…, die Rechnung, bitte. |
 | `de-05-directions` | German | 5 | Getting around town | Ask the way to the station and understand geradeaus, links, rechts. |
 | `de-06-daily-routine` | German | 6 | Your daily routine | Describe your morning with separable verbs: ich stehe auf, ich ziehe mich an. |
-| `pt-01-greetings` | Portuguese | 1 | Greetings and goodbyes | Greet someone, ask how they are, and say goodbye: olá, bom dia, como está?, adeus. |
-| `pt-02-introductions` | Portuguese | 2 | Introducing yourself | Give your name and where you are from, and ask the same back: chamo-me…, sou de…, e tu? |
-| `pt-03-numbers` | Portuguese | 3 | Numbers one to twenty | Count to twenty out loud and say your age and a time. |
-| `pt-04-ordering-food` | Portuguese | 4 | At the café | Order a coffee and a pastry, then ask the price: queria…, quanto custa? |
-| `pt-05-directions` | Portuguese | 5 | Asking for directions | Ask where a place is and follow a simple answer: onde fica…?, à direita, à esquerda. |
-| `pt-06-daily-routine` | Portuguese | 6 | Talking about your day | Describe your morning with reflexive verbs: levanto-me, preparo-me. |
+| `pt-fast-01-ordering-breakfast` **C** | Portuguese | 1 | Ordering breakfast | Ask the front desk to put you through and order breakfast: a senhora quer ligar para a copa?, café completo, para quantas pessoas? |
+| `pt-fast-02-checking-for-messages` **C** | Portuguese | 2 | Checking for messages | Ask whether anyone left a message and find out what it says: há algum recado para mim?, a pessoa que telefonou deixou o número? |
+| `pt-fast-03-asking-for-directions` **C** | Portuguese | 3 | Asking for directions | Stop someone in the street and follow the way they give you: o senhor poderia me dizer onde fica...?, vira à direita, quantas quadras são daqui? |
+| `pt-fast-04-finding-an-office` **C** | Portuguese | 4 | Finding an office in a building | Ask which floor someone is on and take the stairs: em que andar fica o escritório?, saindo do elevador vire à direita, vou é pela escada. |
+| `pt-fast-05-taking-a-taxi` **C** | Portuguese | 5 | Taking a taxi | Say where you are going, ask how long it takes, and pay: para o centro por favor, quanto tempo leva daqui até lá?, pode ficar com o troco. |
+| `pt-fast-06-ordering-lunch` **C** | Portuguese | 6 | Ordering lunch | Order at a counter, ask what something is, and pay: eu vou querer um sanduíche, como é o bauru?, pode trazer a conta por favor. |
+| `pt-01-greetings` | Portuguese | 7 | Greetings and goodbyes | Greet someone, ask how they are, and say goodbye: olá, bom dia, como está?, adeus. |
+| `pt-02-introductions` | Portuguese | 8 | Introducing yourself | Give your name and where you are from, and ask the same back: chamo-me…, sou de…, e tu? |
+| `pt-03-numbers` | Portuguese | 9 | Numbers one to twenty | Count to twenty out loud and say your age and a time. |
+| `pt-04-ordering-food` | Portuguese | 10 | At the café | Order a coffee and a pastry, then ask the price: queria…, quanto custa? |
+| `pt-05-directions` | Portuguese | 11 | Asking for directions | Ask where a place is and follow a simple answer: onde fica…?, à direita, à esquerda. |
+| `pt-06-daily-routine` | Portuguese | 12 | Talking about your day | Describe your morning with reflexive verbs: levanto-me, preparo-me. |
 
 ### Sample learner
 

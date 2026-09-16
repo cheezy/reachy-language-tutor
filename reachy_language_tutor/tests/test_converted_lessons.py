@@ -48,7 +48,20 @@ CURATION_LOG = DOCS / "curation-log-italian-fast.md"
 CURATION_LOGS = {
     "FSI Italian FAST, Volume 1": DOCS / "curation-log-italian-fast.md",
     "FSI Spanish Familiarization and Short-Term Training": DOCS / "curation-log-spanish.md",
+    "FSI Brazilian Portuguese FAST, Volume I": DOCS / "curation-log-portuguese-fast.md",
 }
+
+# The word that offers a free choice, per language. Portuguese is the reason this is a
+# table rather than a literal: Italian and Spanish "o" IS "or", but Portuguese "o" is
+# the definite article and its "or" is "ou", so one literal cannot serve all three.
+# A language absent from here is a REFUSAL rather than a skip -- see the guard below.
+EITHER_OR_WORD = {"it": "o", "es": "o", "pt": "ou"}
+
+
+def _language_of(lesson_id: str) -> str:
+    """Return the language code a converted lesson id begins with."""
+    return lesson_id.split("-", 1)[0]
+
 
 # What each course has actually CONVERTED, pinned so a lesson cannot appear or vanish
 # without someone saying so here. Not derived from the file -- deriving it would make
@@ -56,6 +69,7 @@ CURATION_LOGS = {
 CONVERTED_PER_COURSE = {
     "FSI Italian FAST, Volume 1": 6,
     "FSI Spanish Familiarization and Short-Term Training": 6,
+    "FSI Brazilian Portuguese FAST, Volume I": 6,
 }
 METHOD = DOCS / "converting-a-course.md"
 
@@ -213,12 +227,25 @@ def test_no_cue_response_drill_has_more_than_one_right_answer(instance: Path) ->
     offenders: list[str] = []
     for lesson_id in _converted_ids():
         content = store.get_lesson_content(lesson_id, instance_path=instance)
+        # Checked per LESSON, not per cue_response drill. Inside the drill loop this
+        # could never fire for a language that ships no cue_response drill at all --
+        # which is Portuguese today -- so the refusal would have been unreachable for
+        # the very language it was written for.
+        code = _language_of(lesson_id)
+        assert code in EITHER_OR_WORD, (
+            f"{code!r} ships converted lessons but has no word in EITHER_OR_WORD, so no "
+            f"cue of its would be screened for an unresolved choice. Add its word for 'or'."
+        )
+        either_or = EITHER_OR_WORD[code]
         for drill in content.drills:
             if drill.kind != "cue_response":
                 continue
-            # An unresolved either/or: "X o Y?" offers a free choice, so one branch
-            # cannot be the only answer.
-            if re.search(r"\w\s+o\s+\w[^?]*\?\s*$", drill.cue):
+            # An unresolved either/or: "X or Y?" offers a free choice, so one branch
+            # cannot be the only answer. The word for "or" is per-language and this is
+            # not cosmetic: Italian and Spanish "o" IS "or", but Portuguese "o" is the
+            # definite article and its "or" is "ou", so the Italian literal would fire
+            # on every ordinary article and still miss the real Portuguese case.
+            if re.search(rf"\w\s+{either_or}\s+\w[^?]*\?\s*$", drill.cue):
                 offenders.append(f"{lesson_id}: {drill.cue}")
 
     assert offenders == [], f"a cue offers a choice but only one branch is accepted: {offenders}"
@@ -272,6 +299,44 @@ def test_every_drill_is_of_a_kind_the_tutor_can_run(instance: Path) -> None:
 # named beside it. An accent is not a typo in a language course: "e" is "and" and "è"
 # is "is", so a lost one teaches a child a different sentence.
 ACCENTED_LINES = [
+    # Brazilian Portuguese. The sharpest case in the programme, because the fault and
+    # the diacritic are the same character: this scan drops an accent and leaves a stray
+    # tilde, and the tilde IS a Portuguese letter, so a dropped accent lands on a word
+    # that still reads as Portuguese -- mao for mão, sao for são, tao for tão. Each line
+    # below was read off its page image at 140 dpi.
+    (
+        "pt-fast-01-ordering-breakfast",
+        "O senhor quer mandar o café da manhã para o quarto 318, por favor?",
+        "unit 2, printed page 2.2",
+    ),
+    (
+        "pt-fast-02-checking-for-messages",
+        "Não, só espero que ele telefone outra vez amanhã.",
+        "unit 5, printed page 5.2",
+    ),
+    (
+        "pt-fast-03-asking-for-directions",
+        "Umas três quadras, mais ou menos. Então, a senhora vai reto até chegar na Rua "
+        "Formosa. A Avenida São João fica a três quadras da Rua Formosa. É uma avenida "
+        "larga de mão dupla.",
+        "unit 6, printed page 6.4",
+    ),
+    (
+        "pt-fast-04-finding-an-office",
+        "Este prédio é tão grande. Eu não sei porque não há um quadro no saguão.",
+        "unit 7, printed page 7.2",
+    ),
+    (
+        "pt-fast-05-taking-a-taxi",
+        "Dá, mas não adianta. A esta hora o trânsito está engarrafado na cidade inteira. "
+        "Tem que ter paciência. Onde a senhora quer descer?",
+        "unit 8, printed page 8.2",
+    ),
+    (
+        "pt-fast-06-ordering-lunch",
+        "É um sanduíche quente de bife ou presunto, com queijo e tomate. É muito bom.",
+        "unit 12, printed page 12.2",
+    ),
     # Spanish. The scan this course came from is 47.9% accent-damaged -- worse than
     # Italian's -- and Spanish is where it bites hardest: año and ano are different
     # words, and sí/si, él/el, tú/tu, más/mas each turn on one acute.
@@ -367,7 +432,16 @@ def test_the_scan_s_own_faults_did_not_reach_the_database(instance: Path) -> Non
     # A slash inside a word is the 'l' fault -- except where the source really means
     # one. Named individually rather than waved through as a class, because "americano/a"
     # is a real spelling and "usual/y" is a defect, and only a person can tell them apart.
-    permitted_slashes = {"s/he", "americano/a", "and/or"}
+    permitted_slashes = {
+        "s/he",
+        "americano/a",
+        "and/or",
+        # printed on Brazilian Portuguese FAST pages 7.5 and 12.6, as glosses
+        "what/which",
+        "leaving/getting",
+        "hall/corridor",
+        "is/was",
+    }
     for word in re.findall(r"[A-Za-zÀ-ÿ]+/[A-Za-zÀ-ÿ]+", text):
         assert word in permitted_slashes, f"{word!r} looks like the scan's 'l' read as a slash"
 
@@ -490,20 +564,81 @@ def test_nothing_military_or_official_survived_the_curation(instance: Path) -> N
 
     forbidden = {
         "military": [
-            "militare", "esercito", "caserma", "generale", "ammiraglio", "colonnello", "sergente",
-            "militar", "ejército", "cuartel", "soldado", "coronel", "sargento",
+            "militare",
+            "esercito",
+            "caserma",
+            "generale",
+            "ammiraglio",
+            "colonnello",
+            "sergente",
+            "militar",
+            "ejército",
+            "cuartel",
+            "soldado",
+            "coronel",
+            "sargento",
+            "exército",
+            "quartel",
+            "marinha",
+            "aeronáutica",
+            "tenente",
+            "almirante",
+            "forças armadas",
+            "guerra",
         ],
         "embassy": [
-            "ambasciata", "ambassador", "consolato", "embassy", "consulate", "diplomatic",
-            "embajada", "embajador", "consulado", "cónsul", "vicecónsul", "sección consular",
+            "ambasciata",
+            "ambassador",
+            "consolato",
+            "embassy",
+            "consulate",
+            "diplomatic",
+            "embajada",
+            "embajador",
+            "consulado",
+            "cónsul",
+            "vicecónsul",
+            "sección consular",
+            "embaixada",
+            "embaixador",
+            "embaixatriz",
+            "adido",
+            "chancelaria",
+            "seção consular",
         ],
         "uniformed authority": [
-            "polizia", "poliziotto", "carabinier", "questura", "police",
-            "policía", "policia", "comisaría",
+            "polizia",
+            "poliziotto",
+            "carabinier",
+            "questura",
+            "police",
+            "policía",
+            "policia",
+            "comisaría",
+            "polícia",
+            "policial",
+            "delegacia",
+            "delegado",
         ],
         "border": [
-            "dogana", "doganiere", "customs", "frontiera", "passaporto", "passport", "guardia di finanza",
-            "aduana", "aduanero", "pasaporte", "frontera", "inmigración",
+            "dogana",
+            "doganiere",
+            "customs",
+            "frontiera",
+            "passaporto",
+            "passport",
+            "guardia di finanza",
+            "aduana",
+            "aduanero",
+            "pasaporte",
+            "frontera",
+            "inmigración",
+            "alfândega",
+            "alfandegário",
+            "passaporte",
+            "fronteira",
+            "imigração",
+            "despachante",
         ],
     }
     for category, terms in forbidden.items():
@@ -704,16 +839,56 @@ def test_the_converted_content_reaches_a_robot_that_already_has_a_database(tmp_p
 
 
 @pytest.mark.parametrize(
-    ("code", "placeholders", "finished"),
+    ("code", "placeholders", "finished", "start_version"),
     [
-        ("it", ["it-01-greetings", "it-02-introductions", "it-03-numbers",
-                "it-04-ordering-food", "it-05-directions", "it-06-daily-routine"], "it-02-introductions"),
-        ("es", ["es-01-greetings", "es-02-introductions", "es-03-numbers",
-                "es-04-ordering-food", "es-05-directions", "es-06-daily-routine"], "es-02-introductions"),
+        (
+            "it",
+            [
+                "it-01-greetings",
+                "it-02-introductions",
+                "it-03-numbers",
+                "it-04-ordering-food",
+                "it-05-directions",
+                "it-06-daily-routine",
+            ],
+            "it-02-introductions",
+            str(store.SEED_VERSION - 1),
+        ),
+        (
+            "es",
+            [
+                "es-01-greetings",
+                "es-02-introductions",
+                "es-03-numbers",
+                "es-04-ordering-food",
+                "es-05-directions",
+                "es-06-daily-routine",
+            ],
+            "es-02-introductions",
+            str(store.SEED_VERSION - 1),
+        ),
+        (
+            "pt",
+            [
+                "pt-01-greetings",
+                "pt-02-introductions",
+                "pt-03-numbers",
+                "pt-04-ordering-food",
+                "pt-05-directions",
+                "pt-06-daily-routine",
+            ],
+            "pt-02-introductions",
+            # NOT SEED_VERSION - 1. A robot that never took the Spanish upgrade still
+            # carries 5, and reseeding jumps it straight to 7 in one pass rather than
+            # stepping through 6. Every rewind in this suite uses SEED_VERSION - 1, so
+            # bumping the version moved them all forward and left the oldest shipped
+            # catalog covered by nothing -- which is what this case is for.
+            "5",
+        ),
     ],
 )
 def test_the_upgrade_every_installed_robot_will_actually_take(
-    tmp_path: Path, code: str, placeholders: list[str], finished: str
+    tmp_path: Path, code: str, placeholders: list[str], finished: str, start_version: str
 ) -> None:
     """The one upgrade path nothing else here constructs, and the only one that is real.
 
@@ -744,7 +919,7 @@ def test_the_upgrade_every_installed_robot_will_actually_take(
         connection.execute("DELETE FROM lessons WHERE id IN (%s)" % ",".join("?" * len(converted)), converted)
         connection.execute("UPDATE lessons SET position = position - 6 WHERE language_code = ?", (code,))
         connection.execute(
-            "UPDATE schema_meta SET value = ? WHERE key = ?", (str(store.SEED_VERSION - 1), store.SEED_VERSION_KEY)
+            "UPDATE schema_meta SET value = ? WHERE key = ?", (start_version, store.SEED_VERSION_KEY)
         )
         connection.commit()
 
@@ -768,7 +943,9 @@ def test_the_upgrade_every_installed_robot_will_actually_take(
     # Read what this learner had finished BEFORE the upgrade rather than pinning a
     # literal: Spanish carries seeded history that Italian does not, and the claim
     # being made is that the renumbering disturbs nothing, not that any one list holds.
-    done_before = [lesson.id for lesson in store.get_progress("sample-learner", code, instance_path=tmp_path).completed]
+    done_before = [
+        lesson.id for lesson in store.get_progress("sample-learner", code, instance_path=tmp_path).completed
+    ]
     assert finished in done_before
 
     result = store.ensure_learner_database(tmp_path)
@@ -841,13 +1018,59 @@ def test_the_spanish_course_reads_back_exactly_as_it_shipped(instance: Path) -> 
     )
 
 
+def test_the_portuguese_catalog_is_ordered_and_leads_with_the_converted_units(instance: Path) -> None:
+    """The third course, given the check the first two have.
+
+    Spanish shipped without this and the omission had to be caught later; adding it in
+    the same change that ships the course is the point.
+    """
+    progress = store.get_progress("sample-learner", "pt", instance_path=instance)
+    catalog = sorted(progress.completed + progress.remaining, key=lambda lesson: lesson.position)
+    converted = set(_converted_ids("pt"))
+
+    assert [lesson.position for lesson in catalog] == list(range(1, len(catalog) + 1)), (
+        "contiguous, so 'the next lesson' is unambiguous"
+    )
+    assert {lesson.id for lesson in catalog[: len(converted)]} == converted, (
+        "the converted units are the first thing a learner is offered"
+    )
+
+
+def test_the_portuguese_course_reads_back_exactly_as_it_shipped(instance: Path) -> None:
+    """What a learner hears in Portuguese, pinned so a refactor cannot quietly move it.
+
+    A failure here is not a formatting nit. Every one of these strings was typed off a
+    page image rather than lifted from the OCR text layer, and the reason is that this
+    scan's damage is invisible in Portuguese: a dropped accent leaves a stray tilde and
+    the tilde is a real letter. If this digest moves, find out what moved before
+    touching the line.
+    """
+    assert [
+        (lesson_id, content.lesson.position, content.source.module, content.source.unit, content.source.page)
+        for lesson_id in sorted(_converted_ids("pt"))
+        for content in [store.get_lesson_content(lesson_id, instance_path=instance)]
+    ] == [
+        ("pt-fast-01-ordering-breakfast", 1, "Volume I", "2", 2),
+        ("pt-fast-02-checking-for-messages", 2, "Volume I", "5", 2),
+        ("pt-fast-03-asking-for-directions", 3, "Volume I", "6", 4),
+        ("pt-fast-04-finding-an-office", 4, "Volume I", "7", 2),
+        ("pt-fast-05-taking-a-taxi", 5, "Volume I", "8", 2),
+        ("pt-fast-06-ordering-lunch", 6, "Volume I", "12", 2),
+    ]
+
+    assert _rows_per_table(instance, "pt") == (78, 40, 144), "the six lessons' turns, notes and drills, as curated"
+
+    digest = hashlib.sha256(_shipped_text(instance, "pt").encode("utf-8")).hexdigest()
+    assert digest == "de6caee7f0c6e3aaa3207b2d78fa58ce073b52ccfc8d830c4a0845265f3b4d3d", (
+        "the Portuguese a learner hears has changed; find out what moved before touching this line"
+    )
+
+
 def _positions(connection, language_code: str) -> dict[str, int]:
     """Every lesson id in one language, with the position it holds."""
     return {
         str(row["id"]): int(row["position"])
-        for row in connection.execute(
-            "SELECT id, position FROM lessons WHERE language_code = ?", (language_code,)
-        )
+        for row in connection.execute("SELECT id, position FROM lessons WHERE language_code = ?", (language_code,))
     }
 
 
@@ -894,9 +1117,12 @@ def test_a_language_already_renumbered_once_does_not_move_again(tmp_path: Path) 
         )
         connection.commit()
         italian_before = _positions(connection, "it")
-        assert _positions(connection, "es") == {f"es-0{n}-{name}": n for n, name in enumerate(
-            ["greetings", "introductions", "numbers", "ordering-food", "directions", "daily-routine"], 1
-        )}, "the rewind has to produce the real pre-Spanish layout, or this test proves nothing"
+        assert _positions(connection, "es") == {
+            f"es-0{n}-{name}": n
+            for n, name in enumerate(
+                ["greetings", "introductions", "numbers", "ordering-food", "directions", "daily-routine"], 1
+            )
+        }, "the rewind has to produce the real pre-Spanish layout, or this test proves nothing"
         # PINNED, not merely remembered. See the docstring: comparing Italian with
         # itself cannot fail while positions are declared absolutely.
         assert italian_before == {
@@ -1116,9 +1342,7 @@ def test_the_curation_log_accounts_for_every_lesson_that_shipped(instance: Path)
         log = CURATION_LOGS[name].read_text(encoding="utf-8")
         for lesson in course["lessons"]:
             lesson_id = str(lesson["id"])
-            assert lesson_id in log, (
-                f"{lesson_id} shipped with no curation record in {CURATION_LOGS[name].name}"
-            )
+            assert lesson_id in log, f"{lesson_id} shipped with no curation record in {CURATION_LOGS[name].name}"
 
 
 def test_the_curation_log_accounts_for_the_units_that_did_not_ship(instance: Path) -> None:

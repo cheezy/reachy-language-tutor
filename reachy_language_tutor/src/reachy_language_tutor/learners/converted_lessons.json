@@ -1918,6 +1918,1194 @@
           ]
         }
       ]
+    },
+    {
+      "name": "FSI Brazilian Portuguese FAST, Volume I",
+      "language_code": "pt",
+      "rights": "Work of the U.S. Foreign Service Institute, Department of State. No copyright notice appears anywhere in the 329-page scan under three successively looser searches, the preface names institute staff and is signed by an institute dean, and the document metadata names the institute twice. Against that: twenty of the twenty-two people the preface names have no employer stated on the page, the scan announces itself an edited edition whose original photographs were replaced with twenty-one third-party images, and it reproduces five song lyrics in full. No lawyer has looked at this. See docs/curation-log-portuguese-fast.md for exactly what was checked and what was not.",
+      "source_sha256": "a918ee73bfdf44cbc1370f279b738360262b465841a602e8a2e792d48daff59a",
+      "lessons": [
+        {
+          "id": "pt-fast-01-ordering-breakfast",
+          "position": 1,
+          "title": "Ordering breakfast",
+          "objective": "Ask the front desk to put you through and order breakfast: a senhora quer ligar para a copa?, café completo, para quantas pessoas?",
+          "source": {
+            "module": "Volume I",
+            "unit": "2",
+            "page": 2
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Tutor",
+              "text": "Portaria! Às suas ordens!"
+            },
+            {
+              "speaker": "Você",
+              "text": "A senhora quer ligar para a copa, por favor?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Pois não, um momento."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Alô! Copa!"
+            },
+            {
+              "speaker": "Você",
+              "text": "O senhor quer mandar o café da manhã para o quarto 318, por favor?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "A senhora quer café completo?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Quero, sim."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Para quantas pessoas?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Para uma."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Qual é mesmo o número do quarto?"
+            },
+            {
+              "speaker": "Você",
+              "text": "318."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Mais alguma coisa?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Não, só isso."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Vou mandar já."
+            },
+            {
+              "speaker": "Você",
+              "text": "Obrigada."
+            }
+          ],
+          "notes": [
+            "O senhor quer...? is how you ask someone to do something: O senhor quer ligar para a copa? is 'Would you connect me with room service?'",
+            "Portuguese usually leaves the object out when the context is clear. Vou mandar já is 'I'll send it right away' -- there is no word for 'it'.",
+            "The dialogue uses para three ways: ligar para (to connect with), para o quarto 318 (to room 318), and para quantas pessoas (for how many people).",
+            "A future idea is often carried by a form of ir plus an infinitive: Vou mandar já.",
+            "The word for 'how much' or 'how many' changes with the noun: quanto café, quanta importância, quantos dias, quantas pessoas.",
+            "Qual é mesmo...? asks again for something that has slipped your mind -- 'what was the room number again?'"
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "portaria",
+              "english_gloss": "front desk"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "ligar para",
+              "english_gloss": "to connect with, phone"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "copa",
+              "english_gloss": "restaurant room service"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Alô!",
+              "english_gloss": "Hello!"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "mandar",
+              "english_gloss": "to send"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "café da manhã",
+              "english_gloss": "breakfast"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "o quarto",
+              "english_gloss": "the room"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "café completo",
+              "english_gloss": "full breakfast"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "para quantas pessoas",
+              "english_gloss": "for how many people"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "para uma",
+              "english_gloss": "for one"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "qual é mesmo...?",
+              "english_gloss": "again what is...?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "o número",
+              "english_gloss": "the number"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "mais alguma coisa...?",
+              "english_gloss": "anything else...?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Não, só isso.",
+              "english_gloss": "No, that's it."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "vou mandar",
+              "english_gloss": "I'll send"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "já",
+              "english_gloss": "right away"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "quanto café",
+              "english_gloss": "how much coffee"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "quantas pessoas",
+              "english_gloss": "how many people"
+            }
+          ]
+        },
+        {
+          "id": "pt-fast-02-checking-for-messages",
+          "position": 2,
+          "title": "Checking for messages",
+          "objective": "Ask whether anyone left a message and find out what it says: há algum recado para mim?, a pessoa que telefonou deixou o número?",
+          "source": {
+            "module": "Volume I",
+            "unit": "5",
+            "page": 2
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Você",
+              "text": "Boa tarde, há algum recado para mim?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "O número do seu apartamento, por favor?"
+            },
+            {
+              "speaker": "Você",
+              "text": "635."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "635? Há, sim. Aqui está."
+            },
+            {
+              "speaker": "Você",
+              "text": "Obrigada. A pessoa que telefonou deixou o número do telefone?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Não sei. Não está escrito aí no recado?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Não, aqui está só o nome dele."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Ah, é? O rapaz que tomou nota do recado já foi embora. Se a senhora quiser eu posso procurar o número na lista telefônica."
+            },
+            {
+              "speaker": "Você",
+              "text": "Não, não adianta. A essa hora o escritório dele já está fechado."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "A senhora não tem o número da residência dele?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Não, só espero que ele telefone outra vez amanhã."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Se a senhora não estiver aqui, a gente anota o número."
+            },
+            {
+              "speaker": "Você",
+              "text": "Está bem. Eu preciso muito falar com ele."
+            }
+          ],
+          "notes": [
+            "Portuguese has two everyday words for 'there is' and 'there are', há and tem, and either one works here.",
+            "The dialogue is full of past-tense forms: telefonou, deixou, tomou, foi -- all pretérito perfeito.",
+            "Algum changes with the noun: algum, alguma, alguns, algumas.",
+            "Aí and lá both mean 'there', but aí means there near the person you are talking to, and lá does not.",
+            "Procurar means 'look for' all by itself -- no preposition follows it.",
+            "After se, when you mean future time, Portuguese uses a special form: Se a senhora quiser..., Se a senhora estiver aqui..., Assim que estiver pronto...",
+            "After espero que the verb changes too: Eu espero que ele telefone -- 'I hope that he telephones.'"
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "há",
+              "english_gloss": "is there, there is"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "algum",
+              "english_gloss": "any"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "recado",
+              "english_gloss": "message"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "para mim",
+              "english_gloss": "for me"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "que telefonou",
+              "english_gloss": "that telephoned"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "deixou",
+              "english_gloss": "left"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "o número do telefone",
+              "english_gloss": "the telephone number"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "escrito",
+              "english_gloss": "written"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "aí",
+              "english_gloss": "there"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "só",
+              "english_gloss": "only"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "que tomou nota",
+              "english_gloss": "who wrote the message"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "foi embora",
+              "english_gloss": "went home, left"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "quiser",
+              "english_gloss": "would like"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "procurar",
+              "english_gloss": "look for"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "lista telefônica",
+              "english_gloss": "telephone book"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "não adianta",
+              "english_gloss": "it won't do any good"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "a essa hora",
+              "english_gloss": "by now"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "escritório",
+              "english_gloss": "office"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "fechado",
+              "english_gloss": "closed"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "residência",
+              "english_gloss": "residence, home"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "espero que",
+              "english_gloss": "I hope that"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "outra vez",
+              "english_gloss": "again"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "a gente anota",
+              "english_gloss": "we will write down"
+            }
+          ]
+        },
+        {
+          "id": "pt-fast-03-asking-for-directions",
+          "position": 3,
+          "title": "Asking for directions",
+          "objective": "Stop someone in the street and follow the way they give you: o senhor poderia me dizer onde fica...?, vira à direita, quantas quadras são daqui?",
+          "source": {
+            "module": "Volume I",
+            "unit": "6",
+            "page": 4
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Você",
+              "text": "Por favor, o senhor poderia me dizer onde fica o Banco Bradesco?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "O Bradesco? Hum, deixe-me ver. Eu acho que fica na Avenida São João. Isso mesmo, fica ao lado do correio. A senhora sabe onde é o correio?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Não, não sei. Eu não sou daqui."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Bom, não há problema, eu explico bem como chegar lá. A senhora segue por esta rua até chegar na Rua Sete de Abril. Lá a senhora vira à direita e vai reto até a Rua..."
+            },
+            {
+              "speaker": "Você",
+              "text": "Com licença, quantas quadras são daqui até a Rua Sete de Abril?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Umas três quadras, mais ou menos. Então, a senhora vai reto até chegar na Rua Formosa. A Avenida São João fica a três quadras da Rua Formosa. É uma avenida larga de mão dupla."
+            },
+            {
+              "speaker": "Você",
+              "text": "E chegando na Rua Formosa, eu viro à direita ou à esquerda?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "À esquerda. Atravessando a rua a senhora já vai ver um prédio de mármore preto na esquina e o próximo é o do banco."
+            },
+            {
+              "speaker": "Você",
+              "text": "Parece que é bem longe. Talvez seja melhor eu tomar um táxi."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Não, não é nada longe. Dá bem para ir a pé. Não se preocupe que a senhora acha."
+            },
+            {
+              "speaker": "Você",
+              "text": "Está bem, muito obrigada. O senhor foi muito gentil."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Não há de quê."
+            }
+          ],
+          "notes": [
+            "Poderia is the polite way to ask. O senhor poderia me dizer... is 'Could you tell me...', where O senhor pode me dizer... would be 'Can you tell me...'.",
+            "Object pronouns come before the infinitive: poderia me dizer.",
+            "Notice the word order: Onde fica o Banco Bradesco? becomes O senhor poderia me dizer onde fica o Banco Bradesco?",
+            "Deixe-me plus an infinitive is the grammatically preferred 'let me': deixe-me ver.",
+            "Daqui is de plus aqui squeezed together.",
+            "Uns or umas before a number means 'some': umas três quadras is 'some three blocks'.",
+            "Streets are named a Avenida plus the name, or a Rua plus the name.",
+            "For distance Portuguese needs a: a três quadras da..., a dez minutos daqui."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "poderia",
+              "english_gloss": "could"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "me dizer",
+              "english_gloss": "tell me"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "onde fica",
+              "english_gloss": "where is"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "deixe-me ver",
+              "english_gloss": "let me see"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "acho que",
+              "english_gloss": "I think that"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "avenida",
+              "english_gloss": "avenue"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Isso mesmo.",
+              "english_gloss": "That's right."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "ao lado",
+              "english_gloss": "next door"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "do correio",
+              "english_gloss": "to the post office"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "daqui",
+              "english_gloss": "from here"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Não há problema.",
+              "english_gloss": "No problem."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "explico bem",
+              "english_gloss": "I'll explain well"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "como chegar",
+              "english_gloss": "how to get"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "segue por",
+              "english_gloss": "follow (along)"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "esta rua",
+              "english_gloss": "this street"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "vira",
+              "english_gloss": "turn"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "à direita",
+              "english_gloss": "to the right"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "vai reto",
+              "english_gloss": "go straight"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Com licença.",
+              "english_gloss": "Excuse me."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "quadras",
+              "english_gloss": "blocks"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "umas três quadras",
+              "english_gloss": "some three blocks"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "mais ou menos",
+              "english_gloss": "more or less"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "então",
+              "english_gloss": "then"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "larga",
+              "english_gloss": "wide"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "de mão dupla",
+              "english_gloss": "two-way"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "chegando",
+              "english_gloss": "arriving"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "à esquerda",
+              "english_gloss": "to the left"
+            }
+          ]
+        },
+        {
+          "id": "pt-fast-04-finding-an-office",
+          "position": 4,
+          "title": "Finding an office in a building",
+          "objective": "Ask which floor someone is on and take the stairs: em que andar fica o escritório?, saindo do elevador vire à direita, vou é pela escada.",
+          "source": {
+            "module": "Volume I",
+            "unit": "7",
+            "page": 2
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Você",
+              "text": "Com licença, o senhor sabe em que andar fica o escritório do Dr. Dantas?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Dantas? Ele é engenheiro?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Não, é advogado."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Então deve ser no quinto andar. Saindo do elevador, vire à direita e vá reto até o fim do corredor. Aquela ala toda é só de escritórios de advocacia."
+            },
+            {
+              "speaker": "Você",
+              "text": "Ah, é? Eu não sabia. Me disseram que era no segundo andar."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Não, neste andar só há consultórios médicos e um laboratório."
+            },
+            {
+              "speaker": "Você",
+              "text": "Ah, então foi por isso que eu não achei."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Este prédio é tão grande. Eu não sei porque não há um quadro no saguão."
+            },
+            {
+              "speaker": "Você",
+              "text": "Tem razão. Esse elevador está demorando tanto!"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Está mesmo e eu não tenho paciência para esperar. Eu vou é pela escada."
+            },
+            {
+              "speaker": "Você",
+              "text": "Eu também."
+            }
+          ],
+          "notes": [
+            "Titles usually take o or a in front of them, except when you address the person: o escritório do Dr. Dantas, but Dr. Dantas, como vai?",
+            "Before a bare word for a job, um and uma are normally left out: Ele é engenheiro? But with a describing word they come back: Ele é um ótimo engenheiro.",
+            "Subject pronouns drop out when the context is clear: Não, é advogado -- 'No, he's a lawyer.'",
+            "Verbs have an -ndo form that often matches the English '-ing': estar becomes estando, saber becomes sabendo, ir becomes indo.",
+            "Vire and vá are request forms, of virar and ir. In directions you can use either a request form or an ordinary present form.",
+            "Há or tem both carry an unstressed 'there is' or 'there are': neste andar só há consultórios médicos."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "Com licença.",
+              "english_gloss": "Excuse me."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "em que",
+              "english_gloss": "in what/which"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "engenheiro",
+              "english_gloss": "engineer"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "advogado",
+              "english_gloss": "lawyer"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "deve ser",
+              "english_gloss": "it must be"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "saindo",
+              "english_gloss": "leaving/getting out"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "do elevador",
+              "english_gloss": "of the elevator"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "o fim",
+              "english_gloss": "the end"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "do corredor",
+              "english_gloss": "of the hall/corridor"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "aquela ala toda",
+              "english_gloss": "that whole wing"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "advocacia",
+              "english_gloss": "law"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "eu não sabia",
+              "english_gloss": "I didn't know"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "me disseram",
+              "english_gloss": "someone told me"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "era",
+              "english_gloss": "it was"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "no segundo",
+              "english_gloss": "on the second"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "consultórios médicos",
+              "english_gloss": "doctors' offices"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "laboratório",
+              "english_gloss": "laboratory"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "por isso",
+              "english_gloss": "because of that"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "eu não achei",
+              "english_gloss": "I didn't find it"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "tão grande",
+              "english_gloss": "so big"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "quadro",
+              "english_gloss": "directory"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "no saguão",
+              "english_gloss": "in the lobby"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "tem razão",
+              "english_gloss": "you are right"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "demorando tanto",
+              "english_gloss": "taking so long"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "está mesmo",
+              "english_gloss": "it sure is"
+            }
+          ]
+        },
+        {
+          "id": "pt-fast-05-taking-a-taxi",
+          "position": 5,
+          "title": "Taking a taxi",
+          "objective": "Say where you are going, ask how long it takes, and pay: para o centro por favor, quanto tempo leva daqui até lá?, pode ficar com o troco.",
+          "source": {
+            "module": "Volume I",
+            "unit": "8",
+            "page": 2
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Você",
+              "text": "Táxi!"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Bom dia, para onde vamos?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Para o centro, por favor. Estou com pressa. Quanto tempo leva daqui até lá?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Bom, depende do tráfego. Com esse engarrafamento pode levar mais de meia hora."
+            },
+            {
+              "speaker": "Você",
+              "text": "Não diga! Não dá para pegar outra rua?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Dá, mas não adianta. A esta hora o trânsito está engarrafado na cidade inteira. Tem que ter paciência. Onde a senhora quer descer?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Na altura da Praça Tiradentes."
+            },
+            {
+              "speaker": "Você",
+              "text": "É depois deste sinal, não é?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Isso mesmo. Já estamos quase chegando."
+            },
+            {
+              "speaker": "Você",
+              "text": "Ainda bem, porque eu já estou atrasada."
+            },
+            {
+              "speaker": "Você",
+              "text": "Aqui estão. Pode ficar com o troco."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Muito obrigado."
+            }
+          ],
+          "notes": [
+            "Estar plus com plus a noun is how Portuguese says a great many states: estar com pressa (in a hurry), com sono (sleepy), com sede (thirsty), com fome (hungry), com frio (cold), com calor (hot), com medo (afraid).",
+            "Levar is the verb for how long something takes: Quanto tempo leva daqui até lá? Pode levar mais de meia hora.",
+            "'To depend on' is depender de: Depende do tráfego. Note the contraction do, which is de plus o.",
+            "Dar para plus an infinitive means 'it's possible to': Não dá para pegar outra rua? Dá bem para ir a pé.",
+            "Tráfego and trânsito both mean the traffic here, and either one works.",
+            "Ter que or ter de plus an infinitive is how you say something has to happen: Tem que ter paciência.",
+            "Na altura de means 'in the vicinity of' -- Na altura da Praça Tiradentes."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "táxi",
+              "english_gloss": "taxi"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "para onde",
+              "english_gloss": "where to"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "estou com pressa",
+              "english_gloss": "I'm in a hurry"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "quanto tempo",
+              "english_gloss": "how long"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "leva",
+              "english_gloss": "it takes"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "daqui até lá",
+              "english_gloss": "from here to there"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "depende",
+              "english_gloss": "it depends"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "do tráfego",
+              "english_gloss": "on the traffic"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "engarrafamento",
+              "english_gloss": "traffic jam"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "mais de",
+              "english_gloss": "more than"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "meia hora",
+              "english_gloss": "half an hour"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Não diga!",
+              "english_gloss": "You don't say!"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "não dá para",
+              "english_gloss": "isn't it possible"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "pegar",
+              "english_gloss": "to take"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Não adianta.",
+              "english_gloss": "It won't do any good."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "o trânsito",
+              "english_gloss": "the traffic"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "engarrafado",
+              "english_gloss": "jammed"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "inteira",
+              "english_gloss": "whole"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "tem que ter",
+              "english_gloss": "one needs to have"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "descer",
+              "english_gloss": "to get off, go down"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "na altura da",
+              "english_gloss": "in the vicinity of"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "depois deste",
+              "english_gloss": "after this"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "sinal",
+              "english_gloss": "traffic light"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "quase chegando",
+              "english_gloss": "almost there"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Ainda bem.",
+              "english_gloss": "I'm glad."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "estou atrasada",
+              "english_gloss": "I'm late"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Quanto lhe devo?",
+              "english_gloss": "How much do I owe you?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "estar com fome",
+              "english_gloss": "to be hungry"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "estar com sede",
+              "english_gloss": "to be thirsty"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "estar com frio",
+              "english_gloss": "to be cold"
+            }
+          ]
+        },
+        {
+          "id": "pt-fast-06-ordering-lunch",
+          "position": 6,
+          "title": "Ordering lunch",
+          "objective": "Order at a counter, ask what something is, and pay: eu vou querer um sanduíche, como é o bauru?, pode trazer a conta por favor.",
+          "source": {
+            "module": "Volume I",
+            "unit": "12",
+            "page": 2
+          },
+          "dialogue_title": null,
+          "turns": [
+            {
+              "speaker": "Tutor",
+              "text": "A senhora já pediu?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Ainda não. Eu vou querer um sanduíche de rosbife."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "O rosbife acabou. A senhora quer escolher outra coisa?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Vamos ver, ... como é o bauru?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "É um sanduíche quente de bife ou presunto, com queijo e tomate. É muito bom."
+            },
+            {
+              "speaker": "Você",
+              "text": "Está bem, pode trazer um de bife."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "E para beber?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Um suco de abacaxi, por favor."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Mais alguma coisa?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Não, só isso. Quanto tempo vai levar?"
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Só uns minutinhos."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Que tal o bauru, gostou?"
+            },
+            {
+              "speaker": "Você",
+              "text": "Gostei muito. Pode trazer um cafezinho e a conta, por favor."
+            },
+            {
+              "speaker": "Tutor",
+              "text": "Aqui está. Pague na caixa, faz favor."
+            },
+            {
+              "speaker": "Você",
+              "text": "Pois não."
+            }
+          ],
+          "notes": [
+            "Como é...? asks what something is like, or what is in it: Como é o bauru? Como é o clima em Santos?",
+            "Que tal...? asks for an opinion: Que tal o bauru? is 'What did you think of the bauru?' and Que tal o filme ontem? is 'How was the film yesterday?'",
+            "With a future idea Que tal...? becomes 'How about...?' -- Que tal uma visita à Bahia?",
+            "A bauru is a hot sandwich of steak or ham with cheese and tomato, so asking como é o bauru? is asking what is in it.",
+            "Uns minutinhos is how the waiter says 'a few minutes' when you ask how long the food will be.",
+            "You pay at the register rather than at the table: Pague na caixa."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "A senhora já pediu?",
+              "english_gloss": "Have you ordered yet?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "ainda não",
+              "english_gloss": "not yet"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "eu vou querer",
+              "english_gloss": "I'm going to order"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "um sanduíche",
+              "english_gloss": "a sandwich"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "de rosbife",
+              "english_gloss": "made with roast beef"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "o rosbife acabou",
+              "english_gloss": "we're all out of it"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "escolher",
+              "english_gloss": "to choose"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "outra coisa",
+              "english_gloss": "something else"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "como é",
+              "english_gloss": "how is"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "bauru",
+              "english_gloss": "grilled ham and cheese"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "para beber",
+              "english_gloss": "to drink"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "suco de abacaxi",
+              "english_gloss": "pineapple juice"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Mais alguma coisa?",
+              "english_gloss": "Anything else?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "uns minutinhos",
+              "english_gloss": "a few minutes"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "que tal",
+              "english_gloss": "how is/was"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "gostou?",
+              "english_gloss": "Did you like it?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "a conta",
+              "english_gloss": "the bill"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "pague",
+              "english_gloss": "pay"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "na caixa",
+              "english_gloss": "at the register"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "faz favor",
+              "english_gloss": "please"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Como é o clima em Santos?",
+              "english_gloss": "What's the weather like in Santos?"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

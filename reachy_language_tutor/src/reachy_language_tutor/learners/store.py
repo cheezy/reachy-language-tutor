@@ -92,12 +92,19 @@ SCHEMA_VERSION = 5
 # changing no lesson content at all.
 # Version 6 carries the six converted Spanish Cycles and moves the six Spanish
 # placeholders from 1-6 to 7-12 to make room for them, which is the same shape version
-# 4 gave Italian. The tree passed through a 7 while those six landed one at a time;
-# nothing shipped it -- HEAD was at 5 throughout -- so it was collapsed rather than
-# recorded in SHIPPED_CATALOGS as a catalog some robot received. The only upgrade an
-# installed robot takes is 5 to 6, and it is exercised end to end by
-# test_converted_lessons.py::test_the_upgrade_every_installed_robot_will_actually_take.
-SEED_VERSION = 6
+# 4 gave Italian. An earlier tree passed through a 7 while those six landed one at a
+# time; nothing shipped it -- HEAD was at 5 throughout -- so it was collapsed rather
+# than recorded in SHIPPED_CATALOGS. The 7 below is a DIFFERENT and real one: it
+# carries the six converted Brazilian Portuguese lessons and moves the six Portuguese
+# placeholders 1-6 to 7-12, the same shape again. An installed robot does NOT step
+# through the versions between its own and this one: _seed() runs at most once per
+# open, reseeds the whole catalog and writes SEED_VERSION, so a robot still at 5 lands
+# on 7 in a single pass and never exists at 6. The end-to-end exercise is
+# test_converted_lessons.py::test_the_upgrade_every_installed_robot_will_actually_take,
+# which is parametrised per LANGUAGE rather than per version -- so each case names the
+# version it rewinds to, and the Portuguese case names 5 to keep that longest jump
+# covered once the next bump moves SEED_VERSION - 1 off it.
+SEED_VERSION = 7
 LEARNER_DB_FILENAME = "learners.v1.sqlite3"
 # The converted course material, beside this module and shipped as package data. Its
 # bytes are part of the seeded catalog, so the shipped-catalog fingerprint covers the
@@ -305,36 +312,36 @@ SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
     (
         "pt-01-greetings",
         "pt",
-        1,
+        7,
         "Greetings and goodbyes",
         "Greet someone, ask how they are, and say goodbye: olá, bom dia, como está?, adeus.",
     ),
     (
         "pt-02-introductions",
         "pt",
-        2,
+        8,
         "Introducing yourself",
         "Give your name and where you are from, and ask the same back: chamo-me…, sou de…, e tu?",
     ),
-    ("pt-03-numbers", "pt", 3, "Numbers one to twenty", "Count to twenty out loud and say your age and a time."),
+    ("pt-03-numbers", "pt", 9, "Numbers one to twenty", "Count to twenty out loud and say your age and a time."),
     (
         "pt-04-ordering-food",
         "pt",
-        4,
+        10,
         "At the café",
         "Order a coffee and a pastry, then ask the price: queria…, quanto custa?",
     ),
     (
         "pt-05-directions",
         "pt",
-        5,
+        11,
         "Asking for directions",
         "Ask where a place is and follow a simple answer: onde fica…?, à direita, à esquerda.",
     ),
     (
         "pt-06-daily-routine",
         "pt",
-        6,
+        12,
         "Talking about your day",
         "Describe your morning with reflexive verbs: levanto-me, preparo-me.",
     ),

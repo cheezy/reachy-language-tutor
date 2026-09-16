@@ -110,8 +110,8 @@ async def test_a_learner_with_no_history_gets_an_empty_language_list(instance: P
     assert result == {
         "display_name": "New",
         "languages": [],
-        "languages_with_material": ["Italian", "Spanish"],
-        "languages_without_material_yet": ["French", "German", "Portuguese"],
+        "languages_with_material": ["Italian", "Portuguese", "Spanish"],
+        "languages_without_material_yet": ["French", "German"],
     }
 
 
@@ -180,7 +180,7 @@ async def test_every_error_still_says_which_languages_the_robot_teaches(instance
     """
     unbound = await _call(current_learner_id=None, instance_path=instance)
     assert "error" in unbound
-    assert unbound["languages_with_material"] == ["Italian", "Spanish"]
+    assert unbound["languages_with_material"] == ["Italian", "Portuguese", "Spanish"]
 
     connection = store.connect(instance)
     with connection:
@@ -188,7 +188,7 @@ async def test_every_error_still_says_which_languages_the_robot_teaches(instance
     connection.close()
     no_row = await _call(current_learner_id=SEEDED_LEARNER, instance_path=instance)
     assert "error" in no_row
-    assert no_row["languages_with_material"] == ["Italian", "Spanish"]
+    assert no_row["languages_with_material"] == ["Italian", "Portuguese", "Spanish"]
 
     # The third: a store that cannot be read at all. Both keys must still be PRESENT,
     # so the model reads "I can name nothing" rather than an absent key it can fill

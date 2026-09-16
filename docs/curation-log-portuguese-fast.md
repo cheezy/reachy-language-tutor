@@ -13,11 +13,12 @@ length.
 `docs/converting-a-course.md` is the method. This file is the record of the decisions
 themselves.
 
-**Status: Steps 0 to 3 of the method are done — the course is chosen, fetched and
-checked, the rights position is written, the volume is mapped and every lesson is
-screened and judged. Six lessons are shortlisted. Per-unit curation, the
-`converted_lessons.json` entry and the `APPROVED_UNITS` registration have not been
-started, and no Portuguese lesson has been converted.**
+**Status: Steps 0 to 6 of the method are done — the course is chosen, fetched and
+checked, the rights position is written, the volume is mapped, every lesson is screened
+and judged, and the six shortlisted lessons are curated into
+`converted_lessons.json` and registered in `APPROVED_UNITS`. What has NOT happened:
+nobody has heard these lessons spoken. They have not been run in the simulator and no
+voice has said a line of them.**
 
 ## The source
 
@@ -822,23 +823,260 @@ it.
   are cited by shipped lessons, so registering six units before a Portuguese lesson
   exists would fail it. The shortlist lives here until curation.
 
+## Conventions applied to every unit
+
+Recorded once here rather than repeated under each lesson.
+
+**The page image is the source, and the text layer was never imported.** Every
+Portuguese string that ships was typed from a page rendered at 140 dpi and read.
+**110 pages were rendered.** The six approved lessons span **152** printed pages, so
+110 is most of that span and not all of it, and the 42 that were never rendered are
+these: the opening *Setting the Scene* page of each lesson (6); the *Filling in the
+Blanks* tape dictation and its continuations (14); the *Making It Work* role-play and
+its continuations (7); full-page photographs carrying English captions (12); and
+**three continuation pages inside sections material was taken from** — 5.17, a
+substitution drill, and 7.13 and 8.11, which are further pages of those two lessons'
+Language Notes. Nothing shipped from any of the 42, and the text-layer screen in the
+section above did cover all of them; but 7.13 and 8.11 are notes pages of approved
+lessons that no one opened as an image, and that is the gap in this convention rather
+than a page count.
+
+The pages shipped material was actually taken off are these: the dialogue of each
+lesson (2.2, 5.2, 6.4, 7.2, 8.2, 12.2); its Contextual Equivalents (2.5, 5.5, 6.8, 7.5,
+8.5, 12.6); its Language Notes, which run across two or three printed pages in four of
+the six (2.10-2.11, 5.8, 6.10-6.11, 7.8-7.10, 8.8-8.10, 12.9); plus the *quanto* table
+on 2.10, the Cultural Note on 12.7, and the Varying It page 2.21. An earlier draft of
+this paragraph said nineteen pages and named only the first page of each notes section,
+which understated where four lessons' notes came from; a later one called 110 "every
+content page of the six approved lessons", which was false in the other direction.
+
+**What that was worth, measured rather than asserted.** Of the 78 dialogue turns
+shipped, 75 appear verbatim in the OCR text layer and **three do not** — so a bulk
+import would have been wrong three times in the dialogue alone, and the two that matter
+are named under "Text that nobody printed" below. The shipped turns carry **153
+accented characters**, every one confirmed against its page image, and **47 instances of
+a tilde-bearing word** across eleven distinct words — *não, então, estão, João, manhã,
+mão, razão, saguão, são, tão, amanhã*. Those 47 are why this was done by eye: the method
+records that this scan family drops an accent and leaves a stray tilde behind, and in
+Portuguese a stray tilde is a real diacritic, so a dropped accent can land as a
+character that still reads as correct Portuguese. A spot check would not find that.
+
+**Speaker labels follow the Spanish precedent.** The source marks its two speakers A and
+B. The learner's turns ship as *Você* and the other speaker's as *Tutor*, matching the
+Spanish course's *Usted*/*Tutor*. Neither label is printed in the source; both are this
+conversion's, and they are the only invented strings in the turns.
+
+**Provenance names the printed page, and the printed page here is compound.** This
+volume paginates each lesson separately, so a printed page is `lesson.page`. The
+`unit` field carries the lesson number and `page` carries the page within that lesson:
+`{"module": "Volume I", "unit": "6", "page": 4}` is printed page 6.4. Every shipped
+lesson cites the page its dialogue was read from.
+
+**Situations were kept where a learner can use them, and no Portuguese was invented.**
+Four of the six lessons are set in or around a hotel, a street, an office building and a
+lunch counter — places a person goes, so the premise needed no replacement. Nothing in
+the target language was written for this conversion: every Portuguese string is off a
+page, and where a line could not ship it was dropped rather than rewritten.
+
+**Nothing that instructs a teacher was translated.** Every unit tells the learner to
+repeat after *your teacher*, to have the teacher pick items at random, and to enact the
+dialogue with the teacher, and each closes with *Instructor interviews* and *Briefings
+for your instructor* — between six and ten occurrences per lesson of the strings `your
+teacher` and `instructor`. The robot **is** that teacher, so all of it was dropped
+rather than translated. The usage notes below are written to the learner, which is the
+one place in a lesson where a line addressed to the model could enter.
+
+**No cue-response drill ships, and that is a decision rather than an oversight.** Most
+of what this volume offers as a drill model leaves the learner a free choice: a yes/no
+question (*A senhora quer café completo?*), a destination the learner picks (*Onde a
+senhora quer descer?*), or an answer only the script knows (*onde fica o Banco
+Bradesco?* → *na Avenida São João*). Printed 2.16 goes further and prints **two**
+sanctioned answers to one cue, and printed 2.21 is headed *Varying It* and exists to
+give four right answers to one line. Shipping any of those as `cue_response` would mark
+a learner wrong for saying something right.
+
+**The reason is narrower than "no cue in this volume has one answer", and the
+difference matters for the next volume.** This book does contain determinate
+transformation drills — printed 2.16 exercise 5 turns *… vai esperar cinco dias* into
+*Quantos dias … vai esperar?*, which has one answer and drills exactly the
+*quanto/quanta/quantos/quantas* agreement lesson 1 teaches. What rules those out here is
+that the printed response elides its subject (*Indicate: ele/ela*), so two spoken forms
+are both right. That holds for **all six** items of the exercise, *dois passaportes*
+included — it is border-contaminated as well, so it would have gone anyway, but it is
+not an exception to the elision. So: **fifteen candidate cue-response drills were
+dropped** under the method's third option, and the course ships 144 repetition drills
+and no cue-response drill at all — but a later volume whose transformation drills print
+a full response should ship them.
+
+**No unit survived only as a fragment, so none was dropped on that ground and none
+was patched.** The method says to drop a unit that survives only in pieces. That case
+did not arise here: each of the six approved lessons kept its **whole** dialogue —
+every printed turn ships, with the single exception recorded under "Text that nobody
+printed" — and the six dropped lessons were dropped on their dialogue or their premise
+rather than on how little was left. The line-level rule still applies and is stated
+above: where a line could not ship it was dropped rather than rewritten.
+
+**Positions 1-6 were taken from the placeholder lessons.** The six written-for-this-app
+Portuguese placeholders were renumbered to positions 7-12 so the converted lessons lead
+the catalog, exactly as Italian's were. `SEED_VERSION` is bumped with them.
+
+## What shipped, unit by unit
+
+### `pt-fast-01-ordering-breakfast` — unit 2, printed page 2.2
+*At the hotel.* You ring the front desk, ask to be put through to room service, and
+order breakfast to your room.
+- **Nothing removed from the dialogue.** All fifteen turns ship as printed.
+- **Dropped:** ten contaminated drill lines — a consulate address and telephone number,
+  a *passaporte diplomático*, a Double Exchange built on knowing the embassy's and the
+  consulate's numbers, *abre as malas na alfândega?*, two *passaportes*, and the bare
+  word *consulado* sitting in a pronunciation list.
+- **Drills:** 18 repetition drills, sixteen from the Contextual Equivalents on 2.5 and
+  two — *quanto café*, *quantas pessoas* — from the agreement table on 2.10.
+- **Notes:** six, from the Language Notes on 2.10-2.11 — *O senhor quer…?* as a request, the
+  dropped object pronoun, the three uses of *para*, *ir* plus infinitive as a future,
+  and *quanto/quanta/quantos/quantas* agreement.
+
+### `pt-fast-02-checking-for-messages` — unit 5, printed page 5.2
+*At the hotel.* You collect a phone message and find the caller's number was never
+written down.
+- **Corrected:** one print typo, recorded below.
+- **Dropped:** two drill lines, a *consulado* and a *passaporte*.
+- **Drills:** 23 repetition drills from 5.5.
+- **Notes:** seven, from 5.8 — *há* and *tem*, the *pretérito perfeito* forms the
+  dialogue introduces, *algum* agreement, *aí* against *lá*, *procurar* without a
+  preposition, the future subjunctive after *se*, and the present subjunctive after
+  *espero que*.
+
+### `pt-fast-03-asking-for-directions` — unit 6, printed page 6.4
+*On the street in São Paulo.* You stop a passer-by for the way to a bank and are walked
+through it street by street.
+- **Dropped:** one drill item naming the customs house, one of five places in a
+  how-many-blocks drill.
+- **Drills:** 27 repetition drills from 6.8.
+- **Notes:** eight, from 6.10-6.11 — *poderia* as the polite form, object pronouns
+  before the infinitive, the word order of an embedded question, *deixe-me*, *daqui*,
+  *umas três quadras*, how streets are named, and the *a* that distances need.
+- **Not shipped, and it needs a decision:** printed 6.28 is this unit's Cultural Note,
+  on child pickpockets "from seven to twenty" and three thousand road deaths a year. No
+  exclusion family reaches it and the screen scores the page zero. It is a Cultural
+  Note, which the pipeline carries, so it was left out deliberately rather than by the
+  screen.
+
+### `pt-fast-04-finding-an-office` — unit 7, printed page 7.2
+*In a building.* You look for a lawyer's office in a twenty-five-storey building and
+give up on the lift.
+- **Dropped:** four Brief Exchange rows across printed 7.15, 7.16 and 7.17 — an
+  exchange prompt naming the ambassador's office, a *consulado* pair, and
+  *embaixatriz ou embaixadora?* and *cônsul/consulesa?* in two profession drills.
+  *embaixatriz*, glossed "ambassador's wife", would have been dropped on its own
+  account.
+- **Drills:** 25 repetition drills from 7.5.
+- **Notes:** six, from 7.8-7.10 — titles taking *o* or *a*, *um*/*uma* dropped before a
+  bare job word, subject pronouns omitted, the *-ndo* form, request forms in directions,
+  and *há*/*tem*, which is printed note 7 on 7.10.
+
+### `pt-fast-05-taking-a-taxi` — unit 8, printed page 8.2
+*On the street.* You hail a taxi in rush hour, talk about the traffic, and tell the
+driver to keep the change.
+- **Dropped:** two drill lines, an embassy party and a *consulado*; a clause of the
+  Cultural Note naming the Consulate General; and the price exchange, recorded below.
+  *Quanto lhe devo?* is a clause of a turn rather than a turn of its own, and it still
+  ships as a drill off 8.5, so the phrase stays learner-audible.
+- **Drills:** 30 repetition drills from 8.5 and the *estar com* table on 8.8.
+- **Notes:** seven, from 8.8-8.10 — *estar com* plus a noun, *levar* for how long
+  something takes, *depender de*, *dar para*, *tráfego* and *trânsito*, *ter que*, and
+  *na altura de*, which is printed note 9 on 8.10.
+
+### `pt-fast-06-ordering-lunch` — unit 12, printed page 12.2
+*In a lanchonete.* You order a sandwich and a juice at a counter, ask what a *bauru* is,
+and pay at the till.
+- **Dropped:** two drill lines, *Como é o Embaixador?* and an embassy party; and the
+  five alcohol references, which are named in the screening section above.
+- **Drills:** 21 repetition drills, twenty from 12.6 and one — *Como é o clima em
+  Santos?* — from the Language Note on 12.9.
+- **Notes:** six — *Como é…?* and *Que tal…?* for an opinion and for a suggestion, all
+  three from the Language Notes on 12.9; what a *bauru* is and what *uns minutinhos*
+  means, both off the dialogue on 12.2 and the Contextual Equivalents on 12.6; and
+  paying at the register rather than at the table, from *Pague na caixa* on 12.2 and the
+  Cultural Note on 12.7.
+
+## Text that nobody printed
+
+Four things in this conversion are not on any page, and they are listed here because
+that is the only way they stay visible.
+
+**The speaker labels.** *Você* and *Tutor* are this conversion's, as the conventions
+above say. The source prints A and B.
+
+**One print typo, corrected.** Printed 5.2 reads *"O número do seu apartamanto, por
+favor?"* The page itself carries the error — it is not the OCR — and *apartamanto* is
+not a Portuguese word. It ships as **apartamento**, because a robot saying the printed
+form would teach a child a word that does not exist. It is the only place a shipped
+string differs from the page in a way a listener could hear.
+
+**Ellipses were normalised, which is the other way a shipped string differs from the
+page.** The source sets them as spaced dots — *qual é mesmo. . . ?*, *vai reto até a
+Rua . . .* — and they ship as `...`. A voice says neither, so the change is
+typographic; it is recorded because "differs from the page" should mean what it says.
+
+**One OCR merge, corrected from the image.** The text layer renders printed 12.2 as
+*"Que talo bauru, gostou?"*, running *tal* and *o* together. The page image reads *"Que
+tal o bauru, gostou?"* and that is what ships — one of the three turns a bulk import
+would have got wrong.
+
+**One price exchange dropped rather than shipped or rewritten.** Printed 8.2 answers
+*"Quanto lhe devo?"* with *"Cr$ …"* — the cruzeiro, a currency Brazil replaced in 1994,
+and the source elides the amount anyway. Both are dropped from the dialogue: the
+*Quanto lhe devo?* clause is cut from its turn and the *Cr$* turn goes with it, so
+*"Aqui estão. Pode ficar com o troco."* follows directly. No replacement price was
+invented, because inventing one would be inventing target-language content. **The
+phrase itself is not gone from the lesson** — *Quanto lhe devo?* still ships as a
+repetition drill off 8.5, glossed "How much do I owe you?", so a learner still hears
+and practises it; what is gone is a robot naming a dead currency.
+
+**One usage note was rewritten because its substance came from outside the approved
+set.** Lesson 6's note on *uns minutinhos* first explained the *-inho* ending, and the
+volume's diminutive note is on printed 3.11 — inside Lesson 3, which this log excludes
+on its embassy premise. Nothing from that unit's premise was at risk, but a note whose
+explanation is drawn from a unit nobody approved weakens the control the whole pipeline
+rests on. The note now says only what 12.6 supports: what the waiter means by *uns
+minutinhos*.
+
+**The objectives elide printed sentences, as Italian's and Spanish's do.** Lesson 6's
+objective quotes *"pode trazer a conta, por favor"* where 12.2 prints *"Pode trazer um
+cafezinho e a conta, por favor."* No Portuguese is invented — every word is on the page
+— but an objective is a shortened form of a printed sentence rather than a quotation of
+one, and the conventions above say only that the speaker labels are invented, which
+would leave a reader to discover this for themselves.
+
+**And one thing that is not in this conversion at all, but is now visible because of
+it.** The six Portuguese placeholder lessons this conversion renumbered to positions
+7-12 are written in **European** Portuguese — *adeus*, *chamo-me…*, *levanto-me,
+preparo-me* — while the six converted lessons are Brazilian. A learner offered all
+twelve would be taught two varieties of the language in one course, and would only
+discover it in conversation with a native speaker. The converted lessons are correct for
+the course they came from; the placeholders are the ones that disagree with the catalog
+this app ships. Recorded here and under "What this log does not settle".
+
 ## What this log does not settle
 
 Two things are named above that a later task has to carry, and neither is done:
 
-1. **The learner-visible variety label.** This course is Brazilian Portuguese and the
-   app's catalog says "Portuguese". The label lives in
-   `learners/store.py:129` and in the `get_progress` and `start_lesson` tool enums. This
-   file is a developer document; a learner and a parent never see it, so mentioning the
-   variety here does not discharge the requirement that they be told.
-2. **Steps 4 onward** — per-unit curation of the six shortlisted lessons, the
-   `converted_lessons.json` entry including the `rights` value it has to carry, and the
-   `APPROVED_UNITS` registration in `reachy_language_tutor/tests/approved_units.py`.
-   That registry is deliberately **not** populated here: its own test asserts the
-   entries match units actually cited by shipped lessons, so registering six units
-   before a single Portuguese lesson exists would fail it. When the `rights` value is
-   written it should be a summary of "Rights: what was actually checked": a description
-   of what was found, not a conclusion about the law.
+1. **The learner-visible variety label, and it is now worse than a label.** This course
+   is Brazilian Portuguese and the app's catalog says "Portuguese" — the name lives in
+   `learners/store.py` and in the `get_progress` and `start_lesson` tool enums, none of
+   which a curation log reaches. But curating this course surfaced something sharper
+   than a naming gap: the six placeholder lessons now sitting behind it at positions
+   7-12 are written in **European** Portuguese — *adeus*, *chamo-me…*, *levanto-me,
+   preparo-me* — against six Brazilian lessons at positions 1-6. A learner who works
+   through the language in order is taught two varieties of it and finds out from a
+   native speaker. Deciding that is not this log's to make, and it should be made before
+   anyone seeds a household.
+2. **Whether any of this sounds right out loud.** The six lessons are in the database
+   and the suite is green, but a passing test is not a learner hearing a sentence. No
+   line of this course has been spoken by the robot, and the accents that were checked
+   character by character on a page have not been checked against what a voice does
+   with them.
 3. **Where the first Portuguese lesson comes from.** The shortlist has no
    introductions unit: the only place in the volume where a learner gives their own
    name is Lesson 3, which is dropped on its embassy premise. `pt-01-greetings` is the
