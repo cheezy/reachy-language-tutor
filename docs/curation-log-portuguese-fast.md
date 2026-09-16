@@ -1058,6 +1058,46 @@ discover it in conversation with a native speaker. The converted lessons are cor
 the course they came from; the placeholders are the ones that disagree with the catalog
 this app ships. Recorded here and under "What this log does not settle".
 
+## What a learner can actually do with this, today
+
+**Added by W55**, the task that seeded these lessons and renumbered the placeholders
+behind them. The section exists because the Italian log has one and this course had
+nothing equivalent: what shipped is recorded above, but not what a person in front of
+the robot gets.
+
+A Portuguese learner is offered **`pt-fast-01-ordering-breakfast`** as their first
+lesson. That is asserted through the tools the app actually calls rather than by reading
+the lessons table:
+`test_a_learner_is_offered_a_converted_lesson_and_can_finish_it` now runs for every
+converted language, and its Portuguese case goes `get_progress` → `start_lesson` →
+`get_lesson_content` → `finish_lesson` and checks that the dialogue coming back through
+the conversation is the one in the database. Before W55 that path was exercised for
+Italian only, and "a Portuguese learner is offered a converted unit" was a claim about a
+table.
+
+The twelve positions are contiguous, and the split is visible in the content: positions
+1-6 carry 15, 13, 12, 11, 12 and 15 dialogue turns, and positions 7-12 carry **zero** —
+they are the original placeholders, which kept their ids so a learner's completed work
+survived the move. Anyone who gets past lesson 6 is back to a title and one sentence.
+
+Two limits are worth stating plainly rather than leaving to be discovered:
+
+**Nothing in Portuguese can be marked.** The course ships 144 repetition drills and
+**no cue-response drill at all** — every candidate in the volume admitted more than one
+right answer, and the reasoning is under "Conventions applied to every unit". A repetition
+drill is a thing to say after the tutor; a cue-response drill is the one with an answer
+to check. So in this language the tutor can present and model, and it cannot test. That
+is a deliberate choice recorded here, not an omission, but it makes Portuguese a weaker
+lesson than Italian for the same effort.
+
+**A learner who works straight through changes dialect at lesson 7.** Positions 1-6 are
+Brazilian and 7-12 are European, for the reasons under "What this log does not settle".
+That is unresolved, and seeding it into a household is what makes it urgent rather than
+academic.
+
+What no test claims, here as in Italian, is that a model **teaches well** from this
+material. That is the manual session in the simulator, and it is still outstanding.
+
 ## What this log does not settle
 
 Two things are named above that a later task has to carry, and neither is done:

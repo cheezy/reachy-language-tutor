@@ -152,12 +152,18 @@ SEED_LANGUAGES: tuple[tuple[str, str], ...] = (
 # lesson, and SEED_LANGUAGES above, whose first entry still has to name a language a
 # seeded learner has practised.
 #
-# Italian starts at position 7 here, and that is not a gap: positions 1 to 6 belong to
-# the lessons converted from a published course, which live in converted_lessons.json
-# and are written by _seed_converted_lessons. Italian is the language that has real
-# course material now, so the real material is what a learner meets first; these six
-# are the objectives an AI wrote as a placeholder, which no teacher has reviewed. They
-# keep their ids, so a learner who has already finished one still has.
+# Italian, Spanish and Portuguese all start at position 7 here, and that is not a gap:
+# positions 1 to 6 belong to the lessons converted from a published course, which live
+# in converted_lessons.json and are written by _seed_converted_lessons. Every language
+# that has real course material puts it in front, so the real material is what a
+# learner meets first; the six here are the objectives an AI wrote as a placeholder,
+# which no teacher has reviewed. They keep their ids, so a learner who has already
+# finished one still has.
+#
+# This comment named Italian alone through two more conversions, which made it read as
+# "Portuguese and Spanish hold only placeholders" long after both were converted. Do
+# not re-narrow it to whichever language is being added: state the rule, and the next
+# course needs no edit here at all.
 SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
     (
         "es-01-greetings",

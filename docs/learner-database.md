@@ -484,10 +484,12 @@ written by `_seed_converted_lessons()` inside the same transaction as the rest o
 seed.
 
 That file holds a **list of courses**, each owning its own lessons and carrying its own
-name, language, rights position and source SHA-256. Italian is the only course in it so
-far; the seeder walks the list and takes each lesson's language and course name from the
-course that owns it, so adding a second language is an appended entry rather than a
-change to this one.
+name, language, rights position and source SHA-256. It holds three courses today —
+Italian, Spanish and Brazilian Portuguese — and the seeder walks the list and takes each
+lesson's language and course name from the course that owns it, so adding a language is
+an appended entry rather than a change to the ones already there. (This paragraph said
+"Italian is the only course in it so far" through both later conversions, while the
+table below it was kept current; the table is pinned by a test and the prose is not.)
 
 | Position | Lesson | Source unit |
 |---|---|---|

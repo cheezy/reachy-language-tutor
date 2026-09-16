@@ -66,6 +66,24 @@ def _language_of(lesson_id: str) -> str:
 # What each course has actually CONVERTED, pinned so a lesson cannot appear or vanish
 # without someone saying so here. Not derived from the file -- deriving it would make
 # the assertion a tautology.
+# Drills already shipped whose cue IS their expected response. An ALLOW-LIST, not a
+# deny-list: anything not named here must not answer itself, so a new offender fails
+# closed. It exists because parametrising the end-to-end test below over every
+# converted language found one that had been invisible while only Italian ran that
+# path, and weakening the assertion to accommodate it would have thrown away the reason
+# the assertion was written. D37 fixes the drill and empties this.
+#
+# Two assertions read this list, and the difference matters. The end-to-end test reaches
+# only each language's FIRST converted unit, because that is the one a learner is
+# offered -- three of the eighteen. test_no_converted_drill_answers_itself below reads
+# every drill of every unit straight out of the file, and IT is what makes "a new
+# offender fails closed" true of the catalog rather than of three units. An earlier
+# version of this comment claimed the wider guarantee while only the narrower assertion
+# existed.
+KNOWN_SELF_ANSWERING_DRILLS = {
+    ("es-fast-01-getting-started-in-class", "Buenos días."),
+}
+
 CONVERTED_PER_COURSE = {
     "FSI Italian FAST, Volume 1": 6,
     "FSI Spanish Familiarization and Short-Term Training": 6,
@@ -79,6 +97,37 @@ def instance(tmp_path: Path) -> Path:
     """Return a prepared learner database at a temporary instance path."""
     assert store.ensure_learner_database(tmp_path).ready is True
     return tmp_path
+
+
+def _lowest_placeholder(instance_path: Path, language_code: str) -> str:
+    """Return this language's first lesson that was NOT converted from a course.
+
+    That is the row the renumbering moved off position 1, so it is the one whose move
+    back down collides. Looked up rather than spelled, because spelling it is how the
+    same assertion ends up naming one language for ever.
+    """
+    converted = set(_converted_ids(language_code))
+    connection = store.connect(instance_path)
+    try:
+        rows = connection.execute(
+            "SELECT id FROM lessons WHERE language_code = ? ORDER BY position", (language_code,)
+        ).fetchall()
+    finally:
+        connection.close()
+    placeholders = [str(row["id"]) for row in rows if str(row["id"]) not in converted]
+    assert placeholders, f"{language_code} has no unconverted lesson, so nothing can collide downward"
+    return placeholders[0]
+
+
+def _converted_language_codes() -> list[str]:
+    """Every language code that ships converted units, read from the file.
+
+    Derived rather than listed. A test that names its languages covers the ones whoever
+    wrote it was thinking about, which is how the renumbering hazard below stayed an
+    Italian-only claim through two more courses; a test that asks the file covers the
+    next course on the day it lands.
+    """
+    return sorted({str(course["language_code"]) for course in store._converted_courses()})
 
 
 def _converted_ids(language_code: str | None = None) -> list[str]:
@@ -722,6 +771,37 @@ def test_the_rights_position_is_recorded_rather_than_assumed(instance: Path) -> 
 # -------------------------------------------------------------- alongside the rest
 
 
+def test_no_converted_drill_answers_itself() -> None:
+    """Every cue-response drill in every course, not the three a learner is offered first.
+
+    A cue_response drill exists so the tutor has an answer to check. One whose cue IS
+    its expected response gives it nothing to mark -- it is a repetition drill wearing
+    the wrong kind, and the database will happily store it, because the CHECK constraint
+    polices which FIELDS a kind carries and not whether the two differ.
+
+    This reads the file rather than the database and covers all eighteen units. The
+    end-to-end test below catches the same fault, but only in the first unit of each
+    language, which is how the one offender here sat in a shipped course unnoticed.
+    """
+    offenders = []
+    for lesson in store._converted_lessons():
+        for drill in lesson["drills"]:
+            if drill.get("kind") != "cue_response":
+                continue
+            if drill.get("cue") != drill.get("expected_response"):
+                continue
+            if (lesson["id"], drill["cue"]) in KNOWN_SELF_ANSWERING_DRILLS:
+                continue
+            offenders.append(f"{lesson['id']}: {drill['cue']!r}")
+
+    assert not offenders, (
+        "these cue-response drills answer themselves, so a tutor has nothing to mark: "
+        f"{offenders}. Each is a repetition drill wearing the wrong kind -- change the "
+        "drill. KNOWN_SELF_ANSWERING_DRILLS is for an offender already filed as a "
+        "defect, and adding to it without filing one is how this fault shipped before."
+    )
+
+
 def test_get_progress_still_summarises_a_converted_lesson_in_one_line(instance: Path) -> None:
     """The pitfall: content is a different job from the one-line summary.
 
@@ -743,9 +823,14 @@ def test_get_progress_still_summarises_a_converted_lesson_in_one_line(instance: 
 def test_lessons_nobody_has_converted_still_work_beside_the_converted_ones(instance: Path) -> None:
     """Half a catalog is the normal state and has to be a working state.
 
-    Italian now holds six converted units and six lessons that are still only a title
-    and an objective, and Spanish holds nothing but the latter. Every one of them has to
-    read back cleanly, or converting a language would break the four still waiting.
+    Some languages hold converted units in front of lessons that are still only a title
+    and an objective; others hold nothing but the latter. Every one of them has to read
+    back cleanly, or converting a language would break the ones still waiting.
+
+    (This docstring used to name the languages, and said "Spanish holds nothing but the
+    latter" through two more conversions. The assertion below said the same thing in a
+    comment. Both were false the day the Spanish course landed, so neither names a
+    language now -- the split is read from the catalog at the bottom of this test.)
     """
     converted = set(_converted_ids())
     progress = store.get_progress("sample-learner", "it", instance_path=instance)
@@ -759,8 +844,16 @@ def test_lessons_nobody_has_converted_still_work_beside_the_converted_ones(insta
         assert (content.turns, content.notes, content.drills) == ((), (), ())
         assert content.source is not None and content.source.origin == "written_for_this_app"
 
-    spanish = store.get_progress("sample-learner", "es", instance_path=instance)
-    assert spanish is not None and spanish.next_lesson is not None, "an unconverted language still works"
+    # A language nobody has converted at all, read from the catalog rather than named:
+    # the point of this line is that the unconverted case still works, so it has to keep
+    # finding an unconverted language as the converted ones accumulate.
+    untouched = sorted(set(dict(store.SEED_LANGUAGES)) - set(_converted_language_codes()))
+    assert untouched, "every language is converted; this assertion no longer has a subject"
+    for code in untouched:
+        progress = store.get_progress("sample-learner", code, instance_path=instance)
+        assert progress is not None and progress.next_lesson is not None, (
+            f"{code} has no converted units and still has to work"
+        )
 
 
 def test_the_italian_catalog_is_ordered_and_leads_with_the_converted_units(instance: Path) -> None:
@@ -918,9 +1011,7 @@ def test_the_upgrade_every_installed_robot_will_actually_take(
         # on 1 to 6, and no converted lessons at all.
         connection.execute("DELETE FROM lessons WHERE id IN (%s)" % ",".join("?" * len(converted)), converted)
         connection.execute("UPDATE lessons SET position = position - 6 WHERE language_code = ?", (code,))
-        connection.execute(
-            "UPDATE schema_meta SET value = ? WHERE key = ?", (start_version, store.SEED_VERSION_KEY)
-        )
+        connection.execute("UPDATE schema_meta SET value = ? WHERE key = ?", (start_version, store.SEED_VERSION_KEY))
         connection.commit()
 
         before = {
@@ -1161,7 +1252,8 @@ def test_a_language_already_renumbered_once_does_not_move_again(tmp_path: Path) 
     assert sorted(spanish_after.values()) == list(range(1, len(spanish_after) + 1)), "no gap and no collision"
 
 
-def test_renumbering_a_placeholder_downwards_is_the_hazard_to_watch(tmp_path: Path) -> None:
+@pytest.mark.parametrize("code", _converted_language_codes())
+def test_renumbering_a_placeholder_downwards_is_the_hazard_to_watch(tmp_path: Path, code: str) -> None:
     """Why the upgrade above works, stated as the condition it actually depends on.
 
     It is NOT that the seed is clever about ordering. It is that this particular
@@ -1172,16 +1264,29 @@ def test_renumbering_a_placeholder_downwards_is_the_hazard_to_watch(tmp_path: Pa
 
     This runs that collision deliberately, so the constraint is a measured fact rather
     than a worry in a document. converting-a-course.md carries the rule that follows.
+
+    Parametrised over every converted language rather than asserted once about Italian.
+    The constraint is per language -- UNIQUE (language_code, position) -- so an Italian
+    collision is evidence about Italian, and Spanish and Portuguese each went through
+    this renumbering afterwards with nothing measuring it.
+
+    The upward half is here for a reason too: without it this test would still pass if
+    every UPDATE on this table raised, which would make it a witness for nothing.
     """
     import sqlite3
 
     assert store.ensure_learner_database(tmp_path).ready is True
+    placeholder = _lowest_placeholder(tmp_path, code)
 
     connection = store.connect(tmp_path)
     try:
         with pytest.raises(sqlite3.IntegrityError) as raised:
             # A placeholder moving down onto a position a converted lesson still holds.
-            connection.execute("UPDATE lessons SET position = 1 WHERE id = 'it-01-greetings'")
+            connection.execute("UPDATE lessons SET position = 1 WHERE id = ?", (placeholder,))
+        connection.rollback()
+
+        # And upward, into a position nothing holds: this must NOT raise.
+        connection.execute("UPDATE lessons SET position = 99 WHERE id = ?", (placeholder,))
     finally:
         connection.rollback()
         connection.close()
@@ -1216,27 +1321,48 @@ def test_re_seeding_replaces_content_rather_than_piling_it_up(tmp_path: Path) ->
     assert [drill.cue for drill in second.drills] == [drill.cue for drill in first.drills]
 
 
-def test_a_learner_part_way_through_italian_keeps_their_history(instance: Path) -> None:
+@pytest.mark.parametrize("code", _converted_language_codes())
+def test_a_learner_part_way_through_a_converted_language_keeps_their_history(instance: Path, code: str) -> None:
     """The edge case the conversion could plausibly break.
 
     Results point at lesson ids. The six placeholder lessons kept theirs when they were
     renumbered, so somebody who finished one before the conversion still has, and the
     catalog around them changing does not rewrite what they did.
+
+    Parametrised because this was an Italian-only claim while three languages had been
+    renumbered. Nothing about it is Italian: the ids, the placeholder and the expected
+    next lesson are all read from the catalog rather than spelled, so the case a fourth
+    course adds arrives already covered.
     """
-    recorded = store.record_result("sample-learner", "it-03-numbers", "completed", instance_path=instance)
+    converted = set(_converted_ids(code))
+    progress = store.get_progress("sample-learner", code, instance_path=instance)
+    # Read rather than assumed: the seeded learner has history in one language and none
+    # in the others, so a literal list here would be a claim about the fixture, and the
+    # placeholder this finishes has to be one they have not already finished.
+    before = [lesson.id for lesson in progress.completed]
+    unfinished = [lesson for lesson in progress.remaining if lesson.id not in converted]
+    assert unfinished, f"{code} has no unfinished placeholder left to finish"
+    placeholder = sorted(unfinished, key=lambda lesson: lesson.position)[0].id
+    remaining_converted = sorted(
+        (lesson.position, lesson.id) for lesson in progress.remaining if lesson.id in converted
+    )
+    first_converted = remaining_converted[0][1]
+
+    recorded = store.record_result("sample-learner", placeholder, "completed", instance_path=instance)
     assert recorded.recorded is True
 
-    progress = store.get_progress("sample-learner", "it", instance_path=instance)
+    progress = store.get_progress("sample-learner", code, instance_path=instance)
 
-    assert [lesson.id for lesson in progress.completed] == ["it-03-numbers"]
-    assert progress.next_lesson.id == "it-fast-01-what-time-is-it", "still offered the first unfinished lesson"
+    assert [lesson.id for lesson in progress.completed] == before + [placeholder]
+    assert progress.next_lesson.id == first_converted, "still offered the first unfinished lesson"
 
 
 # ------------------------------------------------- how far a learner can actually get
 
 
 @pytest.mark.asyncio
-async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instance: Path) -> None:
+@pytest.mark.parametrize("code", _converted_language_codes())
+async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instance: Path, code: str) -> None:
     """A converted unit, end to end, through the real dispatch path.
 
     W24 shipped this test with half of it missing and said so: a learner was offered a
@@ -1249,10 +1375,25 @@ async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instanc
     lesson and saving it, the same conversation reads back the unit's own turns, notes
     and drills. What is still NOT asserted anywhere is that a model teaches well from
     them -- that is the manual session, and no test claims it.
+
+    Parametrised over every converted language. This was an Italian-only claim through
+    two more conversions, and it is the one assertion that goes through the tools a
+    robot actually calls rather than through the store -- so "a Portuguese learner is
+    offered a converted unit first" was, until this ran, asserted about the lessons
+    table and nowhere else. The language name, lesson id and title are all read from
+    the catalog; nothing here is spelled per language.
     """
     from reachy_language_tutor.tools import core_tools
     from reachy_language_tutor.lesson_session import LessonSessionHolder
     from reachy_language_tutor.tools.core_tools import ToolDependencies
+
+    language = dict(store.SEED_LANGUAGES)[code]
+    expected = sorted(
+        (lesson.position, lesson.id, lesson.title)
+        for lesson in store.get_progress("sample-learner", code, instance_path=instance).remaining
+        if lesson.id in set(_converted_ids(code))
+    )[0]
+    expected_id, expected_title = expected[1], expected[2]
 
     learner = store.SEED_LEARNERS[0][0]
     deps = ToolDependencies(
@@ -1266,26 +1407,26 @@ async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instanc
     async def call(name: str, args: dict) -> dict:
         return await core_tools.dispatch_tool_call(name, json.dumps(args), deps)
 
-    progress = await call("get_progress", {"language": "Italian"})
+    progress = await call("get_progress", {"language": language})
     assert "error" not in progress
-    assert progress["next_lesson"]["id"] == "it-fast-01-what-time-is-it", (
-        "the first thing an Italian learner is offered is a converted unit"
+    assert progress["next_lesson"]["id"] == expected_id, (
+        f"the first thing a {language} learner is offered is a converted unit"
     )
 
-    started = await call("start_lesson", {"language": "Italian"})
+    started = await call("start_lesson", {"language": language})
     assert started["started"] is True
-    assert started["lesson"]["title"] == "What time is it?"
+    assert started["lesson"]["title"] == expected_title
 
     pinned = deps.lesson_session.read_for(learner)
-    assert pinned is not None and pinned.lesson_id == "it-fast-01-what-time-is-it"
+    assert pinned is not None and pinned.lesson_id == expected_id
 
     # The half W24 could not run. Called between the open and the save, because that is
     # the only window in which a lesson is pinned -- which is itself the point.
     material = await call("get_lesson_content", {})
     assert material["have_content"] is True, material.get("reason")
-    assert material["lesson"]["title"] == "What time is it?"
+    assert material["lesson"]["title"] == expected_title
 
-    content = store.get_lesson_content("it-fast-01-what-time-is-it", instance_path=instance)
+    content = store.get_lesson_content(expected_id, instance_path=instance)
     assert content.turns and content.notes and content.drills, "the material exists in the database"
 
     # Compared against the database rather than against a copy of the expected text: the
@@ -1299,26 +1440,40 @@ async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instanc
 
     # A cue-response drill is the one a tutor can mark, so it is the one worth pinning:
     # both halves present, and not the same string, or there is nothing to ask.
+    #
+    # Whether this unit HAS any is a property of the unit rather than an invariant, and
+    # asserting it unconditionally is what made this test Italian-shaped: the Portuguese
+    # course ships none on purpose, because every candidate cue in that volume admitted
+    # more than one right answer. So the claim is the one that holds either way -- the
+    # tutor sees exactly the cue-response drills the database holds, and each one it
+    # sees is askable.
+    shipped = [drill for drill in content.drills if drill.kind == "cue_response"]
     askable = [drill for drill in material["drills"] if drill["kind"] == "cue_response"]
-    assert askable, "the unit shipped cue-response drills and the tutor can see none of them"
+    assert len(askable) == len(shipped), "the tutor sees a different set of cue-response drills than shipped"
     for drill in askable:
         # .get rather than [], so a drill rendered with the wrong kind's fields fails
         # saying which drill and what was missing instead of raising KeyError.
         assert drill.get("cue"), f"cue-response drill {drill['position']} has no cue to say: {sorted(drill)}"
         assert drill.get("expected_response"), f"cue-response drill {drill['position']} has no answer to check"
-        assert drill["cue"] != drill["expected_response"], f"drill {drill['position']} answers itself"
+        if (expected_id, drill["cue"]) in KNOWN_SELF_ANSWERING_DRILLS:
+            continue
+        assert drill["cue"] != drill["expected_response"], (
+            f"drill {drill['position']} of {expected_id} answers itself. If this is a drill a tutor "
+            f"cannot mark, it is a repetition drill wearing the wrong kind -- fix the drill. Adding it "
+            f"to KNOWN_SELF_ANSWERING_DRILLS is for a case already filed, and D37 is the only one."
+        )
 
     # The id stays application state. Handing it back would let the next turn name a
     # lesson, which is the whole reason start_lesson does not return one either.
-    assert "it-fast-01-what-time-is-it" not in json.dumps(material)
+    assert expected_id not in json.dumps(material)
 
     saved = await call("finish_lesson", {"outcome": "completed", "score": 80})
     assert saved["recorded"] is True
-    assert saved["lesson_title"] == "What time is it?"
+    assert saved["lesson_title"] == expected_title
 
-    after = await call("get_progress", {"language": "Italian"})
+    after = await call("get_progress", {"language": language})
     assert after["completed_count"] == progress["completed_count"] + 1
-    assert after["last_completed"] == "What time is it?"
+    assert after["last_completed"] == expected_title
 
     # And the window closes with the lesson: saving it unpins it, so the material is no
     # longer readable and the tutor is told that rather than handed the last lesson again.
