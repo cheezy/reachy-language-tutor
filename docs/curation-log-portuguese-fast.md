@@ -1095,8 +1095,115 @@ Brazilian and 7-12 are European, for the reasons under "What this log does not s
 That is unresolved, and seeding it into a household is what makes it urgent rather than
 academic.
 
-What no test claims, here as in Italian, is that a model **teaches well** from this
-material. That is the manual session in the simulator, and it is still outstanding.
+**Added by W56, from the running app rather than from the suite.** The app was started
+against the real development instance — `--ui --no-camera`, default log level — with
+the robot service already up. Four things were observed before anyone spoke a word to
+it, none of which a test had shown:
+
+1. **The upgrade ran on a live database, not a temporary one.** That instance had been
+   sitting at seed version **6** with the six Portuguese placeholders on positions 1-6
+   and eight of the sample learner's results already recorded. Starting the app took it
+   to version 7, put the six converted units on 1-6 with 15, 13, 12, 11, 12 and 15
+   dialogue turns, moved the placeholders to 7-12 with none, and left **all eight
+   results unchanged**. That is the "robot in somebody's house" case the tests build
+   synthetically, run once for real.
+2. **Before the upgrade, the oracle in `docs/manual-test-script.md` answered
+   `pt-01-greetings` — the empty placeholder.** Afterwards it answers
+   `pt-fast-01-ordering-breakfast`. That one line is the whole point of this goal, and
+   it is worth recording that it was checked in both directions rather than only after.
+3. **The default-level log carries no learner name, id or transcript word.** Checked on
+   the **startup run**, before anyone spoke: 71 lines, zero `DEBUG` records, no
+   occurrence of the learner's id or display name, the profile result rendered as shape
+   (`{display_name: str(len=14), …}`) and the greeting the tutor opens with as
+   `str(len=78)`. The same check was run again on the **voice session** below, where the
+   log reached 266 lines: still zero `DEBUG` records, still no learner id or display
+   name, and no occurrence of *Portaria*, *ordens*, *manhã* or *copa* — none of the
+   Portuguese that was spoken aloud reached disk. Two runs, two measurements; an earlier
+   draft of this item gave the first figure and cited the second run's evidence beside
+   it.
+4. **A tool cannot be talked into serving somebody else.** Each learner-facing tool was
+   called with a `learner_id` argument naming a different person —
+   `get_profile`, `get_progress`, `start_lesson` and `get_lesson_content`. Every one
+   ignored it and served the learner the app had set: `get_profile` returned the current
+   learner's own name. The identity still comes from the app and never from the
+   conversation, which is the property a new language could plausibly have disturbed and
+   did not.
+
+**And then somebody listened.** A lesson was taken by voice on the running app, which
+is the check the conversion method ends with and the only one that hears anything:
+
+5. **The right lesson was offered, and taught from its own material.** Asked for
+   Portuguese, the tutor started *Ordering breakfast*. `start_lesson` logged
+   `completed=0 remaining=12` and `get_lesson_content` logged `turns=15 notes=6
+   drills=18` — every one of those matching the seeded rows exactly, so nothing was
+   improvised around the title. Its first spoken line was *Portaria! Às suas ordens!*,
+   which is seeded turn 1 verbatim.
+6. **The accents of that one line sounded right** — *Portaria! Às suas ordens!*, judged
+   by ear by the person at the robot, which is the only instrument that can judge it.
+   This is the check the whole page-image discipline exists to make possible and the
+   first time any of this material has passed it. It is also **one line of one unit**:
+   it says nothing about the other five units, or about the fourteen further turns of
+   this one, and the ear was a developer's rather than a Portuguese speaker's.
+7. **The tutor refused to invent vocabulary.** Asked how to say a word the unit does not
+   contain, it answered that it teaches only what is written in the lesson and named the
+   two words the unit does have. That is the locked profile's unconditional ban holding
+   under a direct request rather than in a test.
+8. **A completed result advances the learner**, observed end to end: `finish_lesson
+   recorded=1 completed=1 remaining=11`, and the next lesson offered afterwards was
+   *Checking for messages*.
+
+**What the walkthrough found, which no test had.** The learner could not pronounce the
+opening line and tried five times. The tutor answered three of those attempts with the
+same sentence, byte for byte — it never broke the phrase in two, never dropped to a
+syllable, never moved to turn 2 of 15. Having no way forward, the learner said they had
+finished; the tutor recorded the lesson **completed** one second later, on that word
+alone, and when the learner then admitted they had not finished, there was no way back.
+That is filed as **D38**, and it is a defect in the app rather than in this course — it
+would reproduce identically in Italian. It is recorded here because it is what actually
+happens to a beginner meeting this material, and a curation log that reported only the
+parts that went well would be worth less than no log.
+
+**What this walkthrough did NOT reach, stated against its own target.** The task set out
+to start every converted unit by voice and take at least one end to end. It reached
+**one of six**, and did not take that one end to end in any honest sense — the only
+completion recorded is the false one D38 describes, asserted after the learner failed
+turn 1 of 15. A `partial` result was never produced either, so "a partial does not
+advance a learner" remains covered by the automated suite and unobserved by voice. And
+no test claims, here as in Italian, that a model **teaches well** from this material;
+D38 is evidence that on this showing it does not, for a learner who struggles. Anyone
+reading this section for assurance about the other five units will not find it here.
+
+## What a reviewer should look at first
+
+Being honest about where this is weakest, in the order a reviewer should spend their
+attention:
+
+1. **No native speaker has read or heard a word of this.** It is the source's own
+   Portuguese, typed off page images and checked character by character against them,
+   which is a different claim from "a speaker of the language approved it". One lesson
+   has now been listened to and the accents sounded right — but by the developer, not by
+   someone who speaks Portuguese, and a non-speaker's ear cannot catch what it does not
+   know to expect. This is the standing limitation and it does not go away by testing
+   harder.
+2. **One lesson of six has been heard, and only its opening.** *Ordering breakfast* was
+   started by voice and its first turn spoken correctly. The other five units, and
+   fourteen of this one's fifteen turns, have never been said out loud by anything. Do
+   not read the section above as "the course was listened to".
+3. **The dialect split is live, not theoretical.** A learner who finishes lesson 6 meets
+   European Portuguese at lesson 7, in the same course, under one name. That is now
+   seeded on a real instance rather than sitting in a JSON file.
+4. **Portuguese ships nothing the tutor can mark.** 144 repetition drills and no
+   cue-response drill at all. The reasoning is sound and recorded, but it means this
+   course exercises less of the app than Italian does, so "Portuguese works" is a
+   weaker statement than "Italian works" even when both are green.
+5. **The usage notes are written, not transcribed.** Forty of them, each composed from
+   the source's note on the same point but in different words — the same adaptation risk
+   the Italian log names. They are also the only part of the shipped content where a
+   line addressed to a model could enter, which is why they are screened for it.
+6. **Two lesson pages were never rendered.** 7.13 and 8.11 are further pages of the
+   Language Notes in approved lessons, and they were screened only through the text
+   layer. Nothing shipped from them; nobody looked at them as images either.
+
 
 ## What this log does not settle
 
@@ -1112,11 +1219,16 @@ Two things are named above that a later task has to carry, and neither is done:
    through the language in order is taught two varieties of it and finds out from a
    native speaker. Deciding that is not this log's to make, and it should be made before
    anyone seeds a household.
-2. **Whether any of this sounds right out loud.** The six lessons are in the database
-   and the suite is green, but a passing test is not a learner hearing a sentence. No
-   line of this course has been spoken by the robot, and the accents that were checked
-   character by character on a page have not been checked against what a voice does
-   with them.
+2. **Whether any of this sounds right out loud. PARTLY LIFTED BY W56, 2026-09-16.**
+   This item read: "No line of this course has been spoken by the robot, and the
+   accents that were checked character by character on a page have not been checked
+   against what a voice does with them." That was true when W54 wrote it and is now
+   false in part, so it is superseded here rather than deleted — the limit and the date
+   it was lifted are both part of the account. What actually changed: **one** line of
+   **one** unit was spoken and heard, and its accents were right. What did not change:
+   five of the six units, and fourteen of that unit's fifteen turns, have still never
+   been said out loud, and the ear that judged the one was a developer's rather than a
+   Portuguese speaker's. See "What a learner can actually do with this, today".
 3. **Where the first Portuguese lesson comes from.** The shortlist has no
    introductions unit: the only place in the volume where a learner gives their own
    name is Lesson 3, which is dropped on its embassy premise. `pt-01-greetings` is the
