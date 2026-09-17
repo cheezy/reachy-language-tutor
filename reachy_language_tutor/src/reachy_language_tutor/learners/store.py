@@ -1019,6 +1019,18 @@ def _seed(connection: sqlite3.Connection) -> bool:
             SEED_LESSON_SOURCES,
         )
 
+        # AFTER the placeholder move above, and that is the SECOND ordering invariant
+        # this seed depends on. The first -- highest position first, explained in the
+        # comment block above -- is what lets six placeholders shuffle among themselves
+        # without colliding. This one is what lets the converted units land at all:
+        # they claim positions 1..n, and on a robot that already has a database those
+        # positions are held by the placeholders until the statement above vacates
+        # them. Call this first and the seed aborts with the same
+        # UNIQUE (language_code, position) failure, in the same place -- a household,
+        # not a laptop, because a fresh install has no rows to collide with and stays
+        # green. Measured, not assumed:
+        # test_converted_lessons.py::test_the_converted_insert_must_follow_the_placeholder_move
+        # runs that reordering against a real pre-change database and asserts the abort.
         _seed_converted_lessons(connection)
 
         # Learner-owned rows. Two separate guards, because "the row is absent" has two

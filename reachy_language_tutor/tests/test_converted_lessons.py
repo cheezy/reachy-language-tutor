@@ -490,8 +490,7 @@ ACCENTED_LINES = [
     ),
     (
         "fr-fast-05-locked-out",
-        "C'est le 42, rue de Sévigné, dans le quatrième. Mon appartement est au 4ème étage, "
-        "première porte à droite.",
+        "C'est le 42, rue de Sévigné, dans le quatrième. Mon appartement est au 4ème étage, première porte à droite.",
         "unit 39, printed page 39-2",
     ),
 ]
@@ -1563,6 +1562,59 @@ def test_renumbering_a_placeholder_downwards_is_the_hazard_to_watch(tmp_path: Pa
         connection.close()
 
     assert "lessons.language_code, lessons.position" in str(raised.value)
+
+
+@pytest.mark.parametrize("code", _converted_language_codes())
+def test_the_converted_insert_must_follow_the_placeholder_move(tmp_path: Path, code: str) -> None:
+    """The seed's SECOND ordering invariant, and the one nothing was measuring.
+
+    The first is the descending upsert, which lets the placeholders shuffle among
+    themselves; the test above exercises it. This is the other one: the converted units
+    claim positions 1..n, and on a robot that already has a database those positions are
+    held by the placeholders until the placeholder move vacates them. So
+    _seed_converted_lessons has to run AFTER that statement, and its position in _seed
+    is load-bearing rather than tidy.
+
+    Reordering those two statement groups is an ordinary-looking refactor. It stays green
+    on every fresh install, because a fresh install has no rows to collide with -- which
+    is the same "only households see it" shape the comment on the descending rule names.
+    This runs the collision deliberately, against the layout a robot in a house is
+    actually in.
+    """
+    import sqlite3
+
+    assert store.ensure_learner_database(tmp_path).ready is True
+    converted = _converted_ids(code)
+
+    connection = store.connect(tmp_path)
+    try:
+        # The pre-change layout: placeholders back on 1..n, no converted rows. Ascending,
+        # because this shift is downward and overlaps its own source range for any
+        # language shipping fewer than six units.
+        connection.execute("DELETE FROM lessons WHERE id IN (%s)" % ",".join("?" * len(converted)), converted)
+        for lesson_id, position in connection.execute(
+            "SELECT id, position FROM lessons WHERE language_code = ? ORDER BY position ASC", (code,)
+        ).fetchall():
+            connection.execute(
+                "UPDATE lessons SET position = ? WHERE id = ?",
+                (int(position) - len(converted), str(lesson_id)),
+            )
+        # NOT committed. _seed_converted_lessons runs on this same connection, so it
+        # sees the rewind without it -- and leaving the transaction open is what lets
+        # the rollback below actually restore the database rather than only discarding
+        # the failed insert.
+
+        # Now insert the converted lessons WITHOUT first moving the placeholders, which
+        # is what calling _seed_converted_lessons too early amounts to.
+        with pytest.raises(sqlite3.IntegrityError) as raised:
+            store._seed_converted_lessons(connection)
+    finally:
+        connection.rollback()
+        connection.close()
+
+    assert "lessons.language_code, lessons.position" in str(raised.value), (
+        "the collision has to be the position UNIQUE, or this test is witnessing something else"
+    )
 
 
 def test_re_seeding_replaces_content_rather_than_piling_it_up(tmp_path: Path) -> None:

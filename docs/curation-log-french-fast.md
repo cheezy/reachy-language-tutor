@@ -936,3 +936,55 @@ layer of their own units, and it speaks for those 47 turns only. The drill targe
 the vocabulary items were read on the same page images but are not in this count. No
 claim is made about the accent fidelity of the other 35 units, which were never read at
 300 dpi.
+
+## Seeding, and the renumbering that is not the one the task expected
+
+Step 7. The five converted lessons take positions 1 to 5, and the six placeholders move
+up behind them.
+
+**They move to 6-11, not 7-12, and that difference is the whole of this step.** Italian,
+Spanish and Portuguese each shipped six units, so their placeholders moved 1-6 → 7-12 and
+the two ranges never touched: whatever order the statements ran in, every destination was
+already free. French ships five, so its placeholders move 1-6 → **6-11**, and the ranges
+**overlap at position 6** — `fr-06-daily-routine` is sitting on it at the moment
+`fr-01-greetings` has to claim it.
+
+`UNIQUE (language_code, position)` is checked per statement rather than at commit, so that
+collision is real. It is survivable only because `store._seed` moves the highest position
+first: 6 → 11, then 5 → 10, down to 1 → 6, which lands on a position vacated one statement
+earlier. That descending rule was written for Spanish and has been carried ever since;
+**French is the first language whose upgrade actually depends on it** rather than merely
+being consistent with it.
+
+**What was executed, rather than reasoned about:**
+
+- A database was seeded, wound back to the real pre-change state — version 8, the six
+  placeholders on 1-6, no converted French rows, and a learner holding a completed result
+  on `fr-02-introductions` — and then **the app was started against it**. It upgraded to
+  version 9 in one pass, the eleven positions came out contiguous, the learner's completed
+  result survived the move, and their next lesson became `fr-fast-01-at-the-dry-cleaner`.
+- Reverting the `SEED_VERSION` bump alone fails exactly one test, and it fails naming the
+  reason: *"SEED_VERSION is 8 but the newest shipped catalog is 9."*
+- `test_renumbering_a_placeholder_downwards_is_the_hazard_to_watch` now runs for French as
+  well, because it is parametrised over whichever languages ship converted units. Removing
+  `UNIQUE (language_code, position)` from the schema makes it fail with
+  *"DID NOT RAISE IntegrityError"* — so it is a live witness rather than a test that would
+  pass on any database.
+- A new case in `test_the_upgrade_every_installed_robot_will_actually_take` covers the
+  overlapping range. Adding it took two hard-coded sixes out of that test, and its own
+  rewind then hit the same collision in mirror image and had to be made self-clearing too.
+
+**The task asked for 7-12.** That instruction was written expecting six converted units,
+and following it literally would have left position 6 empty.
+
+Be precise about what that breaks, because the obvious answer is wrong. `NEXT_LESSON_SQL`
+orders by position and takes the first row, so it tolerates a gap: a 7-12 layout was built
+and walked, and a learner still reached all eleven lessons in the right order. What a gap
+actually breaks is the repository's own contiguity invariant, which is asserted in six
+places, each checking `positions == list(range(1, len(positions) + 1))`:
+`test_lesson_positions_are_contiguous_and_unique` in `test_learner_schema.py`, one
+catalog-ordering test per converted language in `test_converted_lessons.py`, and the
+upgrade test's own check that no position was left doubled or vacant. The one that would
+actually catch a French gap is
+`test_the_french_catalog_is_ordered_and_leads_with_the_converted_units`. So 6-11 is
+required by a rule this repository enforces, not by the query behaving badly.
