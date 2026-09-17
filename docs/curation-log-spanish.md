@@ -1127,6 +1127,49 @@ this as the failure no longer reproducing rather than as a proof it cannot.
 - **Expressive movement**: `play_emotion` was called once with `emotion=success`, and
   that it was CALLED is all that was observed.
 
+## A drill withdrawn, on 2026-09-17 (D37)
+
+Cycle 2 shipped one drill too many, and it took a test written for another language to
+find it.
+
+**What was wrong.** The Cycle 2 drills included a `cue_response` whose cue and expected
+response were both *Buenos días.* A cue-response drill exists so the tutor has an answer
+to check; one whose right answer IS the cue gives it nothing to mark, because a learner
+who echoes anything at all is correct. `test_converted_lessons.py` had said so in words
+since Italian was converted — "drill N answers itself" — but the assertion carrying that
+rule only ever ran against Italian. Parametrising it over every converted language in
+W55 is what made this visible, three courses later.
+
+**The conversion was NOT wrong, and that is worth recording.** Printed page 7 really
+does print both halves the same, and it was re-read on the page image at 140 dpi to
+check rather than taken from this log:
+
+> Student: Buenos días.  *Good morning.*
+> Teacher: Buenos días.  *Good morning.*
+
+So the drill was a faithful rendering of a real printed exchange. What was wrong was
+turning a greeting **pair** into a question-and-answer, where the app's one meaningful
+check — did the learner produce the right words — cannot say anything.
+
+**Why it was dropped rather than reclassified.** The defect as filed said to change its
+kind to `repetition`. Doing that would have shipped a duplicate: *Buenos días.* /
+*Good morning.* is **already** this lesson's first repetition drill, and has been since
+the Cycle shipped. The method's three options for a cue-response that cannot work are a
+determined model, a repetition drill, or dropping the unit; the first two were taken or
+unavailable, so the third stands. The phrase is not lost — a learner still meets it,
+first, as a repetition drill with its gloss.
+
+**What was considered and rejected.** The same page prints a genuinely determinate-looking
+exchange, *¿Cómo está?* → *Bien, gracias.*, which would have made a real cue-response
+drill. It does not qualify: the page offers **three** answers — *Bien, gracias.*, *Muy
+bien, gracias.* and *Bastante bien, gracias.* — so a learner giving one of the other two
+would be marked wrong. That is the same rule that dropped fifteen candidate drills from
+the Portuguese volume. All three phrases already ship here as repetition drills.
+
+Cycle 2 now holds 17 drills rather than 18, Spanish holds 90 rather than 91, and the
+catalog carries no self-answering drill in any course. `SEED_VERSION` moved 7 → 8 with a
+new `SHIPPED_CATALOGS` line; no lesson gained or changed a single line of Spanish.
+
 ## What a learner can actually do with this, today
 
 **Six real Spanish lessons, and they are the first six a learner meets.** Starting

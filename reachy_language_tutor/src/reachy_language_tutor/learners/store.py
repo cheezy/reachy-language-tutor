@@ -104,7 +104,14 @@ SCHEMA_VERSION = 5
 # which is parametrised per LANGUAGE rather than per version -- so each case names the
 # version it rewinds to, and the Portuguese case names 5 to keep that longest jump
 # covered once the next bump moves SEED_VERSION - 1 off it.
-SEED_VERSION = 7
+#
+# Version 8 changes no lesson's text and adds none: it REMOVES one drill. Spanish Cycle
+# 2 shipped the printed greeting pair "Buenos días." / "Buenos días." as a cue_response
+# drill, faithfully -- the source really does print both halves the same (printed page
+# 7, read on the page image). But a cue whose right answer is the cue gives a tutor
+# nothing to mark, and the same phrase already ships as this lesson's FIRST repetition
+# drill, so reclassifying it would have duplicated that one. D37 dropped it instead.
+SEED_VERSION = 8
 LEARNER_DB_FILENAME = "learners.v1.sqlite3"
 # The converted course material, beside this module and shipped as package data. Its
 # bytes are part of the seeded catalog, so the shipped-catalog fingerprint covers the

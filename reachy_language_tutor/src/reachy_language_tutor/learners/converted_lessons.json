@@ -1215,11 +1215,6 @@
             },
             {
               "kind": "cue_response",
-              "cue": "Buenos días.",
-              "expected_response": "Buenos días."
-            },
-            {
-              "kind": "cue_response",
               "cue": "¿Qué es esto?",
               "expected_response": "Es una pluma."
             },

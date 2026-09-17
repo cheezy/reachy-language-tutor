@@ -69,10 +69,13 @@ def _language_of(lesson_id: str) -> str:
 # the assertion a tautology.
 # Drills already shipped whose cue IS their expected response. An ALLOW-LIST, not a
 # deny-list: anything not named here must not answer itself, so a new offender fails
-# closed. It exists because parametrising the end-to-end test below over every
-# converted language found one that had been invisible while only Italian ran that
-# path, and weakening the assertion to accommodate it would have thrown away the reason
-# the assertion was written. D37 fixes the drill and empties this.
+# closed.
+#
+# EMPTY, and it should stay that way. It held one entry for the length of D37 -- the
+# Spanish greeting pair, found when the end-to-end test was parametrised over every
+# converted language and became visible for the first time. That drill is gone, so
+# nothing needs an exemption. An entry added here without a filed defect behind it is
+# the assertion being quietly disabled rather than a case being tracked.
 #
 # Two assertions read this list, and the difference matters. The end-to-end test reaches
 # only each language's FIRST converted unit, because that is the one a learner is
@@ -81,9 +84,7 @@ def _language_of(lesson_id: str) -> str:
 # offender fails closed" true of the catalog rather than of three units. An earlier
 # version of this comment claimed the wider guarantee while only the narrower assertion
 # existed.
-KNOWN_SELF_ANSWERING_DRILLS = {
-    ("es-fast-01-getting-started-in-class", "Buenos días."),
-}
+KNOWN_SELF_ANSWERING_DRILLS: set[tuple[str, str]] = set()
 
 CONVERTED_PER_COURSE = {
     "FSI Italian FAST, Volume 1": 6,
@@ -794,6 +795,39 @@ def test_the_rights_position_is_recorded_rather_than_assumed(instance: Path) -> 
 # -------------------------------------------------------------- alongside the rest
 
 
+def test_no_lesson_drills_the_same_line_twice() -> None:
+    """The duplicate D37 would have shipped if it had followed its own instructions.
+
+    That defect said to reclassify a self-answering cue-response drill into a repetition
+    drill. The phrase was ALREADY that lesson's first repetition drill, so doing it would
+    have put the identical drill in the lesson twice -- and the review found that nothing
+    would have noticed: the suite went green either way, so the decision to drop instead
+    rested on somebody looking. This is that gap closed.
+
+    Scoped to drills of the SAME KIND, because the first version of this test was wrong
+    and the catalog said so: eighteen lines across Italian and Spanish are drilled once
+    as a repetition and again as a cue-response, which is the method working rather than
+    a fault. "Say this after me" and "answer me with this" ask different things of a
+    learner. Two drills that ask the SAME thing about the same line are the waste.
+    """
+    offenders = []
+    for lesson in store._converted_lessons():
+        seen: dict[tuple[str, str], int] = {}
+        for drill in lesson["drills"]:
+            said = drill.get("target_text") or drill.get("cue")
+            if not said:
+                continue
+            key = (str(drill.get("kind")), said)
+            seen[key] = seen.get(key, 0) + 1
+        offenders += [f"{lesson['id']}: {kind} {said!r} x{count}" for (kind, said), count in seen.items() if count > 1]
+
+    assert not offenders, (
+        f"these lessons ask the same thing about the same line twice: {offenders}. A learner meets "
+        "an identical drill a second time and learns nothing from it. Drilling one line as both a "
+        "repetition and a cue-response is fine and common -- those ask different things."
+    )
+
+
 def test_no_converted_drill_answers_itself() -> None:
     """Every cue-response drill in every course, not the three a learner is offered first.
 
@@ -922,6 +956,71 @@ def test_the_italian_course_reads_back_exactly_as_it_shipped(instance: Path) -> 
     assert digest == "d14f06db92fb34b2a383198309238ea65cb6736e43b7b5d3c11381b5568286af", (
         "every spoken string of the Italian course, and one of them has changed"
     )
+
+
+def test_a_withdrawn_drill_leaves_a_robot_that_already_has_a_database(tmp_path: Path) -> None:
+    """The other direction of the upgrade, which nothing covered until a drill was removed.
+
+    The case below proves content ARRIVES on an installed robot. It cannot prove content
+    DEPARTS, because it deletes every drill before rewinding -- so an upgrade that only
+    ever inserted would pass it. D37 is the first change where a drill count goes down:
+    Spanish Cycle 2's self-answering greeting pair was withdrawn, and a household robot
+    that kept it would still be running the defect while a fresh install was clean.
+
+    So this plants the withdrawn drill back on a seeded database, rewinds the version,
+    and requires the upgrade to take it away again. It rests on _seed deleting a
+    lesson's content before writing it rather than upserting, which is a fact about two
+    statements in store.py and worth a test rather than a reading.
+
+    WHAT THE REVERTS ACTUALLY SHOWED, because neither produced this test's own message
+    and saying so is more use than implying a clean proof. Removing the
+    `DELETE FROM lesson_drills` makes the seed abort outright with
+    `UNIQUE constraint failed: lesson_drills.lesson_id, lesson_drills.position` -- the
+    re-insert collides with the rows it should have cleared -- so the assertion that
+    fires is the `seeded is True` precondition. Putting the withdrawn drill back into
+    the catalog trips the OTHER precondition, because the fresh seed then already
+    carries it and the planted copy makes two. Both are the guards doing their job; what
+    they establish is that this delete-then-write is load-bearing for the seed as a
+    whole, and that a stale drill cannot quietly survive an upgrade because the upgrade
+    would fail loudly first.
+    """
+    assert store.ensure_learner_database(tmp_path).ready is True
+    lesson_id = "es-fast-01-getting-started-in-class"
+
+    connection = store.connect(tmp_path)
+    try:
+        # The drill exactly as it shipped before D37 withdrew it.
+        connection.execute(
+            "INSERT INTO lesson_drills (lesson_id, position, kind, cue, expected_response) VALUES (?, ?, ?, ?, ?)",
+            (lesson_id, 99, "cue_response", "Buenos días.", "Buenos días."),
+        )
+        connection.execute(
+            "UPDATE schema_meta SET value = ? WHERE key = ?", (str(store.SEED_VERSION - 1), store.SEED_VERSION_KEY)
+        )
+        connection.commit()
+        planted = connection.execute(
+            "SELECT COUNT(*) FROM lesson_drills WHERE kind = 'cue_response' AND cue = expected_response"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert planted == 1, "the rewind has to reproduce the pre-D37 state, or this test proves nothing"
+
+    assert store.ensure_learner_database(tmp_path).seeded is True
+
+    connection = store.connect(tmp_path)
+    try:
+        remaining = connection.execute(
+            "SELECT COUNT(*) FROM lesson_drills WHERE kind = 'cue_response' AND cue = expected_response"
+        ).fetchone()[0]
+        still_taught = connection.execute(
+            "SELECT COUNT(*) FROM lesson_drills WHERE lesson_id = ? AND target_text = ?",
+            (lesson_id, "Buenos días."),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert remaining == 0, "an upgraded robot kept a drill the catalog withdrew, so the defect is still live there"
+    assert still_taught == 1, "withdrawing the drill also took away the phrase, which it must not"
 
 
 def test_the_converted_content_reaches_a_robot_that_already_has_a_database(tmp_path: Path) -> None:
@@ -1124,10 +1223,12 @@ def test_the_spanish_course_reads_back_exactly_as_it_shipped(instance: Path) -> 
         ("es-fast-06-household-repairs", 6, "Single volume", "38", 526),
     ]
 
-    assert _rows_per_table(instance, "es") == (58, 47, 91), "the six Cycles' turns, notes and drills, as curated"
+    # 90 drills, not 91: D37 dropped Cycle 2's self-answering greeting pair, whose
+    # phrase this lesson's first repetition drill already teaches.
+    assert _rows_per_table(instance, "es") == (58, 47, 90), "the six Cycles' turns, notes and drills, as curated"
 
     digest = hashlib.sha256(_shipped_text(instance, "es").encode("utf-8")).hexdigest()
-    assert digest == "3b0b767dce156ef18b245f361518b77715860e1c2659a9f18aac70391849338e", (
+    assert digest == "9a9a50920f9e86cae3607fb6d5c68aa0cd45f91957f8b9b5d94c2842287494fe", (
         "the Spanish a learner hears has changed; find out what moved before touching this line"
     )
 
@@ -1492,7 +1593,8 @@ async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instanc
         assert drill["cue"] != drill["expected_response"], (
             f"drill {drill['position']} of {expected_id} answers itself. If this is a drill a tutor "
             f"cannot mark, it is a repetition drill wearing the wrong kind -- fix the drill. Adding it "
-            f"to KNOWN_SELF_ANSWERING_DRILLS is for a case already filed, and D37 is the only one."
+            f"to KNOWN_SELF_ANSWERING_DRILLS is for a case already filed as a defect, and that list "
+            f"is empty -- D37 emptied it by dropping the one drill that was ever in it."
         )
 
     # The id stays application state. Handing it back would let the next turn name a
