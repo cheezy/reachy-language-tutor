@@ -3101,6 +3101,618 @@
           ]
         }
       ]
+    },
+    {
+      "name": "FSI Metropolitan French FAST, Student Text",
+      "language_code": "fr",
+      "rights": "Work of the U.S. Foreign Service Institute, Department of State, 1984. No copyright notice was found by any search or page read performed here: the literal and damage-tolerant searches over the OCR text layer returned none, and the title page, its verso, the introduction, the table of contents, the final two leaves and the six full-page photographs were read as images. The introduction names FSI staff throughout and is signed by Jack Mendelsohn, Dean of the School of Language Studies. No lawyer has looked at this. See docs/curation-log-french-fast.md for exactly what was checked and what was not.",
+      "source_sha256": "0068620b78cdf6aebce53aa8008aea0050b31175ca4b76d2fedca97eea343ddf",
+      "lessons": [
+        {
+          "id": "fr-fast-01-at-the-dry-cleaner",
+          "position": 1,
+          "title": "Taking clothes to be cleaned",
+          "objective": "Hand over clothes to be cleaned, count what you are leaving, and arrange when to collect them: je voudrais faire nettoyer ces vêtements.",
+          "source": {
+            "module": "Student Text",
+            "unit": "14",
+            "page": 1
+          },
+          "dialogue_title": "Taking clothes to the dry cleaner",
+          "turns": [
+            {
+              "speaker": "La dame",
+              "text": "Bonjour Madame."
+            },
+            {
+              "speaker": "Vous",
+              "text": "Bonjour Madame. Je voudrais faire nettoyer ces vêtements, s'il vous plaît."
+            },
+            {
+              "speaker": "La dame",
+              "text": "Très bien. Voyons, qu'est-ce que vous avez?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "J'ai ces deux costumes, ces cravates, et quatre chemises."
+            },
+            {
+              "speaker": "La dame",
+              "text": "Très bien, vous pouvez les avoir après-demain."
+            },
+            {
+              "speaker": "Vous",
+              "text": "Après-demain? D'accord. Je passerai après six heures."
+            },
+            {
+              "speaker": "La dame",
+              "text": "C'est parfait."
+            }
+          ],
+          "notes": [
+            "The shopkeeper greets you first, and the course points out that this is the custom: almost any conversation in a shop opens with Bonjour Madame or Bonjour Monsieur.",
+            "Faire nettoyer means to have something cleaned, rather than to clean it yourself. French builds it with faire plus the other verb.",
+            "A dry cleaner's is often signed Pressing. The older word teinturier also appears.",
+            "Après-demain is the day after tomorrow, built out of après and demain the way English builds the day after tomorrow out of after and tomorrow.",
+            "Je passerai means I'll come by. Passer is to pass, and passer quelque part is to drop in somewhere."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "Je voudrais faire nettoyer ces vêtements, s'il vous plaît.",
+              "english_gloss": "I'd like to have these clothes cleaned, please."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Qu'est-ce que vous avez?",
+              "english_gloss": "What have you got?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "J'ai ces deux costumes.",
+              "english_gloss": "I have these two suits."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Après-demain?",
+              "english_gloss": "The day after tomorrow?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Je passerai après six heures.",
+              "english_gloss": "I'll come by after six."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "C'est parfait.",
+              "english_gloss": "That's perfect."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Très bien.",
+              "english_gloss": "Very good."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "D'accord.",
+              "english_gloss": "All right."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "le vêtement",
+              "english_gloss": "the garment"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "le costume",
+              "english_gloss": "the suit"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "la cravate",
+              "english_gloss": "the tie"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "la chemise",
+              "english_gloss": "the shirt"
+            }
+          ]
+        },
+        {
+          "id": "fr-fast-02-at-the-bakery",
+          "position": 2,
+          "title": "At the bakery",
+          "objective": "Ask for bread by name, add to your order, and hear the price: un pain, s'il vous plaît; ça fait 14 euros cinquante.",
+          "source": {
+            "module": "Student Text",
+            "unit": "15",
+            "page": 1
+          },
+          "dialogue_title": "Shopping for food at the bakery",
+          "turns": [
+            {
+              "speaker": "La boulangère",
+              "text": "Bonjour Madame. Vous désirez?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "Bonjour Madame. Un pain, s'il vous plaît."
+            },
+            {
+              "speaker": "La boulangère",
+              "text": "Mais que voulez-vous? Une baguette, un bâtard, un pain de campagne?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "Une baguette."
+            },
+            {
+              "speaker": "La boulangère",
+              "text": "Bien, et avec ça?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "Je voudrais deux brioches et deux croissants."
+            },
+            {
+              "speaker": "La boulangère",
+              "text": "C'est tout? Ça fait 14 euros cinquante."
+            },
+            {
+              "speaker": "Vous",
+              "text": "Vous avez la monnaie de 500 euros?"
+            },
+            {
+              "speaker": "La boulangère",
+              "text": "La monnaie de 500 euros? Ah non! Vous pouvez aller à la BNP à côté."
+            },
+            {
+              "speaker": "Vous",
+              "text": "Alors, je n'ai pas assez d'argent. Je laisse les brioches et les croissants."
+            },
+            {
+              "speaker": "La boulangère",
+              "text": "Faites comme vous voulez!"
+            },
+            {
+              "speaker": "Vous",
+              "text": "Au revoir, Madame."
+            }
+          ],
+          "notes": [
+            "Asking for un pain is not enough on its own. Bread comes in named shapes, and the baker will ask which one you want: une baguette, un bâtard, un pain de campagne.",
+            "Et avec ça? is what a shopkeeper says to invite the rest of your order. It means and with that? and it expects you to keep going.",
+            "Ça fait is how a price is announced: literally that makes. Ça fait 14 euros cinquante is that comes to 14.50.",
+            "La monnaie is change, not money in general. Money you have is l'argent.",
+            "This exchange does not end with the shopping done. The baker has no change, and the buyer leaves the pastries behind. Faites comme vous voulez means do as you like, and it is not especially friendly."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "Vous désirez?",
+              "english_gloss": "What would you like?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Un pain, s'il vous plaît.",
+              "english_gloss": "A loaf of bread, please."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Une baguette.",
+              "english_gloss": "A baguette."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Je voudrais deux brioches et deux croissants.",
+              "english_gloss": "I'd like two brioches and two croissants."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "C'est tout?",
+              "english_gloss": "Is that all?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Ça fait 14 euros cinquante.",
+              "english_gloss": "That comes to 14.50."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Vous avez la monnaie de 500 euros?",
+              "english_gloss": "Do you have change for 500 euros?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Je n'ai pas assez d'argent.",
+              "english_gloss": "I don't have enough money."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Au revoir, Madame.",
+              "english_gloss": "Goodbye, madam."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "et avec ça?",
+              "english_gloss": "and with that?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "la boulangerie",
+              "english_gloss": "the bakery"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "le pain de campagne",
+              "english_gloss": "the country loaf"
+            }
+          ]
+        },
+        {
+          "id": "fr-fast-03-at-the-greengrocer",
+          "position": 3,
+          "title": "At the greengrocer",
+          "objective": "Ask for fruit and vegetables by weight and turn down what you don't want: je voudrais un kilo de tomates; je ne mange jamais d'ail.",
+          "source": {
+            "module": "Student Text",
+            "unit": "17",
+            "page": 1
+          },
+          "dialogue_title": "Shopping for food at the greengrocer",
+          "turns": [
+            {
+              "speaker": "Le vendeur",
+              "text": "Bonjour, bonjour. C'est à vous?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "Oui. Je voudrais du persil, une laitue, et une livre de tomates."
+            },
+            {
+              "speaker": "Le vendeur",
+              "text": "Voilà, voilà. Un bouquet de persil, une belle laitue, et combien de tomates?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "Une livre!"
+            },
+            {
+              "speaker": "Le vendeur",
+              "text": "D'accord. J'ai de l'ail qui vient d'arriver, vous en voulez?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "Ah non, merci, je ne mange jamais d'ail. Je déteste ça."
+            },
+            {
+              "speaker": "Le vendeur",
+              "text": "Ah mais, un peu d'ail, ça ne fait de mal à personne."
+            },
+            {
+              "speaker": "Vous",
+              "text": "Non, non, merci. Et je voudrais un kilo de Golden."
+            },
+            {
+              "speaker": "Le vendeur",
+              "text": "Ne touchez pas à la marchandise, on va vous servir."
+            },
+            {
+              "speaker": "Vous",
+              "text": "Hum! Et un kilo de raisins et deux pamplemousses."
+            },
+            {
+              "speaker": "Le vendeur",
+              "text": "C'est très bien. Voilà tout ça!"
+            }
+          ],
+          "notes": [
+            "C'est à vous? means is it your turn? It is what you will hear when you reach the front of a queue.",
+            "Une livre is a pound, and it is still used for food even though the metric kilo is official. Une livre and un kilo will both be understood.",
+            "Du persil, de l'ail: when you ask for some of something uncountable, French puts du, de la or de l' in front of it.",
+            "Je ne mange jamais means I never eat. Ne and jamais wrap around the verb, and both halves are needed in writing.",
+            "Ne touchez pas à la marchandise means don't touch the goods. At a French market stall the seller picks for you rather than letting you choose."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "C'est à vous?",
+              "english_gloss": "Is it your turn?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Je voudrais du persil, une laitue, et une livre de tomates.",
+              "english_gloss": "I'd like some parsley, a lettuce, and a pound of tomatoes."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Combien de tomates?",
+              "english_gloss": "How many tomatoes?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Une livre!",
+              "english_gloss": "A pound!"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Vous en voulez?",
+              "english_gloss": "Would you like some?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Je ne mange jamais d'ail.",
+              "english_gloss": "I never eat garlic."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Je déteste ça.",
+              "english_gloss": "I hate that."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Non, non, merci.",
+              "english_gloss": "No, no, thank you."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Hum! Et un kilo de raisins et deux pamplemousses.",
+              "english_gloss": "Hm! And a kilo of grapes and two grapefruit."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Voilà tout ça!",
+              "english_gloss": "There's the lot!"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "la laitue",
+              "english_gloss": "the lettuce"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "le pamplemousse",
+              "english_gloss": "the grapefruit"
+            }
+          ]
+        },
+        {
+          "id": "fr-fast-04-a-delivery-arrives",
+          "position": 4,
+          "title": "A delivery arrives",
+          "objective": "Let a delivery in, say where to put it and sign for it: je voudrais la mettre ici, dans ce coin.",
+          "source": {
+            "module": "Student Text",
+            "unit": "38",
+            "page": 1
+          },
+          "dialogue_title": "Accepting a delivery",
+          "turns": [
+            {
+              "speaker": "Le livreur",
+              "text": "Bonjour Madame. C'est la Samaritaine. Nous venons livrer l'armoire."
+            },
+            {
+              "speaker": "Vous",
+              "text": "Ah, oui! Entrez."
+            },
+            {
+              "speaker": "Le livreur",
+              "text": "L'ascenseur est trop petit. Mon camarade attend en bas."
+            },
+            {
+              "speaker": "Vous",
+              "text": "Vous allez pouvoir la monter?"
+            },
+            {
+              "speaker": "Le livreur",
+              "text": "Oh, oui! A nous deux, ça ira. Eh, Paul! C'est bien ici. Je descends."
+            },
+            {
+              "speaker": "Vous",
+              "text": "Je voudrais la mettre ici, dans ce coin, sur les journaux."
+            },
+            {
+              "speaker": "Le livreur",
+              "text": "Sur ces journaux?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "Oui, je vais la peindre. Je ne sais pas encore de quelle couleur."
+            },
+            {
+              "speaker": "Le livreur",
+              "text": "Ah, je vois! Vous voulez signer le bon de livraison?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "D'accord, et voici pour la peine."
+            }
+          ],
+          "notes": [
+            "Une armoire is a free-standing wardrobe. French flats often have no built-in cupboards, so the furniture does that job.",
+            "La in vous allez pouvoir la monter? and je voudrais la mettre ici stands for l'armoire, which is feminine. The word for it changes with the thing it replaces.",
+            "Monter is to take something up, and descendre is to go down. The delivery man says je descends because he is going back down the stairs.",
+            "Un camarade is a workmate or companion. It does not necessarily carry the political meaning the English comrade does.",
+            "Voici pour la peine is what you say handing over a tip: here's something for the trouble."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "Nous venons livrer l'armoire.",
+              "english_gloss": "We've come to deliver the wardrobe."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Ah, oui! Entrez.",
+              "english_gloss": "Oh, yes! Come in."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "L'ascenseur est trop petit.",
+              "english_gloss": "The lift is too small."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Vous allez pouvoir la monter?",
+              "english_gloss": "Will you be able to carry it up?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Je voudrais la mettre ici, dans ce coin.",
+              "english_gloss": "I'd like to put it here, in this corner."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Oui, je vais la peindre.",
+              "english_gloss": "Yes, I'm going to paint it."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Je ne sais pas encore de quelle couleur.",
+              "english_gloss": "I don't know what colour yet."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Vous voulez signer le bon de livraison?",
+              "english_gloss": "Would you like to sign the delivery note?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "D'accord, et voici pour la peine.",
+              "english_gloss": "All right, and here's something for your trouble."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "l'armoire",
+              "english_gloss": "the wardrobe"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "l'ascenseur",
+              "english_gloss": "the lift"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "le bon de livraison",
+              "english_gloss": "the delivery note"
+            }
+          ]
+        },
+        {
+          "id": "fr-fast-05-locked-out",
+          "position": 5,
+          "title": "Locked out",
+          "objective": "Telephone for help when you cannot get in, give the address and understand what it will cost: j'ai laissé ma clef chez moi.",
+          "source": {
+            "module": "Student Text",
+            "unit": "39",
+            "page": 1
+          },
+          "dialogue_title": "Calling a locksmith",
+          "turns": [
+            {
+              "speaker": "Un répondeur automatique",
+              "text": "S.O.S. Réparations. Ne quittez pas. On s'occupe de votre appel."
+            },
+            {
+              "speaker": "L'employé",
+              "text": "Allô, oui. Je vous écoute."
+            },
+            {
+              "speaker": "Vous",
+              "text": "J'ai laissé ma clef chez moi. Je ne peux pas rentrer et j'ai besoin d'un serrurier."
+            },
+            {
+              "speaker": "L'employé",
+              "text": "Votre adresse, S.V.P.?"
+            },
+            {
+              "speaker": "Vous",
+              "text": "C'est le 42, rue de Sévigné, dans le quatrième. Mon appartement est au 4ème étage, première porte à droite."
+            },
+            {
+              "speaker": "L'employé",
+              "text": "Ne quittez pas!"
+            },
+            {
+              "speaker": "L'employé",
+              "text": "Bon, on vous envoie une voiture dans 45 minutes environ. Cela fera 400 euros de déplacement et de main-d'oeuvre."
+            }
+          ],
+          "notes": [
+            "Ne quittez pas is what you are told on the telephone: don't hang up. Literally it is don't leave.",
+            "Allô is only ever used on the telephone. It is not a greeting you would use face to face.",
+            "La clef is a key. You will also see it spelled la clé, and the two are said the same way.",
+            "Chez moi means at my place. Chez plus a person is that person's home, and there is no English word that does it in one.",
+            "S.V.P. is how s'il vous plaît is written short, the way please is shortened to pls in English. It is read out in full when spoken.",
+            "Je vous écoute means I'm listening, and it is how someone answering a call invites you to explain what you want."
+          ],
+          "drills": [
+            {
+              "kind": "repetition",
+              "target_text": "Ne quittez pas.",
+              "english_gloss": "Don't hang up."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Allô, oui. Je vous écoute.",
+              "english_gloss": "Hello, yes. I'm listening."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "J'ai laissé ma clef chez moi.",
+              "english_gloss": "I've left my key at home."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Je ne peux pas rentrer.",
+              "english_gloss": "I can't get back in."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "J'ai besoin d'un serrurier.",
+              "english_gloss": "I need a locksmith."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "Votre adresse, s'il vous plaît?",
+              "english_gloss": "Your address, please?"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "première porte à droite",
+              "english_gloss": "first door on the right"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "On vous envoie une voiture dans 45 minutes environ.",
+              "english_gloss": "We'll send a van in about 45 minutes."
+            },
+            {
+              "kind": "repetition",
+              "target_text": "la clef",
+              "english_gloss": "the key"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "le serrurier",
+              "english_gloss": "the locksmith"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "l'appel",
+              "english_gloss": "the call"
+            },
+            {
+              "kind": "repetition",
+              "target_text": "la porte",
+              "english_gloss": "the door"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

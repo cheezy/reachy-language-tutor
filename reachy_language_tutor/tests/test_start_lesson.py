@@ -528,7 +528,7 @@ async def test_a_language_with_lessons_but_no_material_is_refused_distinctly(ins
     assert result["reason"] != "all_lessons_finished", "they have finished nothing"
     assert result["reason"] != "language_not_taught", "it IS taught, and that is the problem"
     # And the answer names what CAN be taught, so the refusal is useful rather than bare.
-    assert set(result["languages_with_material"]) == {"Italian", "Portuguese", "Spanish"}
+    assert set(result["languages_with_material"]) == {"French", "Italian", "Portuguese", "Spanish"}
 
 
 @pytest.mark.asyncio
@@ -655,8 +655,8 @@ async def test_the_two_tools_describe_the_catalog_the_same_way(instance: Path) -
     progressed = await GetProgress()(deps, language=UNTAUGHT_NAME)
 
     for answer in (started, progressed):
-        assert set(answer["languages_with_material"]) == {"Italian", "Portuguese", "Spanish"}
-        assert set(answer["languages_without_material_yet"]) == {"French", "German"}
+        assert set(answer["languages_with_material"]) == {"French", "Italian", "Portuguese", "Spanish"}
+        assert set(answer["languages_without_material_yet"]) == {"German"}
 
 
 @pytest.mark.asyncio
@@ -695,7 +695,7 @@ async def test_an_unwritten_lesson_in_a_written_language_is_refused_too(instance
     assert result["started"] is False, "lesson seven has nothing written in it"
     assert result["reason"] == "lesson_not_written_yet"
     # And it is still honest about the language, which DOES have material.
-    assert set(result["languages_with_material"]) == {"Italian", "Portuguese", "Spanish"}
+    assert set(result["languages_with_material"]) == {"French", "Italian", "Portuguese", "Spanish"}
 
 
 @pytest.mark.asyncio

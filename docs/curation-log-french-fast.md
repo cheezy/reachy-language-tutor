@@ -11,11 +11,10 @@ The method these decisions were applied with — the commands, the page-image ch
 order of the steps — is in [converting-a-course.md](converting-a-course.md). This file is
 the record of the decisions themselves.
 
-**Status: Steps 0 to 3 of the method are done — the course is chosen, fetched and
-checked, the rights position is written, and every one of the 40 lessons has been
-screened and accounted for. Six lessons are shortlisted. No unit has been curated.**
-The unit-by-unit "what shipped" sections that the Italian, Portuguese and Spanish logs
-carry are absent here because that work has not happened yet, not because it was skipped.
+**Status: Steps 0 to 6 of the method are done — the course is chosen, fetched and
+checked, the rights position is written, all 40 lessons are screened and accounted for,
+six were shortlisted, and five of those six are converted and shipped.** Unit 12 was
+dropped during conversion; the reason is below, under "What did not ship, and why".
 
 ## The source
 
@@ -373,7 +372,7 @@ are the figures from the final screen, after all three corrections above.
 | 9 | At the Train Station — Going to Versailles | 9-1 – 9-16 | 160–175 | 0 | 23 | 0 | 0 | 23 | 0 | 22 | dropped |
 | 10 | At the Airport — Meeting a Relative | 10-1 – 10-12 | 176–187 | 0 | 14 | 0 | 0 | 14 | 0 | 11 | dropped |
 | 11 | No Taxis — Looking for the Metro | 11-1 – 11-14 | 188–201 | 0 | 9 | 14 | 0 | 23 | 0 | 14 | dropped |
-| 12 | Taking the Metro — Getting your Tickets | 12-1 – 12-12 | 202–213 | 0 | 2 | 0 | 0 | 2 | 0 | 2 | **SHORTLIST** |
+| 12 | Taking the Metro — Getting your Tickets | 12-1 – 12-12 | 202–213 | 0 | 2 | 0 | 0 | 2 | 0 | 2 | shortlisted, then dropped at conversion |
 | 13 | Meeting a Friend in a Café | 13-1 – 13-12 | 214–225 | 0 | 8 | 0 | 0 | 8 | 0 | 5 | dropped |
 | 14 | Taking Clothes to the Dry Cleaner | 14-1 – 14-10 | 226–235 | 0 | 7 | 0 | 0 | 7 | 0 | 6 | **SHORTLIST** |
 | 15 | Shopping for Food — At the Bakery | 15-1 – 15-14 | 236–249 | 0 | 4 | 0 | 0 | 4 | 0 | 3 | **SHORTLIST** |
@@ -409,6 +408,11 @@ this log uses arabic throughout. Naming them `XII` would be this log's invention
 course's.
 
 ### The shortlist — six lessons, each read in full
+
+**Five of these six shipped.** Unit 12 was dropped during conversion, for a reason that
+only appears once you try to make a lesson out of it; see "What did not ship, and why"
+below. This section is left as the screening produced it rather than rewritten, because
+what it records is what was true at the end of screening.
 
 | # | Lesson | Printed | PDF | Raw | Why it was approved |
 |---|---|---|---|---|---|
@@ -672,3 +676,263 @@ the disqualified ones.
   target: Lesson 39 was held back as a reasonable seventh rather than added to round the
   number up. Italian, Spanish and Portuguese each shipped six as well, but that is a
   coincidence worth noticing and not a reason, and it played no part in this decision.
+
+## Conventions applied to every unit
+
+Recorded once here rather than repeated against every line they touched.
+
+- **The page image is the source, and the text layer is only orientation.** Every line
+  that ships was read off a page rendered at 140 dpi, and every accented character in it
+  was confirmed against a crop of the same page rendered at 300 dpi. That is not
+  ceremony on this scan: the OCR sets a circumflex where the page has an acute or a
+  grave, so the text layer offers `rêpond` for `répond` and `biêre` for `bière`. Both
+  are real French letters, so nothing downstream would have flagged either.
+- **A spoken greeting replaces a printed one.** The course prints `Bonjour
+  Madame/Monsieur.` — a convention a reader resolves silently and a voice cannot say at
+  all. Every occurrence ships as `Bonjour Madame.`, and the note in Lesson 14 tells the
+  learner that either address is normal. The same rule removes the brace-and-`or`
+  alternatives the course prints for a learner's turn: the first branch ships and the
+  second is recorded here rather than spoken.
+- **A gender marker becomes an article.** The vocabulary lists print `vêtement (le)`.
+  A tutor cannot say a parenthesis, so these ship as `le vêtement`, which teaches the
+  gender by carrying it.
+- **Francs become euros, and nothing else moves.** Prices are the one dated element that
+  appears inside a sentence rather than beside it. `Ça fait 14 francs cinquante` ships as
+  `Ça fait 14 euros cinquante`: one noun for another of the same number and gender, so
+  the sentence and its grammar are untouched. The amounts are left exactly as printed.
+- **Lines addressed to a human teacher are dropped, never translated.** *Listen to the
+  tape*, *Compare notes with your classmates*, *Ask your teacher about anything you still
+  don't understand* appear in every unit. The tutor **is** that teacher, so translating
+  one would put a directive into the material it teaches from.
+- **Nothing that asks a child for their own details ships.** Lesson 14 prints `Votre nom,
+  s'il vous plaît?` followed by the instruction `(Give your name and spell it.)`, and
+  Lesson 39 prints `Votre nom?` with a blank for the learner to fill. Both were cut. This
+  app takes identity from face recognition and never from the conversation, and a tutor
+  that prompts a child for their name is asking for exactly what that design keeps out of
+  the dialogue. The scripted street address in Lesson 39 is kept: it is printed, it is
+  fictional, and it is not the learner's.
+- **Every drill ships as a repetition drill.** Not one cue in these five units has a
+  single determinate answer — the baker offers three kinds of loaf, the greengrocer
+  offers garlic you may accept or refuse, and Lesson 12's practice page says outright
+  *Choose an answer or make up your own*. A learner who gave a different correct answer
+  would be marked wrong, so none of them may be a `cue_response`. This is the same
+  conclusion the Brazilian Portuguese conversion reached, for the same reason.
+- **Usage notes are written, not transcribed, and they address the learner.** The
+  course's own functional notes are written to an adult at a diplomatic post and often
+  explain Paris rather than French. What ships is a note about the language, in English,
+  said to the person learning it.
+
+## What shipped, unit by unit
+
+Five lessons, in catalog order. Every printed page named here was rendered and read.
+
+### `fr-fast-01-at-the-dry-cleaner` — unit 14, printed pages 14-1 to 14-3
+
+*Handing over clothes to be cleaned.* You greet the shopkeeper, say what you want done,
+count what you are leaving, and agree when to collect it.
+
+- **Kept whole:** the dialogue from `Bonjour Madame.` to `C'est parfait.`, seven turns.
+- **Replaced:** `Bonjour Madame/Monsieur.` → `Bonjour Madame.`, per the convention above.
+- **Dropped:** the closing `Votre nom, s'il vous plaît?` and the instruction
+  `(Give your name and spell it.)` that follows it, both on printed page 14-2.
+- **Dropped:** the alternative learner turn `J'ai cette robe, ces deux jupes, et mon
+  chemisier.`, which the course prints in a brace as an either/or with the turn that
+  ships. Nothing is wrong with it; a lesson cannot say both.
+- **Drills:** twelve, all repetition — eight sentences from the dialogue and four
+  vocabulary items from the `A CLOSER LOOK` list on printed page 14-3.
+
+### `fr-fast-02-at-the-bakery` — unit 15, printed pages 15-1 to 15-2
+
+*Buying bread.* Asking for `un pain` turns out not to be enough, because bread has
+names; then the price, and a note that will not be changed.
+
+- **Kept whole:** all twelve turns, including the ending, in which the baker has no
+  change and the buyer leaves the pastries behind. It is not a tidy ending and it is a
+  real exchange.
+- **Replaced:** `francs` → `euros`, three times in the dialogue (`14 francs` and
+  `500 francs` twice), amounts unchanged.
+- **Replaced:** `Bonjour Madame/Monsieur.` → `Bonjour Madame.`
+- **Dropped:** the metric-conversion drill on printed pages 15-11 and 15-12 — seven lines
+  converting the learner's weight and five converting their height. Same reason as
+  Lesson 3's.
+- **Drills:** twelve, all repetition.
+
+### `fr-fast-03-at-the-greengrocer` — unit 17, printed pages 17-1 to 17-2
+
+*Fruit and vegetables by weight.* Asking for quantities, and refusing garlic twice.
+
+- **Kept whole:** eleven turns. The seller's `Ne touchez pas à la marchandise` is kept
+  rather than softened; it is what the stall-holder says, and the note explains why.
+
+  An earlier version of this lesson shipped ten turns, because two learner turns had
+  been spliced into one — `Non, non, merci. Et je voudrais un kilo de Golden.` lost its
+  ending, `Hum! Et un kilo de raisins et deux pamplemousses.` lost its opening, and the
+  seller's line between them was left with no reply. The result was a French sentence
+  that is nowhere on the page, which is the one thing this whole method exists to
+  prevent. It was caught in review, and the page is restored above.
+- **Dropped:** the `venir de` practice line `Elle vient de prendre une bière.` on printed
+  page 17-8. The grammar point is taught by the two other examples printed beside it.
+- **Dropped:** the metric-conversion exercise on printed page 17-10, whose two questions
+  convert the learner's own height and then their own weight. A tutor in a child's home
+  does not ask for either.
+- **Drills:** twelve, all repetition.
+
+### `fr-fast-04-a-delivery-arrives` — unit 38, printed pages 38-1 to 38-2
+
+*A wardrobe is delivered.* The lift is too small, it goes up the stairs, and you say
+where to put it and sign for it.
+
+- **Kept whole:** ten turns.
+- **Replaced:** `Bonjour Madame/Monsieur.` → `Bonjour Madame.`
+- **Dropped:** the closing stage direction `(Vous donnez 30 francs environ pour les
+  deux.)` on printed page 38-2, which is narration rather than a line anybody says.
+- **Rewritten, not dropped:** the functional note on printed page 38-2 about `camarade`.
+  The page explains that the word "doesn't necessarily refer to a member of the Communist
+  Party, as the English cognate does". What ships says what the word *does* mean and keeps
+  the contrast, because the English cognate is the confusion a learner brings. An earlier
+  version of the shipped note dropped the page's *necessarily* and so claimed more than
+  the source; it now carries the hedge the page carries.
+- **Drills:** twelve, all repetition.
+
+### `fr-fast-05-locked-out` — unit 39, printed pages 39-1 to 39-2
+
+*Telephoning for help.* You are shut out of your flat and you call a locksmith.
+
+- **Kept whole:** seven turns, including the answering machine, which is the only
+  recorded voice in the five units.
+- **Replaced:** `400 francs` → `400 euros`.
+- **Dropped:** `Votre nom?` and the blank beneath it.
+- **Dropped:** the vocabulary gloss `nu (f, nue) — nude` on printed page 39-5. The source
+  means `pieds nus`, barefoot; the bare adjective glossed that way is not a word to teach
+  a child out of its phrase.
+- **Dropped:** the `être` conjugation drill on printed page 39-7. Its printed stem is
+  `Il est à l'hôpital.`; the learner supplies `Je`, `Elle`, `Nous` and `Vous` forms into
+  blanks. Also the caretaker's illness in the setting on printed page 39-1. Lessons 23 and 24 were dropped at screening for
+  illness, and the same standard applies to a drill inside a unit that shipped.
+- **Dropped:** the `Vocabulaire supplémentaire` block, which opens on printed page 39-9
+  and casts the learner as a parent employing a babysitter; its two telephone numbers are
+  printed on 39-10.
+- **Drills:** twelve, all repetition.
+
+## What did not ship, and why
+
+| Unit | Why not |
+|---|---|
+| 12 Taking the Metro — Getting your Tickets | **Approved at screening, dropped at conversion.** Its conversation is two lines long, and the course says why: *"There's only a very short conversation in this lesson because people seem to speak as little as possible in the metro."* That is a fragment, and the method says to drop a fragmentary unit rather than patch one. It is also the one unit this app could not have taught: a lesson is only recorded as done once enough of it has been said **and** the learner has answered back at least three times, and a two-turn dialogue cannot supply that. The rest of the unit is good material — the ordinal numbers on printed page 12-6 are the best number drill in the volume — and a later task that wants a numbers lesson should come back for them. |
+
+Unit 12 has been removed from the approved-unit list in `tests/approved_units.py`, because
+that list is the set of units a shipped lesson may cite and nothing cites unit 12 now. The
+screening record above still shows it shortlisted, which is the honest history: it passed
+the screen, it passed reading, and it failed conversion.
+
+The other 34 units of the volume were dropped at screening, and each is accounted for in
+the table further up this file.
+
+## Text that nobody printed
+
+Everything a learner hears in these five lessons is either a sentence printed in the
+course or an English note written here. The two categories are kept apart on purpose.
+
+**Printed in the course, and unchanged except where this log says otherwise:** every
+French sentence in every `turns` entry, and every `target_text` in every drill. Where a
+drill's target is shorter than a dialogue line, it is a phrase lifted whole from that
+line or from the unit's own vocabulary list — never a sentence assembled here.
+
+**Written here, and in English only:** every `objective`, every `title`, every
+`english_gloss`, and all 26 usage notes. No French was invented to fill them. Where a
+note needed a French example, it quotes one that is already in that unit.
+
+**Where a shipped French string is permitted to come from** — an allow-list, because a
+list of exceptions is only ever as complete as the last person to check it:
+
+1. A dialogue line, verbatim.
+2. A vocabulary entry from that unit's `A CLOSER LOOK` or `More Words` list, with a
+   printed gender marker turned into its article (`vêtement (le)` → `le vêtement`).
+3. That unit's French `SETTING`, which is where `la boulangerie` comes from.
+4. `francs` → `euros`, the one word-level substitution, recorded per lesson above.
+5. A printed form collapsed to the one a voice can say: `Bonjour Madame/Monsieur.` →
+   `Bonjour Madame.` in Lessons 1, 2 and 4, and the speaker label
+   `L'employé de S.O.S.:` → `L'employé` in Lesson 5. This is the convention stated near
+   the top of this section; it is repeated here because a list written to be exhaustive
+   has to carry it, and three shipped turns depend on it.
+6. An abbreviation expanded to what is said aloud: `S.V.P.?` → `s'il vous plaît?`, once,
+   in a Lesson 5 drill.
+7. A clause or phrase taken whole out of a dialogue line and drilled on its own, with its
+   first letter capitalised where it now starts the line — `Qu'est-ce que vous avez?`,
+   `et avec ça?`, `première porte à droite`. No rule covered these until review found
+   them, which is the argument for listing the strings rather than trusting the rules.
+
+**Every shipped string that is not a whole printed sentence, listed rather than
+counted.** Of the 107 shipped French strings — 47 turns and 60 drill targets — **76 are
+whole sentences exactly as printed in a dialogue line**: all 47 turns, plus 29 drill
+targets that repeat one of those sentences entire. The other **31 drill targets are
+shorter than a sentence**, and here they all are:
+
+| Lesson | Shorter-than-a-sentence drill targets |
+|---|---|
+| 1 | `Qu'est-ce que vous avez?`, `J'ai ces deux costumes.`, `le vêtement`, `le costume`, `la cravate`, `la chemise` |
+| 2 | `Je n'ai pas assez d'argent.`, `et avec ça?`, `la boulangerie`, `le pain de campagne` |
+| 3 | `Combien de tomates?`, `Vous en voulez?`, `Je ne mange jamais d'ail.`, `Hum! Et un kilo de raisins et deux pamplemousses.`, `la laitue`, `le pamplemousse` |
+| 4 | `Ah, oui! Entrez.`, `Je voudrais la mettre ici, dans ce coin.`, `l'armoire`, `l'ascenseur`, `le bon de livraison` |
+| 5 | `Allô, oui. Je vous écoute.`, `Je ne peux pas rentrer.`, `J'ai besoin d'un serrurier.`, `Votre adresse, s'il vous plaît?`, `première porte à droite`, `On vous envoie une voiture dans 45 minutes environ.`, `la clef`, `le serrurier`, `l'appel`, `la porte` |
+
+Each one is a clause or phrase taken whole out of a dialogue line under rule 7, or a
+vocabulary entry under rule 2, or — for `la boulangerie` — the SETTING under rule 3, or
+the one expansion under rule 6. **The list is given rather than a tally because a tally
+is what went wrong here twice**: an earlier version of this paragraph named four such
+strings when there were far more, and the version after it said sixteen because it
+classified by final punctuation, which counts `et avec ça?` as a sentence.
+
+Rule 6 is that Lesson 5 drill, `Votre adresse, s'il vous plaît?`: a tutor says the
+phrase rather than the letters, and usage note 25 tells the learner that S.V.P. is how it
+is written short.
+
+## What the accents cost, measured on this course
+
+Measured over what actually ships, not over the volume. The 47 shipped turns carry
+**40 accented characters**: 18 graves, 10 acutes, 6 circumflexes and 6 cedillas, across
+38 accented word-occurrences.
+
+Every one of those was checked against a crop of its own page rendered at **300 dpi** —
+ten crops, one for each of the ten printed pages the five dialogues span. That is
+higher than the 140 dpi the method asks for and it was necessary: at 140 dpi an acute and
+a circumflex over the same letter are hard to tell apart on this scan, and at 300 they
+are not.
+
+**The correction count: 27 of the 38 accented word-occurrences.** That is how many are
+rendered with the wrong accent by the text layer somewhere in their own unit — `Très` as
+`Três`, `après` as `aprês`, `désirez` as `dêsirez`, `ça` as `Ca`, `Voilà` as `Voilâ`,
+`Sévigné` as `Sêvignê`, `première` as `premiêre`, and `à` as a bare `A` or `a`. Eleven
+occurrences the text layer happens to get right. One — `très` in unit 17 — has no correct
+rendering anywhere in its unit, so nothing short of the page would have settled it.
+
+**The OCR text layer is wrong about `très` in all three places it ships.** The page
+prints `Très` and `très` with a grave every time. The text layer renders the one on
+printed page 14-1 as `Tr~s` — the accented letter replaced by a bare tilde — and the ones
+on 14-2 and 17-2 as `Três` and `três`, with a circumflex. One loss and two swaps, and no
+correct rendering among them.
+
+It does spell `Très` correctly once, on 14-2 — but that occurrence is inside the
+Fill-in-the-Blanks exercise, which does not ship. A spot-check that happened to land on
+it would have licensed trusting the text layer for this word, and every shipped instance
+would still have been wrong.
+
+**Both failure modes are in this scan, and the earlier draft of this section named only
+one.** Across the five shipped units the text layer carries **84 `~` characters**, spread
+over 73 whitespace-separated tokens — 52 of those have the tilde sitting among letters,
+where an accented character belongs, and the other 21 are tilde-only runs. Against that
+it carries **141 circumflex characters**, most standing where the page has an acute or a
+grave. So it **loses** accents and **swaps** them, in
+roughly comparable quantity. The method's 19% figure is Italian's, measured on Italian
+FAST over printed pages 40 to 160, and it counts losses; it is not a figure this course
+can inherit in either direction.
+
+The swap is the more dangerous of the two, because a `~` is visible as damage and
+`três` is not. The same swap is in material that did not ship, which is how it was first
+noticed: `rêpond` for `répond` in unit 12 and `biêre` for `bière` in a unit 17 drill.
+
+**What this measurement does not cover.** It compares the shipped lines against the text
+layer of their own units, and it speaks for those 47 turns only. The drill targets and
+the vocabulary items were read on the same page images but are not in this count. No
+claim is made about the accent fidelity of the other 35 units, which were never read at
+300 dpi.

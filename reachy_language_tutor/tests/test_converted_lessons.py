@@ -50,13 +50,14 @@ CURATION_LOGS = {
     "FSI Italian FAST, Volume 1": DOCS / "curation-log-italian-fast.md",
     "FSI Spanish Familiarization and Short-Term Training": DOCS / "curation-log-spanish.md",
     "FSI Brazilian Portuguese FAST, Volume I": DOCS / "curation-log-portuguese-fast.md",
+    "FSI Metropolitan French FAST, Student Text": DOCS / "curation-log-french-fast.md",
 }
 
 # The word that offers a free choice, per language. Portuguese is the reason this is a
 # table rather than a literal: Italian and Spanish "o" IS "or", but Portuguese "o" is
 # the definite article and its "or" is "ou", so one literal cannot serve all three.
 # A language absent from here is a REFUSAL rather than a skip -- see the guard below.
-EITHER_OR_WORD = {"it": "o", "es": "o", "pt": "ou"}
+EITHER_OR_WORD = {"it": "o", "es": "o", "pt": "ou", "fr": "ou"}
 
 
 def _language_of(lesson_id: str) -> str:
@@ -90,6 +91,7 @@ CONVERTED_PER_COURSE = {
     "FSI Italian FAST, Volume 1": 6,
     "FSI Spanish Familiarization and Short-Term Training": 6,
     "FSI Brazilian Portuguese FAST, Volume I": 6,
+    "FSI Metropolitan French FAST, Student Text": 5,
 }
 METHOD = DOCS / "converting-a-course.md"
 
@@ -472,6 +474,26 @@ ACCENTED_LINES = [
         "finestre danno su un giardino pubblico.",
         "unit XVII, printed page 412",
     ),
+    # Metropolitan French. This scan sets a circumflex where the page has an acute or a
+    # grave -- the OCR layer reads "répond" as "rêpond" and "bière" as "biêre" -- so the
+    # accents below were read off the page image at 300 dpi rather than taken from the
+    # text layer. In French the loss changes the word: "ou" is "or" and "où" is "where".
+    (
+        "fr-fast-02-at-the-bakery",
+        "Mais que voulez-vous? Une baguette, un bâtard, un pain de campagne?",
+        "unit 15, printed page 15-1",
+    ),
+    (
+        "fr-fast-03-at-the-greengrocer",
+        "Ah non, merci, je ne mange jamais d'ail. Je déteste ça.",
+        "unit 17, printed page 17-2",
+    ),
+    (
+        "fr-fast-05-locked-out",
+        "C'est le 42, rue de Sévigné, dans le quatrième. Mon appartement est au 4ème étage, "
+        "première porte à droite.",
+        "unit 39, printed page 39-2",
+    ),
 ]
 
 
@@ -629,6 +651,11 @@ def test_nothing_military_or_official_survived_the_curation(instance: Path) -> N
     mattered more here, because the Spanish volume is the one where 29 of 38 Cycles
     carry embassy, military, uniformed or border material.
 
+    The French half was added in the change that shipped the five French lessons, for the
+    same reason the Spanish half was: a screen with no terms in the language it is
+    screening passes green having inspected nothing. "général" is left off for the same
+    reason "general" is -- it matches "généralement".
+
     "general" and "oficial" are deliberately NOT on this list. W35 measured them:
     widening to them matched "generalmente" and made the screen worse, which is the
     standing argument for why a deny-list is a backstop and never the control.
@@ -658,6 +685,15 @@ def test_nothing_military_or_official_survived_the_curation(instance: Path) -> N
             "almirante",
             "forças armadas",
             "guerra",
+            "militaire",
+            "armée",
+            "caserne",
+            "soldat",
+            "colonel",
+            "sergent",
+            "amiral",
+            "lieutenant",
+            "commandant",
         ],
         "embassy": [
             "ambasciata",
@@ -678,6 +714,11 @@ def test_nothing_military_or_official_survived_the_curation(instance: Path) -> N
             "adido",
             "chancelaria",
             "seção consular",
+            "ambassade",
+            "ambassadeur",
+            "consulat",
+            "chancellerie",
+            "attaché",
         ],
         "uniformed authority": [
             "polizia",
@@ -692,6 +733,9 @@ def test_nothing_military_or_official_survived_the_curation(instance: Path) -> N
             "policial",
             "delegacia",
             "delegado",
+            "policier",
+            "gendarme",
+            "commissariat",
         ],
         "border": [
             "dogana",
@@ -712,6 +756,10 @@ def test_nothing_military_or_official_survived_the_curation(instance: Path) -> N
             "fronteira",
             "imigração",
             "despachante",
+            "douane",
+            "douanier",
+            "frontière",
+            "passeport",
         ],
     }
     for category, terms in forbidden.items():
@@ -1100,6 +1148,32 @@ def test_the_converted_content_reaches_a_robot_that_already_has_a_database(tmp_p
             # catalog covered by nothing -- which is what this case is for.
             "5",
         ),
+        (
+            # French is the case the other three do not cover, and the reason is
+            # arithmetic rather than language. Italian, Spanish and Portuguese each
+            # moved six placeholders from 1-6 to 7-12: source and destination are
+            # DISJOINT, so every destination was already free whatever order the
+            # statements ran in. French ships five converted units, so its placeholders
+            # move 1-6 to 6-11 -- ranges that OVERLAP at position 6, which is occupied
+            # by fr-06-daily-routine at the moment fr-01-greetings has to claim it.
+            #
+            # That is exactly the shape the descending-order comment in store._seed
+            # was written for, and until this case existed the comment was the only
+            # thing asserting it. Descending, fr-06 vacates 6 before fr-01 arrives;
+            # ascending, this raises IntegrityError on a robot in a house and passes
+            # on a fresh seed.
+            "fr",
+            [
+                "fr-01-greetings",
+                "fr-02-introductions",
+                "fr-03-numbers",
+                "fr-04-ordering-food",
+                "fr-05-directions",
+                "fr-06-daily-routine",
+            ],
+            "fr-02-introductions",
+            str(store.SEED_VERSION - 1),
+        ),
     ],
 )
 def test_the_upgrade_every_installed_robot_will_actually_take(
@@ -1108,8 +1182,8 @@ def test_the_upgrade_every_installed_robot_will_actually_take(
     """The one upgrade path nothing else here constructs, and the only one that is real.
 
     Every other "already seeded" test in this suite rewinds the version marker on a
-    database that is ALREADY laid out the way this change leaves it -- placeholders at
-    7 to 12, converted units at 1 to 6. No robot is in that state. A robot in a house is
+    database that is ALREADY laid out the way this change leaves it -- the placeholders
+    pushed up behind the converted units. No robot is in that state. A robot in a house is
     in the state before the conversion: `it-01-greetings` sitting on position 1, which is
     the position `it-fast-01-what-time-is-it` is about to claim, under a UNIQUE that
     makes two lessons unable to share it.
@@ -1124,15 +1198,33 @@ def test_the_upgrade_every_installed_robot_will_actually_take(
     # the file and then moved only one language's placeholders back, leaving the other
     # language with six vacant positions at the front -- a layout no robot has ever
     # been in, which is the exact unreality this docstring condemns.
+    # Read rather than pinned at six: French ships five, because unit 12 was dropped
+    # during curation. A hard-coded six here would have failed for a reason that has
+    # nothing to do with the upgrade this test exists to exercise.
     converted = _converted_ids(code)
-    assert len(converted) == 6, f"{code} should have six converted units"
+    assert converted, f"{code} should have converted units"
 
     connection = store.connect(tmp_path)
     try:
         # Wind the catalog back to what shipped before this change: the six placeholders
-        # on 1 to 6, and no converted lessons at all.
+        # on 1 to 6, and no converted lessons at all. The shift is len(converted) rather
+        # than a literal 6 -- French ships five, so a literal would wind its placeholders
+        # back to 0 and trip the position > 0 CHECK before the upgrade was even reached.
         connection.execute("DELETE FROM lessons WHERE id IN (%s)" % ",".join("?" * len(converted)), converted)
-        connection.execute("UPDATE lessons SET position = position - 6 WHERE language_code = ?", (code,))
+        # LOWEST POSITION FIRST, and for the same reason _seed moves highest-first: the
+        # UNIQUE is checked per statement. French's placeholders sit at 6-11 and come
+        # back to 1-6, ranges that OVERLAP at 6, so a bulk UPDATE can try to move 11->6
+        # while 6 is still occupied. Ascending makes the shift self-clearing -- 6->1
+        # first, then 7->2, and 11->6 lands on a position just vacated. Italian,
+        # Spanish and Portuguese never needed this because their ranges are disjoint,
+        # which is precisely why French is worth a case of its own.
+        for lesson_id, position in connection.execute(
+            "SELECT id, position FROM lessons WHERE language_code = ? ORDER BY position ASC", (code,)
+        ).fetchall():
+            connection.execute(
+                "UPDATE lessons SET position = ? WHERE id = ?",
+                (int(position) - len(converted), str(lesson_id)),
+            )
         connection.execute("UPDATE schema_meta SET value = ? WHERE key = ?", (start_version, store.SEED_VERSION_KEY))
         connection.commit()
 
@@ -1278,6 +1370,61 @@ def test_the_portuguese_course_reads_back_exactly_as_it_shipped(instance: Path) 
     digest = hashlib.sha256(_shipped_text(instance, "pt").encode("utf-8")).hexdigest()
     assert digest == "de6caee7f0c6e3aaa3207b2d78fa58ce073b52ccfc8d830c4a0845265f3b4d3d", (
         "the Portuguese a learner hears has changed; find out what moved before touching this line"
+    )
+
+
+def test_the_french_catalog_is_ordered_and_leads_with_the_converted_units(instance: Path) -> None:
+    """The fourth course, given the check the other three have.
+
+    Written against len(converted) rather than a literal six, because French is the
+    first course to ship fewer than six: unit 12 was approved at screening and dropped
+    during curation, so five units lead and the placeholders sit at 6-11 rather than
+    7-12.
+    """
+    progress = store.get_progress("sample-learner", "fr", instance_path=instance)
+    catalog = sorted(progress.completed + progress.remaining, key=lambda lesson: lesson.position)
+    converted = set(_converted_ids("fr"))
+
+    assert [lesson.position for lesson in catalog] == list(range(1, len(catalog) + 1)), (
+        "contiguous, so 'the next lesson' is unambiguous"
+    )
+    assert {lesson.id for lesson in catalog[: len(converted)]} == converted, (
+        "the converted units are the first thing a learner is offered"
+    )
+
+
+def test_the_french_course_reads_back_exactly_as_it_shipped(instance: Path) -> None:
+    """What a learner hears in French, pinned so a refactor cannot quietly move it.
+
+    This pin is worth more here than for the other three, and the reason is a defect
+    this course actually had. One shipped turn was a SPLICE of two printed learner
+    turns -- half of one sentence grafted onto half of another, with the seller's line
+    between them left unanswered. It read as perfectly good French, every test in this
+    file passed over it, and nothing but a reader with the page open would have caught
+    it. It was caught in review and the page restored; this digest is what stops the
+    next one going unnoticed.
+
+    The scan's damage is invisible in French for the same kind of reason: the OCR sets a
+    circumflex where the page has an acute or a grave, so `bière` arrives as `biêre`,
+    which is not a French word but looks like one.
+    """
+    assert [
+        (lesson_id, content.lesson.position, content.source.module, content.source.unit, content.source.page)
+        for lesson_id in sorted(_converted_ids("fr"))
+        for content in [store.get_lesson_content(lesson_id, instance_path=instance)]
+    ] == [
+        ("fr-fast-01-at-the-dry-cleaner", 1, "Student Text", "14", 1),
+        ("fr-fast-02-at-the-bakery", 2, "Student Text", "15", 1),
+        ("fr-fast-03-at-the-greengrocer", 3, "Student Text", "17", 1),
+        ("fr-fast-04-a-delivery-arrives", 4, "Student Text", "38", 1),
+        ("fr-fast-05-locked-out", 5, "Student Text", "39", 1),
+    ]
+
+    assert _rows_per_table(instance, "fr") == (47, 26, 60), "the five lessons' turns, notes and drills, as curated"
+
+    digest = hashlib.sha256(_shipped_text(instance, "fr").encode("utf-8")).hexdigest()
+    assert digest == "e583c989b775d278af8672903e604e8ad404f6ab82f355df11c260d0b0c33235", (
+        "the French a learner hears has changed; find out what moved before touching this line"
     )
 
 

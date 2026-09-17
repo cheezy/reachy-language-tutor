@@ -304,23 +304,23 @@ async def test_the_empty_language_signal_survives_the_real_dispatch_path(instanc
     both tools the way the realtime layer does -- a name and a JSON string -- and
     checks the answer a model would actually receive.
 
-    French, German and Portuguese carry a full syllabus and nothing written in it;
-    Italian and Spanish carry six converted units each. A learner must not be offered
-    those two sets as if they were the same thing.
+    German carries a full syllabus and nothing written in it; French, Italian,
+    Portuguese and Spanish carry converted units. A learner must not be offered those
+    two sets as if they were the same thing.
     """
     deps = _deps(instance)
 
-    empty = await _call("start_lesson", {"language": "French"}, deps)
+    empty = await _call("start_lesson", {"language": "German"}, deps)
     assert empty["started"] is False
     assert empty["reason"] == "lesson_not_written_yet"
-    assert set(empty["languages_with_material"]) == {"Italian", "Portuguese", "Spanish"}
+    assert set(empty["languages_with_material"]) == {"French", "Italian", "Portuguese", "Spanish"}
     # Nothing was pinned, so the tutor cannot then record a lesson it never started.
     assert deps.lesson_session.read_for(SEEDED_LEARNER) is None
 
     ready = await _call("start_lesson", {"language": "Italian"}, deps)
     assert ready["started"] is True, "a language with material is unaffected"
 
-    progress = await _call("get_progress", {"language": "French"}, deps)
+    progress = await _call("get_progress", {"language": "German"}, deps)
     assert progress["has_material"] is False
     italian = await _call("get_progress", {"language": "Italian"}, deps)
     assert italian["has_material"] is True
@@ -328,5 +328,5 @@ async def test_the_empty_language_signal_survives_the_real_dispatch_path(instanc
     # And the not-taught answer splits the catalog rather than listing five names as
     # if the robot could teach five languages.
     unknown = await _call("get_progress", {"language": UNTAUGHT_NAME}, deps)
-    assert set(unknown["languages_with_material"]) == {"Italian", "Portuguese", "Spanish"}
-    assert set(unknown["languages_without_material_yet"]) == {"French", "German"}
+    assert set(unknown["languages_with_material"]) == {"French", "Italian", "Portuguese", "Spanish"}
+    assert set(unknown["languages_without_material_yet"]) == {"German"}

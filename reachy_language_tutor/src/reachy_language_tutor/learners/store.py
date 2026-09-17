@@ -111,7 +111,19 @@ SCHEMA_VERSION = 5
 # 7, read on the page image). But a cue whose right answer is the cue gives a tutor
 # nothing to mark, and the same phrase already ships as this lesson's FIRST repetition
 # drill, so reclassifying it would have duplicated that one. D37 dropped it instead.
-SEED_VERSION = 8
+# Version 9 carries the FIVE converted Metropolitan French lessons -- five rather than
+# six because unit 12 was dropped during curation -- and moves the six French
+# placeholders 1-6 to 6-11.
+#
+# That is NOT quite the shape versions 4, 6 and 7 gave the other three. Italian, Spanish
+# and Portuguese each shipped six units and moved their placeholders 1-6 -> 7-12, where
+# source and destination are DISJOINT. French shifts six placeholders by five, so the
+# two ranges OVERLAP at position 6: fr-06-daily-routine is sitting on it at the moment
+# fr-01-greetings has to claim it. The descending-order rule above is what makes that
+# safe, and French is the first language that actually depends on it rather than merely
+# being consistent with it -- which is why it now has its own case in
+# test_the_upgrade_every_installed_robot_will_actually_take.
+SEED_VERSION = 9
 LEARNER_DB_FILENAME = "learners.v1.sqlite3"
 # The converted course material, beside this module and shipped as package data. Its
 # bytes are part of the seeded catalog, so the shipped-catalog fingerprint covers the
@@ -217,36 +229,36 @@ SEED_LESSONS: tuple[tuple[str, str, int, str, str], ...] = (
     (
         "fr-01-greetings",
         "fr",
-        1,
+        6,
         "Greetings and politeness",
         "Greet someone and use bonjour, salut, s'il vous plaît, merci, au revoir.",
     ),
     (
         "fr-02-introductions",
         "fr",
-        2,
+        7,
         "Introducing yourself",
         "Give your name, age, and where you live: je m'appelle…, j'ai … ans, j'habite à…",
     ),
-    ("fr-03-numbers", "fr", 3, "Numbers one to twenty", "Count to twenty out loud and say a price and a time."),
+    ("fr-03-numbers", "fr", 8, "Numbers one to twenty", "Count to twenty out loud and say a price and a time."),
     (
         "fr-04-ordering-food",
         "fr",
-        4,
+        9,
         "At the café",
         "Order a drink and a pastry, then ask for the bill: je voudrais…, l'addition, s'il vous plaît.",
     ),
     (
         "fr-05-directions",
         "fr",
-        5,
+        10,
         "Getting around town",
         "Ask the way to the station and understand tout droit, à gauche, à droite.",
     ),
     (
         "fr-06-daily-routine",
         "fr",
-        6,
+        11,
         "Your daily routine",
         "Describe your morning with reflexive verbs: je me lève, je me prépare.",
     ),

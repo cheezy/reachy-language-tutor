@@ -486,8 +486,16 @@ def test_next_lesson_is_unambiguous(tmp_path: Path) -> None:
         after = connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params("es", "sample-learner")).fetchone()
         assert after["id"] == "es-03-numbers", "a 'partial' result must not count as done"
 
+        # German is the example of a language whose placeholders are untouched, because
+        # it is the one left that has a syllabus and no converted material. French held
+        # this role until its own units shipped; the claim is about a placeholder-only
+        # language rather than about French, so the example moves rather than the claim.
+        german = connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params("de", "sample-learner")).fetchone()
+        assert german["id"] == "de-01-greetings"
+
+        # And French now leads with a converted unit, the same shape Italian and Spanish do.
         french = connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params("fr", "sample-learner")).fetchone()
-        assert french["id"] == "fr-01-greetings"
+        assert french["id"] == "fr-fast-01-at-the-dry-cleaner"
 
         assert connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params(UNTAUGHT_CODE, "sample-learner")).fetchone() is None
     finally:
@@ -976,6 +984,7 @@ SHIPPED_CATALOGS = {
     6: "88b65ed855be0929d8b374959e8e0444121852a7db6db0c090fdd4945cde455b",  # + six Spanish Cycles converted from the FSI Spanish FAST; the six Spanish placeholders moved 1-6 -> 7-12
     7: "3260f24e34523574793ba2838d9246fc9c619c072d6278cb58e06b0950b5934e",  # + six Brazilian Portuguese lessons converted from the FSI Portuguese FAST; the six Portuguese placeholders moved 1-6 -> 7-12
     8: "a18f609e776bc56d7596d5397fa0eb6ced821dbf3e426a5cce27509005dca41d",  # - Spanish Cycle 2's self-answering greeting drill (D37); no lesson gained or changed a line
+    9: "bc6bfdb34fa16f942fff8336a0c7b7a02bb3651d96068ac81f1dfe5f73de6cee",  # + five Metropolitan French lessons converted from the FSI French FAST; the six French placeholders moved 1-6 -> 6-11
 }
 
 

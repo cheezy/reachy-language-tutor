@@ -370,16 +370,18 @@ Seeded so the app is demonstrable before any real learner exists.
 | `it` | Italian |
 | `pt` | Portuguese |
 
-### Lessons (48 total)
+### Lessons (53 total)
 
 Thirty of these are the original title-and-objective placeholders, six per language.
-The other eighteen are **converted units** carrying real dialogue, usage notes and
+The other twenty-three are **converted units** carrying real dialogue, usage notes and
 drills, marked **C** below: six Italian from the FSI Italian FAST, six Spanish from the
-FSI Spanish FAST, and six Brazilian Portuguese from the FSI Portuguese FAST. A
-converted unit takes a position at the FRONT of its language, so the placeholders
-behind it moved up — Italian's, Spanish's and Portuguese's now sit at 7-12, while
-French and German are untouched at 1-6 because nothing has been converted for them
-yet.
+FSI Spanish FAST, six Brazilian Portuguese from the FSI Portuguese FAST, and five
+Metropolitan French from the FSI French FAST. A converted unit takes a position at the
+FRONT of its language, so the placeholders behind it moved up — Italian's, Spanish's
+and Portuguese's now sit at 7-12. French's sit at 6-11 rather than 7-12, because that
+course shipped five units rather than six: unit 12 was approved at screening and
+dropped during curation. German is untouched at 1-6 because nothing has been converted
+for it yet.
 
 That asymmetry is the current state of the content gap, not a design: two of the five
 languages the catalog advertises still have no material at all.
@@ -404,12 +406,17 @@ settle".
 | `es-04-ordering-food` | Spanish | 10 | Ordering food and drink | Order in a café and ask what something costs: quisiera…, ¿cuánto cuesta? |
 | `es-05-directions` | Spanish | 11 | Asking for directions | Ask where a place is and follow a simple answer: ¿dónde está…?, a la derecha, a la izquierda. |
 | `es-06-daily-routine` | Spanish | 12 | Talking about your day | Describe a typical day using present-tense verbs and times of day. |
-| `fr-01-greetings` | French | 1 | Greetings and politeness | Greet someone and use bonjour, salut, s'il vous plaît, merci, au revoir. |
-| `fr-02-introductions` | French | 2 | Introducing yourself | Give your name, age, and where you live: je m'appelle…, j'ai … ans, j'habite à… |
-| `fr-03-numbers` | French | 3 | Numbers one to twenty | Count to twenty out loud and say a price and a time. |
-| `fr-04-ordering-food` | French | 4 | At the café | Order a drink and a pastry, then ask for the bill: je voudrais…, l'addition, s'il vous plaît. |
-| `fr-05-directions` | French | 5 | Getting around town | Ask the way to the station and understand tout droit, à gauche, à droite. |
-| `fr-06-daily-routine` | French | 6 | Your daily routine | Describe your morning with reflexive verbs: je me lève, je me prépare. |
+| `fr-fast-01-at-the-dry-cleaner` **C** | French | 1 | Taking clothes to be cleaned | Hand over clothes to be cleaned, count what you are leaving, and arrange when to collect them: je voudrais faire nettoyer ces vêtements. |
+| `fr-fast-02-at-the-bakery` **C** | French | 2 | At the bakery | Ask for bread by name, add to your order, and hear the price: un pain, s'il vous plaît; ça fait 14 euros cinquante. |
+| `fr-fast-03-at-the-greengrocer` **C** | French | 3 | At the greengrocer | Ask for fruit and vegetables by weight and turn down what you don't want: je voudrais un kilo de tomates; je ne mange jamais d'ail. |
+| `fr-fast-04-a-delivery-arrives` **C** | French | 4 | A delivery arrives | Let a delivery in, say where to put it and sign for it: je voudrais la mettre ici, dans ce coin. |
+| `fr-fast-05-locked-out` **C** | French | 5 | Locked out | Telephone for help when you cannot get in, give the address and understand what it will cost: j'ai laissé ma clef chez moi. |
+| `fr-01-greetings` | French | 6 | Greetings and politeness | Greet someone and use bonjour, salut, s'il vous plaît, merci, au revoir. |
+| `fr-02-introductions` | French | 7 | Introducing yourself | Give your name, age, and where you live: je m'appelle…, j'ai … ans, j'habite à… |
+| `fr-03-numbers` | French | 8 | Numbers one to twenty | Count to twenty out loud and say a price and a time. |
+| `fr-04-ordering-food` | French | 9 | At the café | Order a drink and a pastry, then ask for the bill: je voudrais…, l'addition, s'il vous plaît. |
+| `fr-05-directions` | French | 10 | Getting around town | Ask the way to the station and understand tout droit, à gauche, à droite. |
+| `fr-06-daily-routine` | French | 11 | Your daily routine | Describe your morning with reflexive verbs: je me lève, je me prépare. |
 | `it-fast-01-what-time-is-it` **C** | Italian | 1 | What time is it? | Ask and tell the time, and say where you have come from: che ora è?, sono le dieci e venti, da dove arriva? |
 | `it-fast-02-room-service` **C** | Italian | 2 | Room service | Say where things go and ask for what you need in a hotel room: le metta qui, Le occorre altro?, vorrei un'altra coperta. |
 | `it-fast-03-taxi-and-haircut` **C** | Italian | 3 | A taxi, and waiting your turn | Ask for a taxi, say where to take you, and ask how long the wait is: mi chiami un tassì, mi porti in..., quanto c'è da aspettare? |

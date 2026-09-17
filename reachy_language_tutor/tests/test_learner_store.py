@@ -148,15 +148,20 @@ def test_get_progress_reflects_seeded_spanish_history(instance: Path) -> None:
 
 
 def test_get_progress_untouched_language_starts_at_lesson_one(instance: Path) -> None:
-    """A language that is taught but never practised is a fresh start, not unknown."""
-    progress = store.get_progress("sample-learner", "fr", instance_path=instance)
+    """A language that is taught but never practised is a fresh start, not unknown.
+
+    German, because the claim is about a language carrying only its placeholder
+    syllabus. French held this role until its converted units shipped and now carries
+    eleven lessons rather than six.
+    """
+    progress = store.get_progress("sample-learner", "de", instance_path=instance)
 
     assert progress is not None
     assert progress.completed == ()
     assert progress.attempts == ()
     assert len(progress.remaining) == 6
     assert progress.next_lesson is not None
-    assert progress.next_lesson.id == "fr-01-greetings"
+    assert progress.next_lesson.id == "de-01-greetings"
 
 
 @pytest.mark.parametrize("language_code", [UNTAUGHT_CODE, "ES", ""])

@@ -57,6 +57,9 @@ APPROVED_UNITS: Mapping[str, frozenset[str]] = MappingProxyType(
         # which and why. Units are named by the arabic lesson number the course prints;
         # this volume uses no roman numerals for its lessons.
         "FSI Brazilian Portuguese FAST, Volume I": frozenset({"2", "5", "6", "7", "8", "12"}),
+        "FSI Metropolitan French FAST, Student Text": frozenset(
+            {"14", "15", "17", "38", "39"}
+        ),
     }
 )
 
