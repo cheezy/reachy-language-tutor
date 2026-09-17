@@ -24,6 +24,7 @@ docs/converting-a-course.md and docs/curation-log-italian-fast.md.
 import re
 import json
 import hashlib
+from typing import Any
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -117,6 +118,28 @@ def _lowest_placeholder(instance_path: Path, language_code: str) -> str:
     placeholders = [str(row["id"]) for row in rows if str(row["id"]) not in converted]
     assert placeholders, f"{language_code} has no unconverted lesson, so nothing can collide downward"
     return placeholders[0]
+
+
+def _teach_the_pinned_lesson(deps: Any, lesson_id: str, instance_path: Path) -> None:
+    """Say every one of a lesson's own printed lines, as the tutor would out loud.
+
+    Stands in for the conversation handler, which is what calls note_spoken in the
+    running app. Kept in one place so that a test needing a genuinely-taught lesson
+    cannot accidentally half-teach one and then assert on a downgrade it did not mean
+    to trigger.
+    """
+    content = store.get_lesson_content(lesson_id, instance_path=instance_path)
+    assert content is not None, f"{lesson_id} has no content to teach"
+    for turn in content.turns:
+        deps.lesson_session.note_spoken(deps.current_learner_id, turn.text)
+        # The learner answering back. A completion needs both halves -- material said
+        # AND somebody there to say it to -- so a helper that only spoke would be
+        # simulating a tutor reciting at an empty chair.
+        deps.lesson_session.note_learner_turn(deps.current_learner_id)
+    for drill in content.drills:
+        for line in (drill.target_text, drill.cue, drill.expected_response):
+            if line:
+                deps.lesson_session.note_spoken(deps.current_learner_id, line)
 
 
 def _converted_language_codes() -> list[str]:
@@ -1419,6 +1442,15 @@ async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instanc
 
     pinned = deps.lesson_session.read_for(learner)
     assert pinned is not None and pinned.lesson_id == expected_id
+
+    # Teach it, before claiming it was taught. finish_lesson checks the app's own
+    # record of how much of the lesson was actually said out loud before it will write
+    # a completion (D38), and in the running app that record is fed by the conversation
+    # handler as the tutor speaks. A test driving the tools directly has no handler, so
+    # it says the lines itself -- which is the honest simulation of a lesson happening,
+    # and without it this test would be asserting that a lesson nobody taught can be
+    # completed, which is the defect rather than the feature.
+    _teach_the_pinned_lesson(deps, expected_id, instance)
 
     # The half W24 could not run. Called between the open and the save, because that is
     # the only window in which a lesson is pinned -- which is itself the point.

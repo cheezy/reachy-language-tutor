@@ -80,6 +80,32 @@ async def _call(name: str, args: dict[str, Any], deps: ToolDependencies) -> dict
     return await core_tools.dispatch_tool_call(name, json.dumps(args), deps)
 
 
+def _teach_the_pinned_lesson(deps: Any, instance_path: Path) -> None:
+    """Say the running lesson's own printed lines, as the tutor would out loud.
+
+    finish_lesson will not write a completion for a lesson the app has no record of
+    anybody teaching (D38), and in the running app that record is fed by the
+    conversation handler as the tutor speaks. These tests drive the tools directly with
+    no handler attached, so they stand in for it. Reads the pinned lesson through
+    read_for rather than taking a lesson id, so no lesson id enters the test body --
+    which is the property the flow test below exists to demonstrate.
+    """
+    session = deps.lesson_session.read_for(deps.current_learner_id)
+    assert session is not None, "nothing is pinned, so there is no lesson to teach"
+    content = store.get_lesson_content(session.lesson_id, instance_path=instance_path)
+    assert content is not None
+    for turn in content.turns:
+        deps.lesson_session.note_spoken(deps.current_learner_id, turn.text)
+        # The learner answering back. A completion needs both halves -- material said
+        # AND somebody there to say it to -- so a helper that only spoke would be
+        # simulating a tutor reciting at an empty chair.
+        deps.lesson_session.note_learner_turn(deps.current_learner_id)
+    for drill in content.drills:
+        for line in (drill.target_text, drill.cue, drill.expected_response):
+            if line:
+                deps.lesson_session.note_spoken(deps.current_learner_id, line)
+
+
 @pytest.mark.asyncio
 async def test_the_whole_lesson_flow_runs_through_the_real_dispatch_path(instance: Path) -> None:
     """Greet, look up progress, record a result, and see the figures move."""
@@ -101,8 +127,10 @@ async def test_the_whole_lesson_flow_runs_through_the_real_dispatch_path(instanc
     assert started["started"] is True
     assert started["lesson"]["title"] == lesson["title"]
 
+    _teach_the_pinned_lesson(deps, instance)
     saved = await _call("finish_lesson", {"outcome": "completed"}, deps)
     assert saved["recorded"] is True
+    assert saved["outcome"] == "completed", "a lesson that was taught must record as completed"
     assert saved["lesson_title"] == lesson["title"]
 
     after = await _call("get_progress", {"language": "Spanish"}, deps)
@@ -131,8 +159,10 @@ async def test_a_recorded_result_survives_a_restart(instance: Path) -> None:
 
     started = await _call("start_lesson", {"language": "Italian"}, deps)
     assert started["started"] is True
+    _teach_the_pinned_lesson(deps, instance)
     saved = await _call("finish_lesson", {"outcome": "completed"}, deps)
     assert saved["recorded"] is True
+    assert saved["outcome"] == "completed"
     completed_before_restart = saved["completed_count"]
 
     reader = """

@@ -15,7 +15,6 @@ scripts/calibrate_faceprints.py exists for, and this file does not pretend other
 """
 
 from __future__ import annotations
-
 import ast
 import math
 import struct
@@ -746,6 +745,11 @@ def test_the_notice_matches_what_actually_leaves_the_robot() -> None:
         "start_lesson.py": "Anything else it looks up about you",
         "finish_lesson.py": "Anything else it looks up about you",
         "get_lesson_content.py": "Anything else it looks up about you",
+        # Reads which lessons this person has finished, in order to put the last one
+        # back on their path (D38). Same sentence as the other lesson tools: it tells
+        # the household nothing new about what leaves the robot, because it looks up
+        # exactly what get_progress already does.
+        "redo_lesson.py": "Anything else it looks up about you",
         # Found by this guard on its first run, which is the point of deriving the
         # set: a shared helper the hand-written list would not have contained.
         "_language_choice.py": "Anything else it looks up about you",
@@ -1528,8 +1532,8 @@ def test_who_may_consent_must_be_stated_every_time() -> None:
 
 def test_the_command_line_makes_who_consented_a_required_choice() -> None:
     """The other surface, because the flow's signature does not bind the operator."""
-    import argparse
     import sys
+    import argparse
     from unittest.mock import patch
 
     from reachy_language_tutor.utils import parse_args

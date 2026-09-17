@@ -610,3 +610,236 @@ async def test_nothing_personal_reaches_a_log(instance: Path, caplog: pytest.Log
         assert SPANISH_NEXT not in rendered, rendered
         for title in titles:
             assert title not in rendered, rendered
+
+
+# --- The evidence gate (D38) ----------------------------------------------------------
+#
+# A learner who could not say the first of a lesson's fifteen turns said "we're done, I
+# completed it", and the lesson was written off on that sentence. CLAUDE.md says the
+# model does not decide what is completed; until this gate, it did.
+#
+# Note what does NOT separate that session from a real one: it ran two minutes across
+# twenty conversation turns. Only coverage of the lesson's own lines tells them apart,
+# which is why these cases are written in terms of lines said rather than time or talk.
+
+
+def _pinned_with_lines(instance: Path, lines: tuple[str, ...], **overrides: Any) -> ToolDependencies:
+    """Dependencies with a lesson running whose coverage can actually be measured."""
+    overrides.setdefault("current_learner_id", SEEDED_LEARNER)
+    overrides.setdefault("instance_path", instance)
+    deps = _deps(**overrides)
+    deps.lesson_session.open(lesson_id=SPANISH_NEXT, language_code=SPANISH, teachable_lines=lines)
+    return deps
+
+
+_SIX_LINES = ("uno", "dos", "tres", "cuatro", "cinco", "seis")
+
+
+@pytest.mark.asyncio
+async def test_a_completion_is_downgraded_when_almost_none_of_the_lesson_was_said(instance: Path) -> None:
+    """The D38 session itself: one line reached, completion claimed."""
+    deps = _pinned_with_lines(instance, _SIX_LINES)
+    deps.lesson_session.note_spoken(SEEDED_LEARNER, "empecemos: uno")
+
+    result = await FinishLesson()(deps, outcome="completed")
+
+    # Recorded, not refused -- a refusal would lose the work the learner did do and
+    # leave the tutor arguing with them, which this fix is explicitly not allowed to do.
+    assert result["recorded"] is True
+    assert result["outcome"] == "partial", "a lesson nobody taught was written down as completed"
+    assert result["not_completed_because"] == "too_little_of_the_lesson_was_practised"
+    assert [a.outcome for a in _attempts_for(instance, SPANISH_NEXT)] == ["partial"]
+
+
+@pytest.mark.asyncio
+async def test_a_completion_stands_when_the_lesson_really_was_taught(instance: Path) -> None:
+    """The other direction, which matters as much: the gate must not block a real one.
+
+    Without this case the gate could refuse every completion and still look correct.
+    """
+    deps = _pinned_with_lines(instance, _SIX_LINES)
+    for line in _SIX_LINES:
+        deps.lesson_session.note_spoken(SEEDED_LEARNER, f"repite conmigo: {line}")
+        # And the learner answering. Coverage on its own is the tutor's own output, so
+        # a completion needs the person it was said to as well.
+        deps.lesson_session.note_learner_turn(SEEDED_LEARNER)
+
+    result = await FinishLesson()(deps, outcome="completed")
+
+    assert result["outcome"] == "completed"
+    assert "not_completed_because" not in result
+    assert [a.outcome for a in _attempts_for(instance, SPANISH_NEXT)] == ["completed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", sorted(set(OUTCOMES) - {"completed"}))
+async def test_the_gate_touches_no_outcome_but_completed(instance: Path, outcome: str) -> None:
+    """Only 'completed' removes a lesson from a learner's path, so only it is gated."""
+    deps = _pinned_with_lines(instance, _SIX_LINES)
+
+    result = await FinishLesson()(deps, outcome=outcome)
+
+    assert result["outcome"] == outcome
+    assert "not_completed_because" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_lesson_whose_coverage_cannot_be_measured_is_not_presumed_untaught(instance: Path) -> None:
+    """Absence of evidence is reported as absence of evidence, not as a verdict.
+
+    A lesson pinned with no lines to watch for cannot be measured. Reading that as
+    "not worked through" would punish a learner for a wiring mistake somewhere above
+    them, so the completion stands. start_lesson always supplies the lines -- the case
+    below pins that -- so this is a fallback rather than a live path.
+    """
+    deps = _pinned_deps(instance)
+
+    result = await FinishLesson()(deps, outcome="completed")
+
+    assert result["outcome"] == "completed"
+    assert "not_completed_because" not in result
+
+
+@pytest.mark.asyncio
+async def test_the_downgrade_logs_counts_and_never_a_word_of_the_lesson(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The evidence is shape; the lesson's words are nobody's business on disk."""
+    deps = _pinned_with_lines(instance, _SIX_LINES)
+    deps.lesson_session.note_spoken(SEEDED_LEARNER, "uno")
+
+    with caplog.at_level(logging.INFO):
+        await FinishLesson()(deps, outcome="completed")
+
+    logged = "\n".join(f"{record.getMessage()} {record.args}" for record in caplog.records)
+    assert "downgraded" in logged, "the downgrade has to be visible to an operator at all"
+    for line in _SIX_LINES:
+        assert line not in logged, f"the lesson line {line!r} reached the log"
+    assert SEEDED_LEARNER not in logged
+
+
+@pytest.mark.asyncio
+async def test_reciting_the_whole_lesson_at_a_silent_learner_is_not_a_completion(instance: Path) -> None:
+    """The gate's own bypass, closed.
+
+    Coverage is built from what the TUTOR says, so on its own it is the model's output
+    grading the model's work: a tutor that recited every line at a child who never
+    spoke would clear it. That is the listed security consideration verbatim -- an
+    outcome a conversation can talk its way around is the same defect wearing a gate.
+    """
+    deps = _pinned_with_lines(instance, _SIX_LINES)
+    for line in _SIX_LINES:
+        deps.lesson_session.note_spoken(SEEDED_LEARNER, line)
+    assert deps.lesson_session.coverage_for(SEEDED_LEARNER) == (6, 6, 0), "every line said, nobody there"
+
+    result = await FinishLesson()(deps, outcome="completed")
+
+    assert result["outcome"] == "partial"
+    assert result["not_completed_because"] == "too_little_of_the_lesson_was_practised"
+
+
+@pytest.mark.asyncio
+async def test_every_shipped_lesson_that_can_start_can_also_be_measured(instance: Path) -> None:
+    """The two gates have to mean the same thing, or the evidence gate goes inert.
+
+    lesson_has_nothing_to_teach decides whether a lesson may START; _lines_worth_hearing
+    decides whether it can be MEASURED. While the first counted notes and the second did
+    not, a notes-only lesson could start and then record a completion with nothing
+    taught -- the D19 family, where a guard does not mean the same thing as the code it
+    protects.
+
+    Asserted over every lesson in the shipped catalog rather than the converted ones, so
+    a future lesson of an unusual shape fails here rather than silently disabling the
+    gate for itself.
+    """
+    from reachy_language_tutor.learners import get_progress, get_language_catalog
+    from reachy_language_tutor.tools.start_lesson import _lines_worth_hearing
+    from reachy_language_tutor.tools.get_lesson_content import lesson_has_nothing_to_teach
+
+    checked = 0
+    for language in get_language_catalog(instance_path=instance):
+        progress = get_progress(SEEDED_LEARNER, language.code, instance_path=instance)
+        assert progress is not None
+        for lesson in progress.completed + progress.remaining:
+            content = store.get_lesson_content(lesson.id, instance_path=instance)
+            assert content is not None
+            if lesson_has_nothing_to_teach(content):
+                continue  # start_lesson refuses it, so it never reaches the gate
+            checked += 1
+            assert _lines_worth_hearing(content), (
+                f"{lesson.id} is allowed to start but has no measurable lines, so a completion "
+                "for it would never be checked"
+            )
+    assert checked, "no startable lesson was examined, so this proves nothing"
+
+
+def test_a_notes_only_lesson_can_be_measured_as_well_as_started() -> None:
+    """The two gates, compared on the shape that separated them.
+
+    The catalog case above passes today whether or not notes are counted, because no
+    shipped lesson is notes-only -- so on its own it is a test that cannot fail for the
+    reason it names. This one constructs that shape directly, which is what makes the
+    pair honest: remove notes from _lines_worth_hearing and this fails immediately.
+    """
+    from reachy_language_tutor.learners.models import UsageNote, LessonContent
+    from reachy_language_tutor.tools.start_lesson import _lines_worth_hearing
+    from reachy_language_tutor.tools.get_lesson_content import lesson_has_nothing_to_teach
+
+    notes_only = LessonContent(
+        lesson=store.get_lesson(SPANISH_NEXT, instance_path=None) or MagicMock(),
+        source=None,
+        dialogue_title=None,
+        turns=(),
+        notes=(UsageNote(number=1, text="El artículo cambia con el sustantivo."),),
+        drills=(),
+    )
+
+    assert not lesson_has_nothing_to_teach(notes_only), "the start gate would refuse this, so there is no gap"
+    assert _lines_worth_hearing(notes_only), (
+        "a lesson the start gate lets through has nothing to measure, so the evidence gate goes inert for exactly it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_talking_before_the_lesson_starts_is_not_taking_part_in_it(instance: Path) -> None:
+    """Participation has to be participation IN the lesson, not merely nearby.
+
+    Counted from the moment the lesson was pinned, the learner half certified only that
+    somebody spoke at some point: a few remarks first, then the tutor reciting the whole
+    lesson to itself, and the gate opened. Turns are now counted only once some of the
+    material has actually been said, so they are replies to teaching rather than
+    chatter that happened to precede it.
+    """
+    deps = _pinned_with_lines(instance, _SIX_LINES)
+    for _ in range(6):
+        deps.lesson_session.note_learner_turn(SEEDED_LEARNER)
+    assert deps.lesson_session.coverage_for(SEEDED_LEARNER) == (0, 6, 0), "chatter before teaching was counted"
+
+    for line in _SIX_LINES:
+        deps.lesson_session.note_spoken(SEEDED_LEARNER, line)
+
+    result = await FinishLesson()(deps, outcome="completed")
+
+    assert result["outcome"] == "partial"
+    assert result["not_completed_because"] == "too_little_of_the_lesson_was_practised"
+
+
+def test_matching_keeps_letters_and_digits_and_drops_everything_else() -> None:
+    """The allow-list, exercised on punctuation no shipped lesson happens to use yet.
+
+    The point of naming what is permitted rather than what is stripped is that the next
+    lesson's guillemets or ampersand are handled by the rule instead of by whoever last
+    edited a list of characters. Accents stay, because they are letters and because a
+    course typed off page images exists to preserve exactly them.
+    """
+    from reachy_language_tutor.lesson_session import _for_matching
+
+    assert _for_matching("«Bom dia» — 3.º andar & co.") == "bom dia 3 º andar co"
+    assert _for_matching("Portaria! Às suas ordens!") == "portaria às suas ordens"
+    # The whole reason accents are not folded away.
+    assert _for_matching("manhã") != _for_matching("manha")
+    assert _for_matching("¿Qué es esto?") == "qué es esto"
+    assert _for_matching("Não, só isso.") == "não só isso"
+    # Inverted punctuation goes, the accent stays -- so an unaccented rendering of the
+    # same words is NOT the same line.
+    assert _for_matching("¿Qué es esto?") != _for_matching("Que es esto?")

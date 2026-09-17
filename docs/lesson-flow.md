@@ -75,13 +75,20 @@ household with two.
 
 `NEXT_LESSON_SQL` (`learners/store.py:364`) is the single source of truth:
 
-> the lowest-positioned lesson in that language with no `completed` result for that
-> learner.
+> the lowest-positioned lesson in that language whose LATEST result for that learner
+> is not a `completed` one.
 
 **A `partial` or a `skipped` attempt does not advance anyone.** Only `completed` does.
 That rule is why a learner who abandoned lesson three is offered lesson three again
 rather than lesson four, and it is the behaviour most likely to be got wrong by a
 plausible-looking reimplementation.
+
+**And a later attempt overrules an earlier one** (D38). "Finished" reads the last word
+on a lesson rather than scanning its whole history for a completion, which is what lets
+`redo_lesson` put a wrongly-completed lesson back on the path: it pins the lesson, the
+learner takes it again, and the outcome `finish_lesson` writes at the end supersedes the
+old completion. Nothing is deleted to do that, and `redo_lesson` itself writes nothing —
+`finish_lesson` remains the only conversation-reachable writer of `lesson_results`.
 
 Three different empty answers, kept distinct because they mean different things to the
 person listening:

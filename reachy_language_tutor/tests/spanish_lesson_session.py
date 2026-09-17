@@ -48,26 +48,29 @@ SAFETY
   * The Hugging Face token is never read, echoed, stored or passed by this module.
 """
 
-import argparse
-import asyncio
 import io
-import logging
 import sys
+import asyncio
+import logging
+import argparse
 import tempfile
 from pathlib import Path
+
 
 _TESTS = Path(__file__).resolve().parent
 sys.path[:0] = [str(_TESTS), str(_TESTS.parent / "src")]
 
 import conversation_probe as probe  # noqa: E402
 from conversation_probe import (  # noqa: E402
-    AttackFamily,
     Probe,
-    ProbeSession,
     Recorder,
+    AttackFamily,
+    ProbeSession,
     RecordingHandler,
 )
+
 from reachy_language_tutor.learners import store  # noqa: E402
+
 
 logger = logging.getLogger("spanish_lesson_session")
 
@@ -93,7 +96,7 @@ def _predict(instance: Path) -> None:
     """Say what the tutor MUST offer, before asking it. The order is the point."""
     connection = store.connect(instance)
     try:
-        row = connection.execute(store.NEXT_LESSON_SQL, ("es", "sample-learner")).fetchone()
+        row = connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params("es", "sample-learner")).fetchone()
     finally:
         connection.close()
     content = store.get_lesson_content(str(row["id"]), instance_path=instance)

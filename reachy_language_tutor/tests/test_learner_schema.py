@@ -469,7 +469,7 @@ def test_next_lesson_is_unambiguous(tmp_path: Path) -> None:
         # learner has never attempted it -- so it is their next lesson, ahead of the
         # placeholders they worked through. That is what happens to a real learner
         # when content lands in front of them.
-        spanish = connection.execute(store.NEXT_LESSON_SQL, ("es", "sample-learner")).fetchone()
+        spanish = connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params("es", "sample-learner")).fetchone()
         assert spanish["id"] == "es-fast-01-getting-started-in-class"
 
         # The partial rule still has to be TESTED, not merely still true. It used to
@@ -483,13 +483,13 @@ def test_next_lesson_is_unambiguous(tmp_path: Path) -> None:
                 " VALUES (?, ?, 'completed', 90, 1)",
                 ("sample-learner", converted),
             )
-        after = connection.execute(store.NEXT_LESSON_SQL, ("es", "sample-learner")).fetchone()
+        after = connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params("es", "sample-learner")).fetchone()
         assert after["id"] == "es-03-numbers", "a 'partial' result must not count as done"
 
-        french = connection.execute(store.NEXT_LESSON_SQL, ("fr", "sample-learner")).fetchone()
+        french = connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params("fr", "sample-learner")).fetchone()
         assert french["id"] == "fr-01-greetings"
 
-        assert connection.execute(store.NEXT_LESSON_SQL, (UNTAUGHT_CODE, "sample-learner")).fetchone() is None
+        assert connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params(UNTAUGHT_CODE, "sample-learner")).fetchone() is None
     finally:
         connection.close()
 
@@ -551,7 +551,7 @@ def test_empty_catalog_still_produces_usable_database(
 
     connection = store.connect(tmp_path)
     try:
-        assert connection.execute(store.NEXT_LESSON_SQL, ("es", "sample-learner")).fetchone() is None
+        assert connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params("es", "sample-learner")).fetchone() is None
     finally:
         connection.close()
 
@@ -586,7 +586,7 @@ def test_fresh_instance_path_is_usable_on_first_start(tmp_path: Path) -> None:
 
     connection = store.connect(instance, create=False)
     try:
-        row = connection.execute(store.NEXT_LESSON_SQL, ("es", "sample-learner")).fetchone()
+        row = connection.execute(store.NEXT_LESSON_SQL, store.next_lesson_params("es", "sample-learner")).fetchone()
         assert row["id"] == "es-fast-01-getting-started-in-class"
     finally:
         connection.close()

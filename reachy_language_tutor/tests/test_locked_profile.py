@@ -55,15 +55,28 @@ from reachy_language_tutor import tools, config
 # built a second Tool base class, and _load_enabled_tools filters with issubclass, so it
 # matched nothing and the loader blamed the profile. This file used to carry a lookup helper
 # that fetched the module per call to dodge exactly that. See tools_module_graph.py.
-from reachy_language_tutor.learners import store
+#
+# (Import sorting moved this note off core_tools once. It is about THAT import and no
+# other; keep the two together.)
 from reachy_language_tutor.tools import core_tools
+from reachy_language_tutor.learners import store
 from reachy_language_tutor.profile_store import read_profile_from_directory
 from reachy_language_tutor.lesson_session import LessonSessionHolder
 
 
 # The tools this app exists to expose. Named here so that dropping one from the
 # profile fails with the name it dropped rather than as an arithmetic mismatch.
-LEARNER_TOOLS = {"get_profile", "get_progress", "start_lesson", "finish_lesson", "get_lesson_content"}
+LEARNER_TOOLS = {
+    "get_profile",
+    "get_progress",
+    "start_lesson",
+    "finish_lesson",
+    "get_lesson_content",
+    # Reads which lessons a learner has finished, so it is one of these rather than a
+    # utility: it has to be discoverable, registered and declared like the others, and
+    # dropping it from the profile should fail by name here.
+    "redo_lesson",
+}
 
 # The COMPLETE vocabulary a learner-reading tool may ask the model to fill in.
 #
@@ -674,6 +687,49 @@ def test_the_response_rules_survive_the_rewrite() -> None:
     assert "Speak the learner's language at the level they can follow" in text
 
 
+def test_the_rules_d38_added_are_actually_in_the_prompt() -> None:
+    """Two behavioural fixes that live only in prose, pinned so a trim cannot delete them.
+
+    D38's code half -- the evidence gate -- is held in place by its own tests. Its other
+    half is these two sentences, and nothing held them. One of them sits in the section
+    a test actively caps for length, so the next squeeze against that cap could have
+    removed the fix and left the suite green. This repository already pins the response
+    rules it cares about in the case above; these are pinned for the same reason.
+    """
+    text = _prompt()
+
+    # AC6: a learner who cannot say a line must not be answered with it a third time.
+    # The observed session repeated one sentence byte for byte across three attempts.
+    assert "If a line beats them twice, change tack rather than repeat it" in text
+    # AC5: never argue, and never report an outcome that was not the one recorded.
+    assert "take their word — never argue, never quiz them" in text
+    assert "say what was" in text and "actually saved" in text
+    # The route back exists and is reachable from the conversation.
+    assert "redo_lesson" in text
+
+
+def test_the_whole_prompt_stays_within_a_budget_of_its_own() -> None:
+    """A cap on one section is escapable by moving text into an uncapped neighbour.
+
+    Which is exactly what happened in D38: the lesson section's cap was raised, and one
+    of the two new sentences went into SCOPE instead -- the largest section and the only
+    one with no cap at all. That was the right PLACE for it (it is a truthfulness rule,
+    not a step in running a lesson), but the review was right that nothing would have
+    noticed had it been the wrong place.
+
+    So the whole prompt gets a budget too. It is deliberately loose -- this is a
+    backstop against silent growth, not a style rule -- and like the section cap it
+    should be raised deliberately, in the change that needs the room, rather than
+    trimmed around.
+    """
+    words = len(_prompt().split())
+
+    assert words <= 1500, (
+        f"the locked profile is now {words} words. Raise this in the change that needs the room "
+        "and say why, the way the lesson-section cap records its own raises."
+    )
+
+
 def test_the_lesson_section_does_not_outweigh_the_rules_it_sits_beside() -> None:
     """The named pitfall, measured: a lesson-flow section long enough to drown them.
 
@@ -694,16 +750,40 @@ def test_the_lesson_section_does_not_outweigh_the_rules_it_sits_beside() -> None
     next instruction that wants to live here should probably displace something rather
     than be added beside it. If a real edit needs the room, raise the cap in the same
     change that needs it and say why, rather than trimming prose to fit under a number.
+
+    RAISED BY D38, and this is that paragraph being taken at its word. A learner who
+    could not say a lesson's first line was answered with the same sentence three times
+    running, unvaried, and the only way out the conversation offered them was to claim
+    they had finished -- which the tutor then recorded. The fix has two halves and only
+    one of them is code: the app now checks how much of a lesson was actually said
+    before it will write a completion, and the profile has to tell the tutor to change
+    tack rather than repeat itself. That instruction belongs in RUNNING A LESSON and
+    nowhere else, so the room had to come from here.
+
+    Re-measured after that edit: RUNNING A LESSON is 341 words against 305, so 36 were
+    added and the cap moves 320 -> 350. The OTHER instruction D38 needed -- say what
+    finish_lesson actually saved rather than what was asked for -- was put in SCOPE
+    beside "never invent a progress figure", because it is a truthfulness rule rather
+    than a step in running a lesson; that placement is what kept this figure to 341
+    instead of 378.
+
+    The ratio bound moves too, 7x -> 8x, and that is the weaker half of this change so
+    it is worth saying plainly: the guard exists so the lesson section cannot drown the
+    response rules, CRITICAL RESPONSE RULES is still 45 words, and 341 is 7.6x it. The
+    bound is doing less work than it did. What should happen next is that the response
+    rules earn their weight back rather than that this multiplier keeps climbing -- a
+    third raise here should be read as evidence the balance is actually wrong.
     """
     sections = _sections(_locked_profile().instructions)
 
     assert "RUNNING A LESSON" in sections, "the lesson-flow section is gone"
     running = len(sections["RUNNING A LESSON"].split())
     rules = len(sections["CRITICAL RESPONSE RULES"].split())
-    # The bound below is strict, so 314 is the largest passing value: headroom is
-    # 314 - running, not 315 - running, which is how this docstring first said eight.
-    assert running <= 320, f"the lesson-flow section has grown to {running} words"
-    assert running < rules * 7, f"lesson flow {running} words against response rules {rules}"
+    # Both bounds strict, so 349 is the largest passing value under the cap and the
+    # ratio binds at rules * 8 - 1. Raised by D38; the docstring above says what was
+    # added, what it displaced into SCOPE, and why the ratio half is the weaker one.
+    assert running <= 350, f"the lesson-flow section has grown to {running} words"
+    assert running < rules * 8, f"lesson flow {running} words against response rules {rules}"
 
 
 def test_the_front_matter_still_parses_and_pins_schema_version_one() -> None:

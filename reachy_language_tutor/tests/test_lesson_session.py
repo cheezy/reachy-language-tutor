@@ -86,9 +86,9 @@ def _holder_for(learner_id: str | None = LEARNER_A) -> LessonSessionHolder:
     return LessonSessionHolder(learner_id)
 
 
-def _opened(holder: LessonSessionHolder) -> LessonSession:
+def _opened(holder: LessonSessionHolder, teachable_lines: tuple[str, ...] = ()) -> LessonSession:
     """Open the standard lesson, the starting point of most cases below."""
-    return holder.open(lesson_id=LESSON, language_code=LANGUAGE)
+    return holder.open(lesson_id=LESSON, language_code=LANGUAGE, teachable_lines=teachable_lines)
 
 
 def _log_surface(record: logging.LogRecord) -> str:
@@ -240,7 +240,13 @@ def test_open_takes_no_learner_argument_at_all() -> None:
     """
     parameters = set(inspect.signature(LessonSessionHolder.open).parameters)
 
-    assert parameters == {"self", "lesson_id", "language_code", "opened_at"}
+    # teachable_lines is the lesson's own printed text, not anybody's identity: it is
+    # what the holder compares against what the tutor says, so that finish_lesson can
+    # tell a lesson that happened from one that did not. The property this test guards
+    # is unchanged -- there is still no learner parameter, and open() still pins only
+    # for the learner the holder was built for.
+    assert parameters == {"self", "lesson_id", "language_code", "opened_at", "teachable_lines"}
+    assert not any("learner" in name for name in parameters), "open() must never take an identity"
 
 
 def test_a_holder_bound_to_nobody_refuses_to_pin_a_lesson() -> None:
@@ -399,11 +405,59 @@ def test_a_padded_lesson_id_is_refused_rather_than_quietly_repaired() -> None:
 # --- The privacy properties -----------------------------------------------------------
 
 
-def test_the_holder_offers_no_way_to_read_a_session_without_naming_a_learner() -> None:
-    """An allow-list on the public surface: a bare .session would be an ambient read."""
-    surface = {name for name in dir(_holder_for()) if not name.startswith("_")}
+# Every public reader of the holder, and the "nothing" each must answer to a learner
+# the running lesson was not opened for. An ALLOW-LIST: a method absent from here fails
+# the surface assertion below, so a new reader cannot be added without deciding what it
+# answers a stranger.
+_READERS_AND_THEIR_REFUSALS = {
+    "read_for": None,
+    "coverage_for": None,
+    "worked_through_for": None,
+}
 
-    assert surface == {"open", "read_for", "clear"}
+
+def test_the_holder_offers_no_way_to_read_a_session_without_naming_a_learner() -> None:
+    """A bare .session would be an ambient read, and so would a reader taking no learner.
+
+    Two halves, because the name list alone stopped being enough once the holder grew
+    readers. The surface is still pinned -- but every member of it that can see session
+    state must also NAME the learner it is answering for, in its signature, and hand a
+    stranger nothing. A reader that skipped that is the shape which serves one household
+    member's lesson to the next.
+    """
+    import inspect
+
+    holder = _holder_for()
+    surface = {name for name in dir(holder) if not name.startswith("_")}
+
+    assert surface == {"open", "clear", "note_spoken", "note_learner_turn", *_READERS_AND_THEIR_REFUSALS}
+
+    # open() is the writer and is bound to the holder's own learner; clear() destroys
+    # rather than reveals. Everything else touches session state on somebody's behalf.
+    for name in surface - {"open", "clear"}:
+        parameters = set(inspect.signature(getattr(holder, name)).parameters)
+        assert "learner_id" in parameters, (
+            f"{name} touches session state without naming a learner, which is an ambient read"
+        )
+
+
+def test_a_stranger_reads_nothing_and_marks_no_coverage_on_somebody_elses_lesson() -> None:
+    """The signature check above is structural; this is the behaviour it stands for.
+
+    Parametrised over every reader by name, so a reader added to the allow-list without
+    the refusal wired up fails here rather than shipping.
+    """
+    holder = _holder_for()
+    _opened(holder, teachable_lines=("uma frase",))
+
+    for name, nothing in _READERS_AND_THEIR_REFUSALS.items():
+        assert getattr(holder, name)(LEARNER_B) is nothing, f"{name} answered a learner it was not opened for"
+
+    # And a stranger's words cannot count towards the lesson somebody else is taking,
+    # on either side of it: not as a line covered, not as a turn taken.
+    holder.note_spoken(LEARNER_B, "uma frase")
+    holder.note_learner_turn(LEARNER_B)
+    assert holder.coverage_for(LEARNER_A) == (0, 1, 0), "a stranger's speech was counted towards the lesson"
 
 
 def test_the_sessions_repr_carries_neither_the_learner_id_nor_the_lesson_id() -> None:

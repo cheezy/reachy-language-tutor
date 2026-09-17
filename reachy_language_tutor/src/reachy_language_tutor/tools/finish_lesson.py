@@ -133,6 +133,37 @@ class FinishLesson(Tool):
         # places -- which is the pitfall this task names.
         score = kwargs.get("score")
 
+        # THE EVIDENCE GATE (D38). "Completed" is the one outcome that removes a lesson
+        # from a learner's path for good, and until now it was a word the conversation
+        # could simply assert: a learner who failed the first of fifteen turns five
+        # times said "we're done, I completed it" and the lesson was written off on that
+        # sentence. CLAUDE.md says the model does not decide what is completed. It did.
+        #
+        # So the app checks its own record of how much of the lesson was actually said
+        # out loud, gathered by the conversation handler and never reported by the
+        # model. Three answers: True records the completion untouched, None means the
+        # app could not measure and therefore does not presume, and False DOWNGRADES.
+        #
+        # Downgrade rather than refuse, and the reason is in this module's own rules:
+        # every refusal here means nothing was saved. Refusing would leave a learner who
+        # really did work with no record of it, the lesson still pinned, and the tutor
+        # telling them it could not save -- which is the arguing-with-a-child this fix
+        # is explicitly not allowed to do. "Partial" is both kinder and truer: they got
+        # part way through, and the lesson stays on their path.
+        downgraded_from = None
+        if outcome == "completed" and deps.lesson_session.worked_through_for(learner_id) is False:
+            coverage = deps.lesson_session.coverage_for(learner_id)
+            said, printed, turns = coverage if coverage is not None else (0, 0, 0)
+            # Counts, never lines. This is the logging rule: the shape of the evidence
+            # is an operator's business and the words of it are nobody's.
+            logger.info(
+                "finish_lesson: completion downgraded to partial, lesson lines said=%d of %d, learner turns=%d",
+                said,
+                printed,
+                turns,
+            )
+            downgraded_from, outcome = outcome, "partial"
+
         result = record_result(
             learner_id,
             session.lesson_id,
@@ -182,7 +213,15 @@ class FinishLesson(Tool):
             event_for_recorded_result(outcome, more_lessons_remain=more_lessons_remain),
             movement_manager=deps.movement_manager,
         )
-        return {"recorded": True, "outcome": outcome, **standing}
+        # `outcome` is what was ACTUALLY written, which is not always what was asked
+        # for. When the gate downgraded it, say so plainly rather than letting the tutor
+        # report a completion that did not happen -- this tool's description already
+        # forbids telling someone a lesson is saved when it is not, and reporting the
+        # wrong outcome is the same lie one step along.
+        recorded_as: dict[str, Any] = {"recorded": True, "outcome": outcome, **standing}
+        if downgraded_from is not None:
+            recorded_as["not_completed_because"] = "too_little_of_the_lesson_was_practised"
+        return recorded_as
 
     @staticmethod
     def _standing(learner_id: str, lesson_id: str, deps: ToolDependencies) -> dict[str, Any]:

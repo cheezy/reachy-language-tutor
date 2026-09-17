@@ -51,13 +51,49 @@ class ConversationHandler(AsyncStreamHandler, ABC):
         self._transcript_observer = observer
 
     def _emit_transcript(self, role: str, text: str, final: bool = True) -> None:
-        """Forward one transcript chunk to the observer, if attached."""
+        """Forward one transcript chunk to the observer, and count lesson coverage."""
+        if final:
+            self._note_lesson_coverage(role, text)
         observer = self._transcript_observer
         if observer is not None and text:
             try:
                 observer(role, text, final)
             except Exception:
                 logger.debug("transcript observer raised (ignored)", exc_info=True)
+
+    def _note_lesson_coverage(self, role: str, text: str) -> None:
+        """Tell the running lesson what just happened in it: a line said, or a reply.
+
+        This is the ONE place in the app where what the tutor actually said meets the
+        lesson the app pinned, which is why the evidence that a lesson happened is
+        gathered here. Before this, nothing recorded whether any teaching occurred, so
+        finish_lesson had to take the model's word for it -- and a learner could be
+        moved past a lesson by saying they had finished it (D38).
+
+        Deliberately NOT the model's own account of its progress. An outcome the
+        conversation can assert is the defect; an outcome the conversation can talk its
+        way around is the same defect wearing a gate. What counts here is that a
+        printed line of the lesson appeared in something the tutor said.
+
+        BOTH SIDES are recorded, and the learner's is why this takes a role. Coverage
+        on its own is still the model's own output: a tutor that recited the whole
+        lesson at a child who never spoke would clear it, which is the same hole one
+        step along. So the learner's turns are counted too -- the count alone, never a
+        word of what they said -- and a completion needs both.
+
+        The text is passed through and never kept: note_spoken stores set membership
+        and nothing else, so no transcript word survives this call or reaches a log.
+        Best-effort by design -- coverage is evidence, and a fault in gathering evidence
+        must never break the conversation a learner is having.
+        """
+        try:
+            deps = self.deps
+            if role == "assistant":
+                deps.lesson_session.note_spoken(deps.current_learner_id, text)
+            elif role == "user":
+                deps.lesson_session.note_learner_turn(deps.current_learner_id)
+        except Exception:
+            logger.debug("lesson coverage note raised (ignored)", exc_info=True)
 
     def _mark_activity(self, reason: str) -> None:
         """Record non-idle conversation activity for the idle timer."""

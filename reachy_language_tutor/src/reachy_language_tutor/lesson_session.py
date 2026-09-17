@@ -47,6 +47,51 @@ logger = logging.getLogger(__name__)
 _STORABLE_INT_MIN = -(2**63)
 _STORABLE_INT_MAX = 2**63 - 1
 
+# The fraction of a lesson's own lines that must have been said out loud before the app
+# will believe the lesson was worked through.
+#
+# This is a FLOOR AGAINST A LESSON THAT DID NOT HAPPEN, not a standard of mastery. The
+# case it exists for was measured: a learner failed the first of fifteen turns five
+# times and then said "we're done, I completed it", and the lesson was recorded
+# completed on that sentence alone. Note what does NOT distinguish that session --
+# it ran two minutes and three seconds across twenty conversation turns, so a gate on
+# elapsed time or on how much was said would have passed it. Only coverage of the
+# material tells the two apart.
+#
+# Set low on purpose. Blocking a real completion is a worse failure than admitting a
+# thin one (the task naming this defect says so outright), so a third of the lines is
+# enough to believe a lesson happened, and no claim is made that a third is enough to
+# have learned it.
+_WORKED_THROUGH_FRACTION = 1 / 3
+
+# And the learner has to have been there. Coverage alone is the tutor's own output, so
+# a tutor that recites a lesson at a silent child would clear it -- which is the very
+# thing the security note on this defect warned about: an outcome a conversation can
+# talk its way around is the same defect wearing a gate. A lesson is a conversation, so
+# "worked through" needs both halves: enough of the material said, and the person it
+# was said to answering back.
+#
+# Low, and lower than the line floor, because a quiet learner is still a learner and
+# blocking a real completion is the worse failure. It exists to separate a practice
+# from a broadcast, not to grade how talkative somebody was.
+_LEARNER_TURNS_PER_LINE_FLOOR = 1 / 3
+_MIN_LEARNER_TURNS = 3
+
+# What SURVIVES the reduction to a comparable form: letters, digits, and the spaces
+# between them. Everything else becomes a space.
+#
+# Stated as what is permitted rather than as a list of punctuation to strip, which is
+# the rule CLAUDE.md records getting wrong four separate times in this repository. A
+# deny-list here is only as complete as the last person to read it: guillemets, an
+# ordinal indicator, a slash or an ampersand in some future lesson would normalise one
+# way on the printed side and another on the spoken side, silently under-count coverage,
+# and push a real completion towards the downgrade this task calls the worse failure.
+# str.isalnum() is the allow-list, and it covers accented letters by construction.
+#
+# Accents are therefore KEPT -- they are letters. A tutor that says "manha" for "manhã"
+# has not said the line, and in a course typed off page images precisely to preserve
+# those marks, that is the distinction worth enforcing rather than folding away.
+
 
 class LessonSessionRefusedError(ValueError):
     """Raised when something tries to pin a lesson that is not fit to be pinned."""
@@ -107,8 +152,23 @@ class LessonSessionHolder:
         # for. Both refuse to pin, and neither guesses.
         self._learner_id: str | None = learner_id if _is_storable_id(learner_id) else None
         self._session: LessonSession | None = None
+        # What the running lesson is made of, and which of it has been said out loud.
+        # Held on the HOLDER rather than on the session because LessonSession is frozen
+        # -- and because this is the mutable cell by design, so there is exactly one
+        # place a lesson's state lives. Both are replaced by open() and emptied by
+        # clear(), so coverage can never outlive the lesson it describes and be read
+        # against the next one.
+        self._teachable: tuple[str, ...] = ()
+        self._spoken: set[str] = set()
+        self._learner_turns: int = 0
 
-    def open(self, lesson_id: str, language_code: str, opened_at: int | None = None) -> LessonSession:
+    def open(
+        self,
+        lesson_id: str,
+        language_code: str,
+        opened_at: int | None = None,
+        teachable_lines: tuple[str, ...] | list[str] = (),
+    ) -> LessonSession:
         """Pin a lesson as the one running, replacing any earlier one.
 
         There is deliberately no learner parameter. The learner is whoever this holder
@@ -144,8 +204,109 @@ class LessonSessionHolder:
             opened_at=_now_ms() if opened_at is None else opened_at,
         )
         self._session = session
-        logger.debug("Pinned the running lesson for the learner this holder was built for")
+        # The lines this lesson is made of, normalised once here so every later
+        # comparison is a set lookup rather than a scan. A caller that passes none
+        # leaves coverage unmeasurable, which worked_through_for reports as "unknown"
+        # rather than as "not worked through" -- see that method for why the difference
+        # has to survive.
+        self._teachable = tuple(dict.fromkeys(filter(None, (_for_matching(line) for line in teachable_lines))))
+        self._spoken = set()
+        self._learner_turns = 0
+        # One constant and no interpolation, like every other log line in this module.
+        # A count looks harmless, but the rule here is absolute precisely so that nobody
+        # has to adjudicate which values are safe -- a test parses this file and enforces
+        # it. The counts an operator needs are logged by finish_lesson instead.
+        logger.debug("Pinned the running lesson and the lines to watch for")
         return session
+
+    def note_spoken(self, learner_id: str | None, text: object) -> None:
+        """Record which of the running lesson's own lines appear in something said.
+
+        Called for every final assistant transcript, so it is on the conversation's hot
+        path and does nothing but set membership. It NEVER stores, returns or logs the
+        text it is handed: what survives this call is a count of which printed lines
+        have been reached, and that is the whole point -- the evidence a lesson really
+        happened has to be app state rather than the model's own account of itself,
+        and it has to be shape rather than words to stay inside the logging rule.
+
+        Takes the learner for the same reason read_for does. Marking coverage for
+        whoever happens to be holding the robot would let one household member's
+        practice count towards another's lesson.
+        """
+        if not self._teachable or not isinstance(text, str):
+            return
+        session = self._session
+        if session is None or not isinstance(learner_id, str) or learner_id != session.learner_id:
+            return
+        spoken = _for_matching(text)
+        if not spoken:
+            return
+        # Padded on both sides so a match has to fall on word boundaries. Unpadded
+        # containment marked "uno" as said inside "un desayuno", and because drills are
+        # drawn from the dialogue that let one utterance tick off several lines at once
+        # -- which made the real floor a fraction of the advertised third.
+        padded = f" {spoken} "
+        for line in self._teachable:
+            if line not in self._spoken and f" {line} " in padded:
+                self._spoken.add(line)
+
+    def note_learner_turn(self, learner_id: str | None) -> None:
+        """Record that the learner said something while this lesson was running.
+
+        The count, never the words: nothing about what they said is passed in, because
+        nothing about it is needed. Coverage says the material was presented; this says
+        somebody was there to receive it, and a completion needs both.
+        """
+        session = self._session
+        if session is None or not isinstance(learner_id, str) or learner_id != session.learner_id:
+            return
+        # Only once some of the lesson has actually been said. Counted from the moment
+        # the lesson was pinned, this certified that somebody spoke at SOME point rather
+        # than that they took part in anything: four remarks before a word of the lesson
+        # was taught, followed by the tutor reciting it, cleared the gate.
+        #
+        # What this does NOT do, and it should be said rather than implied: it cannot
+        # tell a reply from a refusal. A learner who says "no" thirty times still counts
+        # as present. Distinguishing those is a judgement about meaning, and a judgement
+        # about meaning made by the model is the thing this whole gate exists to stop
+        # relying on. What is claimed here is narrow -- somebody was in the room and
+        # answering while the lesson was being taught -- and that is all.
+        if not self._spoken:
+            return
+        self._learner_turns += 1
+
+    def worked_through_for(self, learner_id: str | None) -> bool | None:
+        """Say whether enough of the running lesson has been said out loud.
+
+        Three answers, and the third is the one that matters. True and False are
+        verdicts; None means "this cannot be measured" -- no lesson running, not this
+        learner's, or a lesson pinned with no lines to watch for. A caller must not read
+        None as False: refusing to record a completion because the app forgot to supply
+        the lines would punish a learner for a wiring mistake. Absence of evidence is
+        reported as absence of evidence.
+        """
+        session = self._session
+        if session is None or not isinstance(learner_id, str) or learner_id != session.learner_id:
+            return None
+        if not self._teachable:
+            return None
+        line_floor = max(1, round(len(self._teachable) * _WORKED_THROUGH_FRACTION))
+        turn_floor = max(_MIN_LEARNER_TURNS, round(line_floor * _LEARNER_TURNS_PER_LINE_FLOOR))
+        return len(self._spoken) >= line_floor and self._learner_turns >= turn_floor
+
+    def coverage_for(self, learner_id: str | None) -> tuple[int, int, int] | None:
+        """Return (lines said, lines in the lesson, learner turns), or None.
+
+        Counts only, never the lines themselves and never a word the learner said:
+        this feeds a log line and a tool result, and both are places a learner's words
+        must never reach.
+        """
+        session = self._session
+        if session is None or not isinstance(learner_id, str) or learner_id != session.learner_id:
+            return None
+        if not self._teachable:
+            return None
+        return (len(self._spoken), len(self._teachable), self._learner_turns)
 
     def read_for(self, learner_id: str | None) -> LessonSession | None:
         """Return the running lesson if it was opened for this learner, else nothing.
@@ -171,6 +332,12 @@ class LessonSessionHolder:
     def clear(self) -> None:
         """Forget whatever was running, and stay harmless when nothing was."""
         self._session = None
+        # Coverage goes with it. Left behind, it would be read against the NEXT lesson
+        # and count somebody's finished work towards a lesson they have not started --
+        # which is the same class of fault as handing one learner's session to another.
+        self._teachable = ()
+        self._spoken = set()
+        self._learner_turns = 0
         logger.debug("Forgot the running lesson")
 
     def __repr__(self) -> str:
@@ -236,6 +403,23 @@ def _is_storable_timestamp(value: object) -> bool:
     leaving its sibling is the single most repeated defect on this board.
     """
     return isinstance(value, int) and not isinstance(value, bool) and _STORABLE_INT_MIN <= value <= _STORABLE_INT_MAX
+
+
+def _for_matching(value: object) -> str:
+    """Reduce a line to the form two spellings of the same sentence share.
+
+    Case and punctuation vary freely between a printed line and a spoken one; letters
+    do not. Accents are letters here and are kept -- folding them would make "manha"
+    match "manhã" and quietly retire the one property a course typed off page images
+    exists to protect.
+
+    Returns "" for anything that is not a usable string, and every caller treats "" as
+    "nothing to compare", so a non-string can never be counted as coverage.
+    """
+    if not isinstance(value, str):
+        return ""
+    kept = "".join(character if character.isalnum() or character.isspace() else " " for character in value)
+    return " ".join(kept.casefold().split())
 
 
 def _now_ms() -> int:

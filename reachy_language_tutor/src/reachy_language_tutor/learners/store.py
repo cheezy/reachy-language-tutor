@@ -393,6 +393,27 @@ SEED_RESULTS: tuple[tuple[str, str, str, int | None, int], ...] = (
 #
 # Defined here as the single source of truth for the rule. The query interface that
 # calls it is a later task; tests assert it directly against the seeded data.
+# "Finished" means the LATEST thing that happened to this lesson was a completion, not
+# that a completion appears anywhere in its history.
+#
+# The distinction exists so a wrong completion can be undone. lesson_results is
+# append-only -- there is no UPDATE and no DELETE anywhere in this module, deliberately,
+# because a learner's history is the record -- so the only way to retract anything is to
+# add a row after it. Under "any completed row ever" that was impossible: a lesson
+# recorded completed by mistake was finished for good, which is exactly what stranded a
+# learner in D38 when they admitted they had not really finished.
+#
+# The tie is broken on id, the same way _ATTEMPTS_SQL breaks it, and that matters
+# rather than being tidiness: with MAX(recorded_at) alone, a completion and a partial
+# written in the same millisecond both matched and the lesson counted as finished --
+# the completion winning a tie that an append-only design means it should lose. Seed
+# data and tests use fixed stamps, so the tie is reachable there even though a voice
+# conversation could never produce two results a millisecond apart.
+#
+# The behaviour this changes is narrower than it looks: for a lesson whose last word was
+# a completion, the answer is identical. It differs only where a NON-completed row was
+# recorded after a completion, which previously could not happen by any path and now
+# happens only when a learner asks to do a lesson again.
 NEXT_LESSON_SQL = """
 SELECT l.id, l.position, l.title, l.objective
 FROM lessons AS l
@@ -400,10 +421,30 @@ WHERE l.language_code = ?
   AND NOT EXISTS (
         SELECT 1 FROM lesson_results AS r
         WHERE r.lesson_id = l.id AND r.learner_id = ? AND r.outcome = 'completed'
+          AND r.id = (
+                SELECT r2.id FROM lesson_results AS r2
+                WHERE r2.learner_id = ? AND r2.lesson_id = l.id
+                ORDER BY r2.recorded_at DESC, r2.id DESC LIMIT 1
+              )
       )
 ORDER BY l.position
 LIMIT 1
 """
+
+
+def next_lesson_params(language_code: str, learner_id: str) -> tuple[str, str, str]:
+    """Bind NEXT_LESSON_SQL's parameters, in the order the statement reads them.
+
+    The learner appears TWICE: once to scope the results being searched, and once more
+    inside the latest-result subquery, because the SQL guard requires every personal
+    relation a statement reads to carry its own bound conjunct rather than a
+    correlation. That is easy to get wrong by hand and silently wrong when you do -- the
+    two strings are both text, so a transposed pair binds cleanly and answers rubbish.
+
+    So the order lives here, once, instead of at each call site. Callers pass what they
+    mean and never count question marks.
+    """
+    return (language_code, learner_id, learner_id)
 
 
 @dataclass(frozen=True)
@@ -2274,10 +2315,16 @@ def _learner_scoped(sql: str) -> str:
 
 _PROFILE_SQL = _learner_scoped("SELECT id, display_name, created_at FROM learners WHERE learners.id = ?")
 _LEARNER_EXISTS_SQL = _learner_scoped("SELECT 1 FROM learners WHERE learners.id = ? LIMIT 1")
+# Latest-wins, exactly as NEXT_LESSON_SQL above -- the two state one rule and a test
+# pins them together, so changing one alone is how they drift.
 _COMPLETED_IDS_SQL = _learner_scoped(
     "SELECT DISTINCT r.lesson_id FROM lesson_results AS r "
     "JOIN lessons AS l ON l.id = r.lesson_id "
-    "WHERE r.learner_id = ? AND l.language_code = ? AND r.outcome = 'completed'"
+    "WHERE r.learner_id = ? AND l.language_code = ? AND r.outcome = 'completed' "
+    "AND r.id = ("
+    "SELECT r2.id FROM lesson_results AS r2 "
+    "WHERE r2.learner_id = ? AND r2.lesson_id = r.lesson_id "
+    "ORDER BY r2.recorded_at DESC, r2.id DESC LIMIT 1)"
 )
 _ATTEMPTS_SQL = _learner_scoped(
     "SELECT r.learner_id, r.lesson_id, r.outcome, r.score, r.recorded_at "
@@ -2992,7 +3039,11 @@ def get_progress(
 
         lessons = [_lesson_from_row(row) for row in connection.execute(_LESSONS_SQL, (language_code,))]
         completed_ids = {
-            str(row["lesson_id"]) for row in connection.execute(_COMPLETED_IDS_SQL, (learner_id, language_code))
+            str(row["lesson_id"])
+            # Three parameters, not two: the latest-result subquery scopes itself to the
+            # same learner with its own bound conjunct, which is what the SQL guard
+            # requires of every personal relation a statement reads.
+            for row in connection.execute(_COMPLETED_IDS_SQL, (learner_id, language_code, learner_id))
         }
         attempts = tuple(
             _attempt_from_row(row) for row in connection.execute(_ATTEMPTS_SQL, (learner_id, language_code))

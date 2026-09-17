@@ -330,6 +330,10 @@ WHERE l.language_code = ?
   AND NOT EXISTS (
         SELECT 1 FROM lesson_results AS r
         WHERE r.lesson_id = l.id AND r.learner_id = ? AND r.outcome = 'completed'
+          AND r.recorded_at = (
+                SELECT MAX(r2.recorded_at) FROM lesson_results AS r2
+                WHERE r2.learner_id = ? AND r2.lesson_id = l.id
+              )
       )
 ORDER BY l.position
 LIMIT 1
@@ -337,6 +341,20 @@ LIMIT 1
 
 It returns no row when the learner has finished the language, or when the language is
 unknown.
+
+**"Finished" means the LATEST result for a lesson is a completion**, not that a
+completion appears anywhere in its history — and D38 is why. `lesson_results` is
+append-only, with no `UPDATE` and no `DELETE` anywhere in the module, because a
+learner's history is the record; under the older "any completed row ever" reading, a
+lesson recorded finished by mistake was finished for good and there was no way back.
+Reading the last word instead makes a correction possible by adding to the history
+rather than editing it.
+
+The learner is bound **twice** — once to scope the results, once inside the
+latest-result subquery — because the SQL guard requires every personal relation a
+statement reads to carry its own bound conjunct rather than a correlation.
+`store.next_lesson_params(language_code, learner_id)` builds the tuple in the right
+order so no caller has to count question marks.
 
 ## Seed data
 

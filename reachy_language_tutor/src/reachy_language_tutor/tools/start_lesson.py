@@ -56,6 +56,41 @@ def _refused(reason: str, **extra: Any) -> dict[str, Any]:
     return {"started": False, "reason": reason, "error": _REFUSALS[reason], **extra}
 
 
+def _lines_worth_hearing(content: Any) -> tuple[str, ...]:
+    """Every printed target-language line of this lesson, for measuring coverage.
+
+    The lesson session compares these against what the tutor actually says, and that
+    comparison is the only evidence the app has that a lesson happened at all -- see
+    D38, where a lesson was recorded completed after one of its fifteen turns had been
+    reached. Gathered here because start_lesson has already read the content it needs
+    to refuse an empty lesson, so this costs no extra read.
+
+    Deliberately WIDE: dialogue turns, drill models, drill answers AND usage notes all
+    count. A narrower set would make the floor harder to clear and risk refusing a real
+    completion, which the task naming this defect calls the worse failure of the two.
+    English glosses of a drill are left out -- they are how a line is explained, not the
+    line.
+
+    Notes are in for a different reason, and it is the D19 rule: a guard must mean the
+    same thing as the code it protects. lesson_has_nothing_to_teach, the gate that
+    decides whether a lesson may start at all, counts notes as material. While this
+    function did not, a notes-only lesson could START and then be UNMEASURABLE, so the
+    evidence gate went inert for exactly it and a completion passed unchecked. No
+    shipped lesson has that shape today; the mismatch between the two guards is the
+    defect, not the absence of such a lesson.
+    """
+    lines: list[str] = []
+    for turn in getattr(content, "turns", ()) or ():
+        lines.append(getattr(turn, "text", "") or "")
+    for drill in getattr(content, "drills", ()) or ():
+        lines.append(getattr(drill, "target_text", "") or "")
+        lines.append(getattr(drill, "cue", "") or "")
+        lines.append(getattr(drill, "expected_response", "") or "")
+    for note in getattr(content, "notes", ()) or ():
+        lines.append(getattr(note, "text", "") or "")
+    return tuple(line for line in lines if line)
+
+
 class StartLesson(Tool):
     """Begin the lesson the database says comes next in one language."""
 
@@ -217,7 +252,11 @@ class StartLesson(Tool):
             # Pinned BEFORE anything is returned, so a failed pin can never be
             # reported as a lesson that started. The narrow except is deliberate: a
             # bare one would swallow a programming error into a soothing sentence.
-            deps.lesson_session.open(lesson_id=lesson.id, language_code=progress.language_code)
+            deps.lesson_session.open(
+                lesson_id=lesson.id,
+                language_code=progress.language_code,
+                teachable_lines=_lines_worth_hearing(content),
+            )
         except LessonSessionRefusedError as exc:
             # The class name, never the message: _REFUSAL over in lesson_session is
             # developer-register prose about holders, and this is spoken aloud.

@@ -68,12 +68,22 @@ def _add_consent(instance_path: Path, learner_id: str) -> None:
         connection.close()
 
 
-def _add_result(instance_path: Path, learner_id: str, lesson_id: str, outcome: str, when: int = 1) -> None:
+# Later than every seeded attempt, because "finished" means the LATEST result for a
+# lesson is a completion rather than that one appears anywhere in its history. A row
+# stamped at 1, as this defaulted to, is older than the sample learner's seeded Spanish
+# attempts -- so a test that "completed" a lesson that way was quietly recording a
+# completion the catalog then overruled, and only passed because the old rule ignored
+# ordering entirely.
+_AFTER_THE_SEEDED_HISTORY = store.utc_now_ms()
+
+
+def _add_result(
+    instance_path: Path, learner_id: str, lesson_id: str, outcome: str, when: int = _AFTER_THE_SEEDED_HISTORY
+) -> None:
     connection = store.connect(instance_path)
     try:
         connection.execute(
-            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) VALUES (?, ?, ?, ?, ?)",
             (learner_id, lesson_id, outcome, None, when),
         )
         connection.commit()
@@ -96,9 +106,7 @@ def test_get_profile_returns_the_seeded_learner(instance: Path) -> None:
     """The profile comes back as plain data with the seeded values."""
     profile = store.get_profile("sample-learner", instance_path=instance)
 
-    assert profile == LearnerProfile(
-        id="sample-learner", display_name="Sample Learner", created_at=1767225600000
-    )
+    assert profile == LearnerProfile(id="sample-learner", display_name="Sample Learner", created_at=1767225600000)
 
 
 @pytest.mark.parametrize("learner_id", ["nobody", "", "SAMPLE-LEARNER"])
@@ -197,7 +205,9 @@ def test_get_progress_never_returns_another_learners_rows(instance: Path) -> Non
     assert mine.next_lesson is not None
     # Stronger than it was: they have now finished all TWELVE Spanish lessons and
     # I am still on the first one, which I have never attempted.
-    assert mine.next_lesson.id == "es-fast-01-getting-started-in-class", "another learner's completions must not advance me"
+    assert mine.next_lesson.id == "es-fast-01-getting-started-in-class", (
+        "another learner's completions must not advance me"
+    )
     assert len(mine.attempts) == 3
     assert all(attempt.learner_id == "sample-learner" for attempt in mine.attempts)
 
@@ -277,7 +287,9 @@ def test_next_lesson_matches_next_lesson_sql(instance: Path) -> None:
         ]:
             progress = store.get_progress(learner_id, language_code, instance_path=instance)
             assert progress is not None
-            row = connection.execute(store.NEXT_LESSON_SQL, (language_code, learner_id)).fetchone()
+            row = connection.execute(
+                store.NEXT_LESSON_SQL, store.next_lesson_params(language_code, learner_id)
+            ).fetchone()
             expected = None if row is None else str(row["id"])
             actual = None if progress.next_lesson is None else progress.next_lesson.id
             assert actual == expected, f"drift for {learner_id}/{language_code}"
@@ -290,9 +302,7 @@ def test_next_lesson_matches_next_lesson_sql(instance: Path) -> None:
 
 def test_record_result_appends_an_attempt(instance: Path) -> None:
     """Recording a completion advances the learner."""
-    outcome = store.record_result(
-        "sample-learner", "es-03-numbers", "completed", score=88, instance_path=instance
-    )
+    outcome = store.record_result("sample-learner", "es-03-numbers", "completed", score=88, instance_path=instance)
 
     assert outcome.recorded is True
     assert outcome.reason is None
@@ -311,9 +321,9 @@ def test_record_result_is_append_only(instance: Path) -> None:
     """A second attempt at the same lesson is a second row, not an update."""
     before = _count_results(instance)
     for _ in range(2):
-        assert store.record_result(
-            "sample-learner", "es-03-numbers", "partial", instance_path=instance
-        ).recorded is True
+        assert (
+            store.record_result("sample-learner", "es-03-numbers", "partial", instance_path=instance).recorded is True
+        )
 
     assert _count_results(instance) == before + 2
 
@@ -343,9 +353,7 @@ def test_record_result_unknown_learner_is_reported(instance: Path) -> None:
 def test_record_result_rejects_invalid_outcomes(instance: Path, outcome_value: str) -> None:
     """A model's guess at the vocabulary must not end the turn, or be recorded."""
     before = _count_results(instance)
-    outcome = store.record_result(
-        "sample-learner", "es-01-greetings", outcome_value, instance_path=instance
-    )
+    outcome = store.record_result("sample-learner", "es-01-greetings", outcome_value, instance_path=instance)
 
     assert outcome.recorded is False
     assert outcome.reason == "invalid_outcome"
@@ -355,9 +363,7 @@ def test_record_result_rejects_invalid_outcomes(instance: Path, outcome_value: s
 @pytest.mark.parametrize(("score", "expected"), [(-1, False), (101, False), (0, True), (100, True), (None, True)])
 def test_record_result_validates_score_range(instance: Path, score: int | None, expected: bool) -> None:
     """Scores outside 0-100 are refused before any write."""
-    outcome = store.record_result(
-        "sample-learner", "es-01-greetings", "partial", score=score, instance_path=instance
-    )
+    outcome = store.record_result("sample-learner", "es-01-greetings", "partial", score=score, instance_path=instance)
 
     assert outcome.recorded is expected
     if not expected:
@@ -382,9 +388,9 @@ def test_record_result_defaults_recorded_at_to_now(instance: Path, monkeypatch: 
 def test_record_result_writes_only_the_named_learners_row(instance: Path) -> None:
     """Writing for one learner must leave another's history untouched."""
     _add_learner(instance, "other-learner")
-    assert store.record_result(
-        "other-learner", "es-01-greetings", "completed", instance_path=instance
-    ).recorded is True
+    assert (
+        store.record_result("other-learner", "es-01-greetings", "completed", instance_path=instance).recorded is True
+    )
 
     mine = store.get_progress("sample-learner", "es", instance_path=instance)
     assert mine is not None
@@ -397,12 +403,14 @@ def test_learner_supplied_text_cannot_inject_sql(instance: Path) -> None:
     hostile_lesson = "es-01-greetings'; DROP TABLE lesson_results;--"
     hostile_learner = "sample-learner' OR '1'='1"
 
-    assert store.record_result(
-        "sample-learner", hostile_lesson, "completed", instance_path=instance
-    ).reason == "unknown_lesson"
-    assert store.record_result(
-        hostile_learner, "es-01-greetings", "completed", instance_path=instance
-    ).reason == "unknown_learner"
+    assert (
+        store.record_result("sample-learner", hostile_lesson, "completed", instance_path=instance).reason
+        == "unknown_lesson"
+    )
+    assert (
+        store.record_result(hostile_learner, "es-01-greetings", "completed", instance_path=instance).reason
+        == "unknown_learner"
+    )
     assert store.get_profile(hostile_learner, instance_path=instance) is None
 
     assert _count_results(instance) == before, "the table must still be intact"
@@ -417,9 +425,7 @@ def test_record_result_rejects_a_non_integer_score(instance: Path, score: object
     exactly what this function exists to prevent.
     """
     before = _count_results(instance)
-    outcome = store.record_result(
-        "sample-learner", "es-01-greetings", "partial", score=score, instance_path=instance
-    )
+    outcome = store.record_result("sample-learner", "es-01-greetings", "partial", score=score, instance_path=instance)
 
     assert outcome.recorded is False
     assert outcome.reason == "invalid_score"
@@ -480,8 +486,7 @@ def test_a_strict_column_does_not_refuse_what_it_can_coerce(instance: Path) -> N
     connection = store.connect(instance)
     try:
         connection.execute(
-            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) VALUES (?, ?, ?, ?, ?)",
             ("sample-learner", "es-01-greetings", "partial", None, "1700000000000"),
         )
         stored = connection.execute(
@@ -539,9 +544,7 @@ def test_record_result_accepts_any_whole_number_of_milliseconds(instance: Path, 
 
 
 @pytest.mark.parametrize("recorded_at", [2**63, -(2**63) - 1, 10**19, 10**30])
-def test_an_integer_too_large_for_the_column_is_refused_rather_than_raised(
-    instance: Path, recorded_at: int
-) -> None:
+def test_an_integer_too_large_for_the_column_is_refused_rather_than_raised(instance: Path, recorded_at: int) -> None:
     """The one shape that got past the type check and then ended the turn.
 
     An int satisfies isinstance, so it reached the insert -- where sqlite3 raises
@@ -566,9 +569,12 @@ def test_an_integer_too_large_for_the_column_is_refused_rather_than_raised(
 
 def test_an_explicitly_timestamped_attempt_reads_back_through_get_progress(instance: Path) -> None:
     """The valid path end to end, so the new refusal cannot have narrowed it."""
-    assert store.record_result(
-        "sample-learner", "es-01-greetings", "completed", recorded_at=1_700_000_000_000, instance_path=instance
-    ).recorded is True
+    assert (
+        store.record_result(
+            "sample-learner", "es-01-greetings", "completed", recorded_at=1_700_000_000_000, instance_path=instance
+        ).recorded
+        is True
+    )
 
     progress = store.get_progress("sample-learner", "es", instance_path=instance)
 
@@ -667,8 +673,7 @@ def test_every_published_reason_is_documented(outcome_type: str, vocabulary: tup
     )
 
     tables = [
-        set(re.findall(r"^\| `([a-z_]+)` \|", doc[start : doc.index("\n\n", start)], re.MULTILINE))
-        for start in starts
+        set(re.findall(r"^\| `([a-z_]+)` \|", doc[start : doc.index("\n\n", start)], re.MULTILINE)) for start in starts
     ]
 
     assert all("outcome" not in table for table in tables), "a slice leaked into a schema table"
@@ -704,16 +709,12 @@ def test_store_is_available_separates_absence_from_breakage(tmp_path: Path, inst
 # -------------------------------------------------------- degrading and data shape
 
 
-def test_missing_database_degrades_without_raising(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_missing_database_degrades_without_raising(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """With no database at all the interface reports absence and stays quiet about ids."""
     with caplog.at_level(logging.WARNING):
         assert store.get_profile("sample-learner", instance_path=tmp_path) is None
         assert store.get_progress("sample-learner", "es", instance_path=tmp_path) is None
-        outcome = store.record_result(
-            "sample-learner", "es-01-greetings", "completed", instance_path=tmp_path
-        )
+        outcome = store.record_result("sample-learner", "es-01-greetings", "completed", instance_path=tmp_path)
 
     assert outcome.recorded is False
     assert outcome.reason == "storage_unavailable"
@@ -742,9 +743,7 @@ def test_concurrent_access_is_safe(instance: Path) -> None:
     writes = 8
 
     def write(_: int) -> bool:
-        return store.record_result(
-            "sample-learner", "es-04-ordering-food", "partial", instance_path=instance
-        ).recorded
+        return store.record_result("sample-learner", "es-04-ordering-food", "partial", instance_path=instance).recorded
 
     def read(_: int) -> bool:
         return store.get_progress("sample-learner", "es", instance_path=instance) is not None
@@ -863,9 +862,7 @@ def test_the_cross_learner_read_is_the_scoped_read_with_its_filter_removed() -> 
         ("SELECT learner_id, recorded_at FROM lesson_results", "faceprints and nothing else"),
     ],
 )
-def test_the_cross_learner_rule_refuses_everything_but_the_one_statement(
-    statement: str, refused_because: str
-) -> None:
+def test_the_cross_learner_rule_refuses_everything_but_the_one_statement(statement: str, refused_because: str) -> None:
     """Each condition of the rule, refused for the reason it names.
 
     The join-to-learners case is the one that matters most: it is how a display name
@@ -897,8 +894,7 @@ _CROSS_LEARNER_STATEMENTS: dict[str, tuple[str, str]] = {
         "other legs carry no filter of their own",
     ),
     "a correlated-subquery DELETE": (
-        "DELETE FROM lesson_results WHERE lesson_id IN "
-        "(SELECT lesson_id FROM lesson_results WHERE learner_id = ?)",
+        "DELETE FROM lesson_results WHERE lesson_id IN (SELECT lesson_id FROM lesson_results WHERE learner_id = ?)",
         "two relations are both called lesson_results",
     ),
 }
@@ -951,7 +947,9 @@ def test_an_insert_that_also_reads_has_to_satisfy_both_rules() -> None:
     Writing learner_id first says nothing about the rows the SELECT reaches, so the
     first-column rule alone would let one learner's history be copied onto another.
     """
-    reads_everyone = "INSERT INTO lesson_results (learner_id, lesson_id) SELECT learner_id, lesson_id FROM lesson_results"
+    reads_everyone = (
+        "INSERT INTO lesson_results (learner_id, lesson_id) SELECT learner_id, lesson_id FROM lesson_results"
+    )
     reads_one = (
         "INSERT INTO lesson_results (learner_id, lesson_id) "
         "SELECT r.learner_id, r.lesson_id FROM lesson_results AS r WHERE r.learner_id = ?"
@@ -1194,9 +1192,7 @@ def test_the_verdict_does_not_depend_on_the_order_the_predicates_were_written_in
     subquery_first = (
         "SELECT outcome FROM lesson_results WHERE lesson_id IN (SELECT id FROM lessons) AND learner_id = ?"
     )
-    filter_first = (
-        "SELECT outcome FROM lesson_results WHERE learner_id = ? AND lesson_id IN (SELECT id FROM lessons)"
-    )
+    filter_first = "SELECT outcome FROM lesson_results WHERE learner_id = ? AND lesson_id IN (SELECT id FROM lessons)"
 
     assert store._learner_scoped(subquery_first) == subquery_first
     assert store._learner_scoped(filter_first) == filter_first
@@ -1450,7 +1446,9 @@ def test_a_set_subquery_reading_an_unconstrained_relation_is_still_refused() -> 
     inside it must still be refused -- by _personal_relations, a few lines down. If this
     were accepted, narrowing the sweep would have opened a cross-learner read.
     """
-    unconstrained = "UPDATE lesson_results SET score = (SELECT max(z.score) FROM lesson_results AS z) WHERE learner_id = ?"
+    unconstrained = (
+        "UPDATE lesson_results SET score = (SELECT max(z.score) FROM lesson_results AS z) WHERE learner_id = ?"
+    )
     with pytest.raises(ValueError, match="nothing constrains lesson_results"):
         store._learner_scoped(unconstrained)
     # A literal-targeted read of another learner is refused too: 'bob' is not the `?` filter
@@ -1485,7 +1483,9 @@ def test_a_narrowed_set_read_does_not_move_a_row_across_learners() -> None:
             "VALUES (1, 'alice', 'l1', 'completed', 10, 0), (2, 'bob', 'l1', 'completed', 99, 0);"
         )
         connection.commit()
-        bob_before = connection.execute("SELECT id, learner_id, score FROM lesson_results WHERE learner_id = 'bob'").fetchall()
+        bob_before = connection.execute(
+            "SELECT id, learner_id, score FROM lesson_results WHERE learner_id = 'bob'"
+        ).fetchall()
 
         cache = (
             "UPDATE lesson_results SET score = (SELECT max(z.score) FROM lesson_results AS z WHERE z.learner_id = ?) "
@@ -1495,7 +1495,9 @@ def test_a_narrowed_set_read_does_not_move_a_row_across_learners() -> None:
         connection.execute(cache, ("alice", "alice"))
         connection.commit()
 
-        bob_after = connection.execute("SELECT id, learner_id, score FROM lesson_results WHERE learner_id = 'bob'").fetchall()
+        bob_after = connection.execute(
+            "SELECT id, learner_id, score FROM lesson_results WHERE learner_id = 'bob'"
+        ).fetchall()
         assert bob_after == bob_before, "bob's rows must be untouched"
         owners = {row[0] for row in connection.execute("SELECT learner_id FROM lesson_results").fetchall()}
         assert owners == {"alice", "bob"}
@@ -1564,7 +1566,9 @@ def test_the_set_narrowing_moves_only_reads() -> None:
     every read below refuse again and the `moved` assertion fail.
     """
     for assignment in _MEASURE_ASSIGNMENTS:
-        assert store._unconstrained_personal_relation(assignment) is not None, f"assignment must stay refused: {assignment}"
+        assert store._unconstrained_personal_relation(assignment) is not None, (
+            f"assignment must stay refused: {assignment}"
+        )
 
     moved = []
     for read in _MEASURE_READS:
@@ -1587,10 +1591,14 @@ def test_the_set_narrowing_moves_only_reads() -> None:
                 "VALUES (1, 'alice', 'l1', 'completed', 10, 0), (2, 'bob', 'l1', 'partial', 88, 0);"
             )
             connection.commit()
-            bob_before = connection.execute("SELECT id, learner_id, lesson_id, outcome, score FROM lesson_results WHERE learner_id = 'bob'").fetchall()
+            bob_before = connection.execute(
+                "SELECT id, learner_id, lesson_id, outcome, score FROM lesson_results WHERE learner_id = 'bob'"
+            ).fetchall()
             connection.execute(read, tuple("alice" for _ in range(read.count("?"))))
             connection.commit()
-            bob_after = connection.execute("SELECT id, learner_id, lesson_id, outcome, score FROM lesson_results WHERE learner_id = 'bob'").fetchall()
+            bob_after = connection.execute(
+                "SELECT id, learner_id, lesson_id, outcome, score FROM lesson_results WHERE learner_id = 'bob'"
+            ).fetchall()
             assert bob_after == bob_before, f"moved read re-attributed or altered bob's rows: {read}"
             owners = {row[0] for row in connection.execute("SELECT learner_id FROM lesson_results").fetchall()}
             assert owners == {"alice", "bob"}, f"moved read changed row ownership: {read}"
@@ -1658,7 +1666,9 @@ def test_an_or_is_refused_where_it_can_widen_the_filter_and_allowed_where_it_can
     that does not start.
     """
     widens_everything = "SELECT outcome FROM lesson_results WHERE learner_id = ? AND outcome = 'a' OR 1 = 1"
-    benign = "SELECT outcome FROM lesson_results WHERE learner_id = ? AND (outcome = 'completed' OR outcome = 'partial')"
+    benign = (
+        "SELECT outcome FROM lesson_results WHERE learner_id = ? AND (outcome = 'completed' OR outcome = 'partial')"
+    )
 
     with pytest.raises(ValueError, match="top-level OR"):
         store._learner_scoped(widens_everything)
@@ -1702,7 +1712,7 @@ def test_a_values_list_that_reads_is_judged_like_any_other_read(shape: str, sql:
         ("a bracket-quoted table", "SELECT outcome FROM [lesson_results] WHERE learner_id = ?"),
         (
             "a quoted span hiding an OR",
-            "SELECT learner_id, score FROM lesson_results WHERE learner_id = ? AND \"'\" OR 1 OR \"'\"",
+            'SELECT learner_id, score FROM lesson_results WHERE learner_id = ? AND "\'" OR 1 OR "\'"',
         ),
         ("an unterminated double quote", 'SELECT outcome FROM lesson_results WHERE outcome = " AND learner_id = ?'),
     ],
@@ -1748,7 +1758,9 @@ def test_an_unqualified_filter_is_judged_against_the_relations_it_can_see() -> N
     reject a statement whose filter is unambiguous, and a rule that cries wolf is one
     people route around.
     """
-    one_relation_in_scope = "SELECT outcome FROM lesson_results WHERE learner_id = ? AND lesson_id IN (SELECT id FROM lessons)"
+    one_relation_in_scope = (
+        "SELECT outcome FROM lesson_results WHERE learner_id = ? AND lesson_id IN (SELECT id FROM lessons)"
+    )
 
     assert store._learner_scoped(one_relation_in_scope) == one_relation_in_scope
 
@@ -1846,10 +1858,8 @@ _PRAGMA_HEAD = re.compile(r"^\s*PRAGMA\b", re.IGNORECASE)
 
 def _names_a_literal_table(sql: str) -> bool:
     """Report whether at least one table is named in full, with no hole in it."""
-    return any(
-        match.group(1).strip() and _INTERPOLATED not in match.group(1)
-        for match in _TABLE_CLAUSE.finditer(sql)
-    )
+    return any(match.group(1).strip() and _INTERPOLATED not in match.group(1) for match in _TABLE_CLAUSE.finditer(sql))
+
 
 # SQL comments. A marker inside one is text the database never reads, so it must not
 # be what satisfies the scoping rule -- but a table named in one still makes the
@@ -1963,9 +1973,7 @@ def _module_bindings(tree: ast.Module) -> dict[str, list[ast.expr | None]]:
     return bindings
 
 
-def _skeleton(
-    node: ast.expr, bindings: dict[str, list[ast.expr | None]], seen: frozenset[str] = frozenset()
-) -> str:
+def _skeleton(node: ast.expr, bindings: dict[str, list[ast.expr | None]], seen: frozenset[str] = frozenset()) -> str:
     """Reconstruct what a query expression literally says, or refuse to guess.
 
     Returns the statement with every interpolated fragment replaced by _INTERPOLATED.
@@ -2231,8 +2239,7 @@ def unverified_inline_queries(source: str) -> list[str]:
         )
     # Nothing below can be trusted if the module cannot say which names it binds.
     if any(
-        isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names)
-        for node in ast.walk(tree)
+        isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names) for node in ast.walk(tree)
     ):
         offenders.append("refused, a star-import rebinds an unknown set of names, so no name here can be read")
 
@@ -2385,12 +2392,12 @@ _FORMS: dict[str, tuple[str, str]] = {
         'connection.execute("SELECT outcome FROM lesson_results WHERE learner_id = ? AND id = %s" % lesson)',
     ),
     "function-local name": (
-        'def read(connection):\n'
+        "def read(connection):\n"
         '    query = "SELECT outcome FROM lesson_results"\n'
-        '    return connection.execute(query)',
-        'def read(connection):\n'
+        "    return connection.execute(query)",
+        "def read(connection):\n"
         '    query = "SELECT outcome FROM lesson_results WHERE learner_id = ?"\n'
-        '    return connection.execute(query)',
+        "    return connection.execute(query)",
     ),
 }
 
@@ -2443,12 +2450,12 @@ def test_an_interpolated_table_name_is_refused() -> None:
 @pytest.mark.parametrize(
     ("shape", "source"),
     [
-        ("a call", 'connection.execute(build_query(learner_id))'),
-        ("an unbound name", 'connection.execute(QUERY)'),
+        ("a call", "connection.execute(build_query(learner_id))"),
+        ("an unbound name", "connection.execute(QUERY)"),
         ("a name bound twice", 'QUERY = "SELECT 1"\nQUERY = "SELECT 2"\nconnection.execute(QUERY)'),
-        ("a non-string constant", 'connection.execute(7)'),
-        ("a name defined in terms of itself", 'QUERY = QUERY\nconnection.execute(QUERY)'),
-        ("a comprehension", 'connection.execute([x for x in parts])'),
+        ("a non-string constant", "connection.execute(7)"),
+        ("a name defined in terms of itself", "QUERY = QUERY\nconnection.execute(QUERY)"),
+        ("a comprehension", "connection.execute([x for x in parts])"),
     ],
 )
 def test_a_statement_that_cannot_be_read_is_refused_rather_than_skipped(shape: str, source: str) -> None:
@@ -2474,10 +2481,16 @@ _SAFE_CONSTANT = 'QUERY = "SELECT outcome FROM lesson_results WHERE learner_id =
 @pytest.mark.parametrize(
     ("shape", "body"),
     [
-        ("a loop target", "def leak(connection, queries):\n    for QUERY in queries:\n        connection.execute(QUERY)\n"),
+        (
+            "a loop target",
+            "def leak(connection, queries):\n    for QUERY in queries:\n        connection.execute(QUERY)\n",
+        ),
         ("a walrus", "def leak(connection, raw):\n    if (QUERY := raw):\n        connection.execute(QUERY)\n"),
         ("a with-as", "def leak(connection, m):\n    with m as QUERY:\n        connection.execute(QUERY)\n"),
-        ("a comprehension target", "def leak(connection, qs):\n    return [connection.execute(QUERY) for QUERY in qs]\n"),
+        (
+            "a comprehension target",
+            "def leak(connection, qs):\n    return [connection.execute(QUERY) for QUERY in qs]\n",
+        ),
         ("a second assignment", 'QUERY = QUERY + " OR 1=1"\ndef leak(connection):\n    connection.execute(QUERY)\n'),
     ],
 )
@@ -2496,10 +2509,22 @@ def test_a_name_shadowing_a_safe_constant_is_refused(shape: str, body: str) -> N
 @pytest.mark.parametrize(
     ("shape", "source"),
     [
-        ("a parameter default", 'def leak(connection, QUERY="SELECT outcome FROM lesson_results"):\n    connection.execute(QUERY)\n'),
-        ("an import alias", "from elsewhere import q as QUERY\ndef leak(connection):\n    connection.execute(QUERY)\n"),
-        ("tuple unpacking", 'QUERY, OTHER = "SELECT outcome FROM lesson_results", 1\ndef leak(connection):\n    connection.execute(QUERY)\n'),
-        ("a constant joined from a tuple", 'def leak(connection):\n    connection.execute(" ".join(("SELECT outcome", "FROM lesson_results")))\n'),
+        (
+            "a parameter default",
+            'def leak(connection, QUERY="SELECT outcome FROM lesson_results"):\n    connection.execute(QUERY)\n',
+        ),
+        (
+            "an import alias",
+            "from elsewhere import q as QUERY\ndef leak(connection):\n    connection.execute(QUERY)\n",
+        ),
+        (
+            "tuple unpacking",
+            'QUERY, OTHER = "SELECT outcome FROM lesson_results", 1\ndef leak(connection):\n    connection.execute(QUERY)\n',
+        ),
+        (
+            "a constant joined from a tuple",
+            'def leak(connection):\n    connection.execute(" ".join(("SELECT outcome", "FROM lesson_results")))\n',
+        ),
     ],
 )
 def test_a_name_bound_by_an_unreadable_construct_is_refused(shape: str, source: str) -> None:
@@ -2515,7 +2540,7 @@ def test_a_name_bound_by_an_unreadable_construct_is_refused(shape: str, source: 
     [
         ("an UPDATE", 'connection.execute("UPDATE learners SET display_name = ?", (name,))'),
         ("a schema-qualified name", 'connection.execute("SELECT id, display_name FROM main.learners")'),
-        ("a quoted identifier", 'connection.execute(\'SELECT id FROM "learners"\')'),
+        ("a quoted identifier", "connection.execute('SELECT id FROM \"learners\"')"),
         ("lowercase keywords", 'connection.execute("select id from learners")'),
         ("a second space", 'connection.execute("SELECT id FROM  learners")'),
     ],
@@ -2657,7 +2682,7 @@ def test_a_pep_695_binder_counts_as_a_binding(shape: str, binder: str) -> None:
 @pytest.mark.parametrize(
     ("shape", "source"),
     [
-        ("a double-quoted identifier", 'connection.execute(f\'SELECT outcome FROM "{table}" WHERE learner_id = ?\')'),
+        ("a double-quoted identifier", "connection.execute(f'SELECT outcome FROM \"{table}\" WHERE learner_id = ?')"),
         ("a bracketed identifier", 'connection.execute(f"SELECT outcome FROM [{table}] WHERE learner_id = ?")'),
         ("a backquoted identifier", 'connection.execute(f"SELECT outcome FROM `{table}` WHERE learner_id = ?")'),
     ],
@@ -2710,9 +2735,18 @@ def test_taking_the_execute_method_as_a_value_is_never_invisible(shape: str, sou
 @pytest.mark.parametrize(
     ("shape", "statement"),
     [
-        ("a tab inside DO UPDATE", '"INSERT INTO learners (id, x, y) VALUES (?, ?, ?) ON CONFLICT(id) DO\tUPDATE SET x = 1"'),
-        ("a newline inside DO UPDATE", '"INSERT INTO learners (id, x, y) VALUES (?, ?, ?) ON CONFLICT(id) DO\\nUPDATE SET x = 1"'),
-        ("an INSERT ... SELECT", '"INSERT INTO learners (id, x, y) SELECT learner_id, outcome, recorded_at FROM lesson_results"'),
+        (
+            "a tab inside DO UPDATE",
+            '"INSERT INTO learners (id, x, y) VALUES (?, ?, ?) ON CONFLICT(id) DO\tUPDATE SET x = 1"',
+        ),
+        (
+            "a newline inside DO UPDATE",
+            '"INSERT INTO learners (id, x, y) VALUES (?, ?, ?) ON CONFLICT(id) DO\\nUPDATE SET x = 1"',
+        ),
+        (
+            "an INSERT ... SELECT",
+            '"INSERT INTO learners (id, x, y) SELECT learner_id, outcome, recorded_at FROM lesson_results"',
+        ),
     ],
 )
 def test_the_learner_creation_exemption_covers_only_a_plain_insert(shape: str, statement: str) -> None:
@@ -2804,8 +2838,8 @@ def test_reading_through_the_scoping_helper_stops_if_its_name_is_rebound() -> No
 @pytest.mark.parametrize(
     ("shape", "source"),
     [
-        ("one hop", 'run = connection.execute\nalias = run\nalias(QUERY)'),
-        ("two hops", 'run = connection.execute\nmid = run\nalias = mid\nalias(QUERY)'),
+        ("one hop", "run = connection.execute\nalias = run\nalias(QUERY)"),
+        ("two hops", "run = connection.execute\nmid = run\nalias = mid\nalias(QUERY)"),
     ],
 )
 def test_an_alias_of_an_alias_is_followed(shape: str, source: str) -> None:
@@ -2826,7 +2860,7 @@ def test_a_statement_built_inside_exec_or_eval_is_refused(builtin: str) -> None:
     appears, every check in this guard is reasoning about a module whose statements it
     can no longer enumerate, and it should say so rather than keep reporting green.
     """
-    offenders = unverified_inline_queries(f'{builtin}(\'connection.execute("SELECT outcome FROM lesson_results")\')')
+    offenders = unverified_inline_queries(f"{builtin}('connection.execute(\"SELECT outcome FROM lesson_results\")')")
 
     assert offenders and builtin in offenders[0], offenders
 
@@ -2887,7 +2921,7 @@ def test_an_interpolated_statement_must_name_a_table_whatever_its_head(shape: st
 @pytest.mark.parametrize(
     ("shape", "source"),
     [
-        ("a computed getattr", 'run = getattr(connection, name)\nrun(QUERY)'),
+        ("a computed getattr", "run = getattr(connection, name)\nrun(QUERY)"),
         ("__getattribute__", 'run = connection.__getattribute__("execute")\nrun(QUERY)'),
         ("__getattr__", 'run = connection.__getattr__("execute")\nrun(QUERY)'),
     ],
@@ -2940,7 +2974,7 @@ def test_the_coverage_pin_looks_through_the_same_eyes_as_the_guard() -> None:
     and it stayed green, because store.py happens to contain no alias. This asserts the
     two agree on planted source that does contain one.
     """
-    planted = 'run = connection.execute\nrun(build_the_query())\n'
+    planted = "run = connection.execute\nrun(build_the_query())\n"
     tree = ast.parse(planted)
     aliases = _execute_aliases(tree)
 
@@ -3023,11 +3057,11 @@ def test_the_guard_flags_a_leak_planted_in_the_real_module_source() -> None:
     assert unverified_inline_queries(source) == [], "the unmodified module must be clean"
 
     planted = source + (
-        '\n\ndef _every_result(connection, language_code):\n'
-        '    return connection.execute(\n'
+        "\n\ndef _every_result(connection, language_code):\n"
+        "    return connection.execute(\n"
         '        f"SELECT outcome FROM lesson_results AS r "\n'
         '        f"JOIN lessons AS l ON l.id = r.lesson_id WHERE l.language_code = {language_code}"\n'
-        '    ).fetchall()\n'
+        "    ).fetchall()\n"
     )
 
     offenders = unverified_inline_queries(planted)
@@ -3486,9 +3520,19 @@ def test_silence_is_what_separates_a_real_absence_from_every_other_none(
         # non-lowercase code is a GUARANTEED false absence, never a real one.
         ("uppercase, which the catalog CHECK forbids", "sample-learner", "ES", "Could not read a language code"),
         ("mixed case", "sample-learner", "Es", "Could not read a language code"),
-        ("a surrogate, which is a str the driver cannot bind", "sample-learner", "e\ud800s", "Could not read a language code"),
+        (
+            "a surrogate, which is a str the driver cannot bind",
+            "sample-learner",
+            "e\ud800s",
+            "Could not read a language code",
+        ),
         ("the empty string, too short to be a code", "sample-learner", "", "Could not read a language code"),
-        ("padded, which no CHECK forbids and nothing matched", "sample-learner", " es", "Could not read a language code"),
+        (
+            "padded, which no CHECK forbids and nothing matched",
+            "sample-learner",
+            " es",
+            "Could not read a language code",
+        ),
         ("a control character", "sample-learner", "es\x00", "Could not read a language code"),
         ("a language we really do not teach", "sample-learner", UNTAUGHT_CODE, ""),
         ("a legal-shaped code that is simply absent", "sample-learner", UNTAUGHT_CODE_ABSENT, ""),
@@ -3600,9 +3644,7 @@ def test_a_bad_language_code_is_not_reported_as_a_broken_store(
     assert store.store_is_available(instance) is True
 
 
-def test_store_is_available_still_separates_absence_from_breakage(
-    instance: Path, tmp_path: Path
-) -> None:
+def test_store_is_available_still_separates_absence_from_breakage(instance: Path, tmp_path: Path) -> None:
     """The distinction the readers depend on, re-checked after collapsing one more case.
 
     A value the driver cannot bind now answers None like a broken store does -- so the
@@ -3753,9 +3795,7 @@ def test_every_entry_point_answers_rather_than_raises_for_a_bad_instance_path(
     assert "must be a path, not int" in caplog.text
 
 
-def test_a_genuine_programming_error_still_raises(
-    instance: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_genuine_programming_error_still_raises(instance: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The other half of choosing ValueError: TypeError keeps meaning what it meant.
 
     Widening the readers' absorb tuple to include TypeError was the tempting
@@ -3821,9 +3861,7 @@ def test_a_bad_instance_path_is_a_caller_error_not_a_broken_store(
     assert store.store_is_available(instance) is True
 
 
-def test_no_entry_point_logs_a_fragment_of_a_surrogate_id(
-    instance: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_no_entry_point_logs_a_fragment_of_a_surrogate_id(instance: Path, caplog: pytest.LogCaptureFixture) -> None:
     """The two sinks _log_safe did not originally cover.
 
     UnicodeEncodeError names the offending character and its INDEX, so an unencodable
@@ -4100,8 +4138,11 @@ def test_deleting_a_faceprint_counts_rather_than_names(instance: Path) -> None:
     ("label", "call", "expected"),
     [
         ("get", lambda path: store.get_faceprint("someone", instance_path=path), None),
-        ("save", lambda path: store.save_faceprint("someone", "m", [1.0], instance_path=path).reason,
-         "storage_unavailable"),
+        (
+            "save",
+            lambda path: store.save_faceprint("someone", "m", [1.0], instance_path=path).reason,
+            "storage_unavailable",
+        ),
         ("delete", lambda path: store.delete_faceprint("someone", instance_path=path), None),
     ],
 )
@@ -4184,9 +4225,9 @@ def test_the_faceprint_bounds_in_python_and_in_the_schema_say_the_same_thing() -
         "the byte-length clause is gone; the character allow-list is NUL-steppable without it"
     )
     assert glob.group(1) == "A-Za-z0-9._-"
-    assert store._MODEL_NAME_CHARACTERS == frozenset(
-        string.ascii_letters + string.digits + "._-"
-    ), "the two copies of the permitted set must say the same thing"
+    assert store._MODEL_NAME_CHARACTERS == frozenset(string.ascii_letters + string.digits + "._-"), (
+        "the two copies of the permitted set must say the same thing"
+    )
 
 
 class _RacingConnection:
@@ -4338,9 +4379,8 @@ def _exception_bound_names(tree: ast.Module) -> frozenset[str]:
             bound.discard(node.id)
         if isinstance(node, ast.arg) and node.arg in bound:
             annotation = node.annotation
-            annotated_as_exception = (
-                isinstance(annotation, ast.Name)
-                and (annotation.id in exception_annotations or annotation.id.endswith("Error"))
+            annotated_as_exception = isinstance(annotation, ast.Name) and (
+                annotation.id in exception_annotations or annotation.id.endswith("Error")
             )
             if not annotated_as_exception:
                 bound.discard(node.arg)
@@ -4740,3 +4780,32 @@ def test_the_consent_migration_guard_rejects_what_it_claims_to(shape: str, state
     sql = (Path(store.__file__).resolve().parent / "consent_scopes.v5.sql").read_text(encoding="utf-8")
 
     assert _migration_statements_outside_the_allow_list(sql + "\n" + statement), f"{shape} was accepted"
+
+
+def test_a_completion_does_not_win_a_tie_against_a_later_row_at_the_same_instant(instance: Path) -> None:
+    """The tie-break in latest-wins, which was load-bearing and untested.
+
+    "Finished" means the last result for a lesson is a completion. When two results
+    share a recorded_at -- which seed data and tests routinely produce, since they use
+    fixed stamps -- "last" has to be decided by something, and it is the row id, the
+    same way _ATTEMPTS_SQL decides it. Without that, the completion matched as well and
+    the lesson counted as finished: the learner is skipped past material, which is the
+    D38 harm exactly.
+
+    Measured rather than assumed: removing ", r2.id DESC" from the two statements left
+    the whole suite green before this case existed.
+    """
+    lesson = "it-fast-01-what-time-is-it"
+    same_instant = _AFTER_THE_SEEDED_HISTORY + 5_000
+    _add_result(instance, "sample-learner", lesson, "completed", when=same_instant)
+    _add_result(instance, "sample-learner", lesson, "partial", when=same_instant)
+
+    progress = store.get_progress("sample-learner", "it", instance_path=instance)
+
+    assert progress is not None
+    assert lesson not in {entry.id for entry in progress.completed}, (
+        "a completion won a same-millisecond tie against the partial written after it"
+    )
+    assert progress.next_lesson is not None and progress.next_lesson.id == lesson, (
+        "the learner was moved past a lesson whose last word was not a completion"
+    )
