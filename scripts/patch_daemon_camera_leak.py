@@ -32,8 +32,13 @@ The daemon runs from the desktop app's OWN managed virtualenv, not from any
 project venv. Patching the wrong one changes nothing, so this defaults to the
 app's and prints which file it touched.
 
-The app replaces that virtualenv on update, so this patch does not survive one.
-Re-run it after updating the desktop app, or when the camera goes quiet again.
+An update does not survive this patch, and the backup does not survive an update.
+Upgrading reachy_mini rewrites media_server.py but leaves the .orig beside it, because
+pip only removes files it installed -- measured on the 1.10.0 -> 1.11.0 upgrade, which
+left the 1.10.0 file as the backup of a 1.11.0 install. So a backup is only trusted when
+it is provably the unpatched form of the file installed NOW: applying the patch to it
+must reproduce that file exactly. Anything else is stale, and --revert refuses it
+rather than downgrade the daemon one file at a time. Re-run this after an update.
 
 Usage:
     python3 scripts/patch_daemon_camera_leak.py            # apply
@@ -75,6 +80,30 @@ INSERTION = (
 )
 
 
+def backup_path(path: Path) -> Path:
+    """Where the unpatched copy of ``path`` is kept."""
+    return path.with_suffix(path.suffix + ".orig")
+
+
+def patched(text: str) -> str:
+    """The patch, as a pure function of the unpatched text."""
+    return text.replace(ANCHOR, ANCHOR + INSERTION, 1)
+
+
+def backup_matches(path: Path) -> bool:
+    """True only when the backup is the unpatched form of the file installed now.
+
+    Named as the one permitted case rather than a list of stale ones: whatever an
+    upgrade, a hand edit or a second patch did to either file, a backup that does not
+    reproduce the current file under the patch is not a copy of it.
+    """
+    backup = backup_path(path)
+    if not (backup.exists() and path.exists()):
+        return False
+    original = backup.read_text(encoding="utf-8")
+    return original.count(ANCHOR) == 1 and patched(original) == path.read_text(encoding="utf-8")
+
+
 def report(path: Path) -> int:
     """Say whether the file exists and whether the patch is already in it."""
     if not path.exists():
@@ -84,6 +113,9 @@ def report(path: Path) -> int:
     text = path.read_text(encoding="utf-8")
     if MARKER in text:
         print(f"ALREADY PATCHED: {path}")
+        if not backup_matches(path):
+            print(f"WARNING: {backup_path(path)} is missing or is not this file's original;")
+            print("  --revert will refuse it. Reinstall reachy-mini into the daemon venv to undo.")
         return 0
     if ANCHOR not in text:
         print(f"ANCHOR NOT FOUND: {path}")
@@ -99,16 +131,18 @@ def apply(path: Path) -> int:
     if status != 1:
         return 0 if status == 0 else status
 
-    backup = path.with_suffix(path.suffix + ".orig")
-    if not backup.exists():
-        shutil.copy2(path, backup)
-        print(f"backup written: {backup}")
-
     text = path.read_text(encoding="utf-8")
     if text.count(ANCHOR) != 1:
         print(f"REFUSING: the anchor appears {text.count(ANCHOR)} times, expected exactly 1")
         return 3
-    path.write_text(text.replace(ANCHOR, ANCHOR + INSERTION), encoding="utf-8")
+
+    # The file is unpatched, so it IS the shipped original -- always back it up afresh.
+    # Keeping an existing backup instead is what kept a 1.10.0 file as the "original"
+    # of a 1.11.0 install.
+    backup = backup_path(path)
+    shutil.copy2(path, backup)
+    print(f"backup written: {backup}")
+    path.write_text(patched(text), encoding="utf-8")
 
     # Read back rather than trust the write, and check it still parses.
     import ast
@@ -116,17 +150,26 @@ def apply(path: Path) -> int:
     written = path.read_text(encoding="utf-8")
     ast.parse(written)
     assert MARKER in written and 'set_property("leaky", 2)' in written
+    assert backup_matches(path)
     print(f"PATCHED: {path}")
     print("\nRestart the Reachy Mini Control app for this to take effect.")
     return 0
 
 
 def revert(path: Path) -> int:
-    """Put the shipped file back."""
-    backup = path.with_suffix(path.suffix + ".orig")
+    """Put the shipped file back, but only the shipped file of THIS install."""
+    backup = backup_path(path)
+    if path.exists() and MARKER not in path.read_text(encoding="utf-8"):
+        print(f"NOT PATCHED: {path}; nothing to revert")
+        return 0
     if not backup.exists():
         print(f"no backup at {backup}; nothing to revert")
         return 2
+    if not backup_matches(path):
+        print(f"REFUSING: {backup} is not the unpatched form of {path}.")
+        print("It is most likely left over from an earlier reachy-mini version; restoring it")
+        print("would put that version's file into this install. Nothing was changed.")
+        return 4
     shutil.copy2(backup, path)
     print(f"REVERTED from {backup}")
     return 0
@@ -141,7 +184,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.check:
-        return 0 if report(args.path) in (0, 1) else report(args.path)
+        status = report(args.path)
+        return 0 if status in (0, 1) else status
     if args.revert:
         return revert(args.path)
     return apply(args.path)

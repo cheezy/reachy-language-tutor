@@ -20,6 +20,14 @@ server it could not read. D18 was that question: **can a host on the same LAN in
 Confirmed two ways, against the SDK version actually installed (`reachy-mini==1.10.0`,
 not the 1.8.0 the original trace used — every line below was re-resolved).
 
+**Re-checked against 1.11.0 on 2026-09-24, by diff rather than by re-running the chain.**
+`apps/jsonrpc_server.py`, `io/jsonrpc.py` and `io/ws_server.py` are byte-identical to 1.10.0.
+The 1.11.0 changes to `media_server.py`, `webrtc_utils.py` and `central_signaling_relay.py`
+touch no DataChannel, JSON-RPC, binding or admission code, and the signalling server still
+listens on `*:8443`. 1.11.0's "trusted HTTPS endpoints" work (#1365) is about where the daemon
+sends its token, not about who may reach this surface. Nothing found says the answer changed.
+The end-to-end probe was not repeated.
+
 **The code path is credential-free from the DataChannel inward.**
 
 - `reachy_mini/daemon/jsonrpc_relay.py:90` — only `apps.*` is handled locally; every

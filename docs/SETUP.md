@@ -145,6 +145,20 @@ provisions `reachy_mini 1.8.0`, which is older than this project's template requ
 So a desktop app update can silently put you back into version skew. **If motion starts
 failing after an app update, check the versions first.** It is almost always this.
 
+**An update also removes the local camera patch.** `scripts/patch_daemon_camera_leak.py`
+edits `media_server.py` inside the daemon's `.venv` (see the 8443 entry under
+Troubleshooting), and upgrading `reachy-mini` there replaces that file. It does *not*
+remove the script's `media_server.py.orig` backup, because pip only deletes files it
+installed: the 1.10.0 → 1.11.0 upgrade left the 1.10.0 file sitting beside the 1.11.0 one
+as its "original". The script now re-takes the backup on every patch and refuses to
+`--revert` from a backup that is not this install's own unpatched file, so re-run it after
+an update and check with `--check`:
+
+```bash
+python3 scripts/patch_daemon_camera_leak.py --check   # UNPATCHED after an update
+python3 scripts/patch_daemon_camera_leak.py           # then relaunch the desktop app
+```
+
 ## 6. Developer tooling and tests
 
 The project uses **ruff** (formatter and linter) and **pytest** (tests). They are declared in
@@ -371,6 +385,31 @@ Only one app may drive the robot at a time. Quitting the other one is usually th
 
 ### The dashboard camera says "Timed out waiting for WebRTC stream from ws://localhost:8443"
 
+> **Update, 2026-09-24, on `reachy-mini` 1.11.0: four boots, no deadlock.** Upstream
+> issue #1416 is still open, the 1.11.0 release notes claim no fix for it, and
+> `rswebrtc` (0.15.3-e92296285) and GStreamer (1.28.7) are the same builds the entry
+> below was measured on. The Mac media pipeline is unchanged too; 1.11.0's
+> `media_server.py` changes are the Raspberry Pi encoder path and TURN error handling.
+> Even so, each of these boots completed its first WebRTC session and stayed healthy,
+> measured with the diagnostic commands below (plus a WebSocket read of 8443):
+>
+> | Boot | Local patch | Measured at | `queue_webrtc:src` | IPC frames in 6 s | 8443 |
+> |---|---|---|---|---|---|
+> | first boot after the upgrade | none | 17 min | `gst_queue_loop` (idle) | 61 | `welcome` |
+> | relaunch A | none | 63 s | `gst_queue_loop` | 60 | `welcome` |
+> | relaunch B | none | 62 s | `gst_queue_loop` | 60 | `welcome` |
+> | relaunch C | applied | 57 s | `gst_queue_loop` | 61 | `welcome` |
+>
+> On 1.10.0, three boots out of three wedged within 16 s. **Why 1.11.0 behaves differently
+> is not known.** The TURN relay starts working in 1.11.0 (the daemon now logs
+> `Refreshed 6 TURN server(s)` where 1.10.0 logged `Failed to fetch TURN credentials`),
+> which changes the candidates offered to that first session. That is the one visible
+> difference on this path, but it is a hypothesis: nobody tested it. Treat this as
+> "not reproduced on four boots", not as fixed. The patch stays applied as insurance; with
+> no deadlock it only matters if the WebRTC branch ever stops draining. IPC delivers about
+> 10 frames a second here, not 30. That was not investigated, and the entry below never
+> measured IPC frame rate on a healthy daemon either.
+
 **Answered in D24 on 2026-09-12. This is a deadlock inside GStreamer's `webrtcsink`
 (`gst-plugin-webrtc` 0.15.3), it reproduces on every daemon start, and nothing in this
 repository is on the failing path or can fix it.** D22 located the fault and left three
@@ -529,7 +568,8 @@ it, stop investigating the camera.
 
 Affected versions, all confirmed on this machine in this session:
 
-- `reachy-mini` 1.10.0, daemon started `--desktop-app-daemon --mockup-sim`
+- `reachy-mini` 1.10.0, daemon started `--desktop-app-daemon --mockup-sim` (1.11.0 did not
+  reproduce it on four boots; see the update at the top of this entry)
 - `gst-plugin-webrtc` (`rswebrtc`) **0.15.3-e92296285** — `webrtcsink`
 - GStreamer core, `webrtcbin`, `unixfd`, `applemedia` — all **1.28.7**
 - macOS 26.6.1 (25G76), arm64
@@ -664,10 +704,13 @@ real release is still in its shutdown `finally`.
   that would answer is blocked on the same `Mutex`.
 - **Do not read the zero-byte 8443 result as "there is no producer to announce".** That server
   sends its `Welcome` on connect regardless of producers. The silence is a blocked accept path.
-- **The TURN warnings in the log are a red herring.** `Failed to fetch TURN credentials` for
-  `turn.fastrtc.org` repeats every ~30 s because DNS does not resolve it here. The dashboard is
-  a loopback peer and needs host candidates only; the daemon logs `No TURN servers held;
-  offering host/srflx only` and proceeds to a full SDP exchange.
+- **The TURN warnings in a 1.10.0 log are a red herring.** `Failed to fetch TURN credentials`
+  for `turn.fastrtc.org` repeated every ~30 s because that domain's DNS has been dead since
+  June 2026. The dashboard is a loopback peer and needs host candidates only; the daemon logged
+  `No TURN servers held; offering host/srflx only` and went on to a full SDP exchange.
+  **1.11.0 fixed the default** (upstream #1408): the daemon now logs
+  `Refreshed 6 TURN server(s)`, so on 1.11.0 a TURN *failure* in the log is new and worth
+  reading, not noise.
 
 ## Creating a new app from the template (rarely needed)
 
