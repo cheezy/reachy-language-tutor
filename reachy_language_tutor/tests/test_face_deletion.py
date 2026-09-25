@@ -829,3 +829,29 @@ def test_every_erasure_empties_the_log_through_the_same_helper() -> None:
         "a function frees pages that held personal data without emptying the write-ahead "
         f"log, so the bytes can outlive the row: {missing}"
     )
+
+
+def test_a_stored_faceprint_does_not_render_whose_it_is_or_its_numbers() -> None:
+    """The store's Faceprint, and the outcome that carries it, keep the id and vector out.
+
+    The generated dataclass repr printed the learner id and all 128 floats -- 1,398
+    characters of one person's biometric data -- and SaveFaceprintOutcome renders the
+    faceprint it holds, so the saved-faceprint answer carried it too.
+    """
+    from reachy_language_tutor.learners import Faceprint, SaveFaceprintOutcome
+
+    learner_id = "learner-4f1d9c"
+    element = 0.123456789
+    faceprint = Faceprint(
+        learner_id=learner_id,
+        embedding_model="opencv_sface_2021dec_fp32",
+        dimension=128,
+        vector=tuple([element] * 128),
+        created_at=1,
+    )
+    outcome = SaveFaceprintOutcome(saved=True, reason=None, faceprint=faceprint)
+
+    for text in (repr(faceprint), f"{faceprint}", repr(outcome)):
+        assert learner_id not in text, text
+        assert str(element) not in text, text
+    assert "<128 floats>" in repr(outcome)

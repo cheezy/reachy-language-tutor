@@ -20,7 +20,7 @@ notice and storing their yes against the other would make the stored record fals
 
 ### Before a face is enrolled
 
-This is `CONSENT_STATEMENT` in `faces/enrollment.py`, id `face_recognition.v3`. It is
+This is `CONSENT_STATEMENT` in `faces/enrollment.py`, id `face_recognition.v4`. It is
 shown in full, and the operator must type the word `yes` — not a `[y/N]` default, because
 a default that means yes is not consent.
 
@@ -46,9 +46,11 @@ a default that means yes is not consent.
 > same service too. This robot does not keep those pictures. What that company does with
 > any of it is their decision and not this robot's.
 >
-> You can say no now, or stop at any point before it finishes, and nothing is kept. If
-> the robot cannot finish undoing it, it will say so on screen and tell whoever is
-> running it how to remove you.
+> You can say no now, or stop it while it is taking pictures, and it undoes what it
+> saved. If it cannot finish undoing that while its screen is still open, it will say so
+> there and tell whoever is running it how to remove you. The one thing it cannot undo is
+> being switched off, losing power or being forced to quit at that moment: then your name
+> and this agreement can stay on it, without any numbers.
 >
 > Afterwards you can ask whoever set this robot up to delete the numbers, and they will
 > be deleted. They will need the learner id this robot shows them when you are enrolled,
@@ -79,6 +81,14 @@ a default that means yes is not consent.
 `CONSENT_STATEMENT_DIGESTS` and `LOCAL_PROFILE_STATEMENT_DIGESTS` — and a test fails if a
 sentence changes without the digest moving. That rule exists because the face wording's v2
 was edited twice with the id never moving, and only a review noticed.
+
+**v4 narrowed a promise v3 could not keep.** v3 said "stop at any point before it
+finishes, and nothing is kept". Measured: an enrolment ended by SIGTERM or SIGHUP — `kill`,
+or closing the terminal or SSH session it runs in — left the person's learner row and
+consent row behind, printed nothing and named no id; only Ctrl-C was undone. SIGTERM and
+SIGHUP now run the same undo as Ctrl-C, and a test sends each to a real enrolment and
+checks the database is back where it started. No code can undo a SIGKILL or a power cut
+after the agreement is written, so v4 says so instead of promising it.
 
 ---
 
@@ -114,7 +124,11 @@ written anywhere by this package at any point", which is wider than what is chec
 - that native path is closed separately by `_PERMITTED_CALLS` in
   `tests/test_face_matching.py`, an allow-list over every call in the whole `faces`
   package, so an image writer fails by not being on the list rather than by having been
-  foreseen.
+  foreseen. **The list matches call names**, so on its own it could be walked round by
+  renaming — measured: `from cv2 import imwrite as create` followed by `create(...)`, and
+  `detect = open` followed by `detect(path, "wb")`, both passed it. A second test now
+  refuses any binding of a permitted name other than a `def`, a `class` or an import
+  under its own name, so a renamed writer fails there instead.
 
 Together those cover the code that handles frames. Neither is a statement about every
 line of the app.
@@ -326,8 +340,11 @@ Three operator commands, and they are deliberately different requests.
 
 **It does print the person's name**, and an earlier draft of this document said it
 "reports counts and never a name", which was false. The distinction it garbled is worth
-keeping: the store's **log line** carries counts and never a name or an id, so an audit
-trail of a deletion does not record who was deleted — but the **operator's terminal**
+keeping: the store's **log line** carries neither a name nor an id — nor the counts,
+which a previous version of this sentence said it did; measured, it reads "A household
+member was forgotten; the counts are on the returned outcome", and the counts reach only
+the terminal — so an audit trail of a deletion does not record who was deleted, but the
+**operator's terminal**
 prints `Forgot <name> completely.`, deliberately, because an erasure that cannot say who
 it erased is not much of a confirmation. A terminal is not a log; redirecting that output
 to a file writes the name into it, and the subcommand's own help says so.

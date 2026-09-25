@@ -55,8 +55,11 @@ from __future__ import annotations
 import sys
 import time
 import uuid
+import signal
 import logging
-from typing import Any
+import threading
+from typing import Any, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from reachy_language_tutor.learners import (
@@ -81,7 +84,7 @@ logger = logging.getLogger(__name__)
 # improved: a stored consent keeps the text it was given, so an old row goes on saying
 # what that person was actually told. Bump the id when the words change.
 CONSENT_SCOPE: str = "face_recognition"
-CONSENT_STATEMENT_ID: str = "face_recognition.v3"
+CONSENT_STATEMENT_ID: str = "face_recognition.v4"
 
 # The digest of the wording this id names, and WHEN A BUMP IS OWED, stated precisely
 # because "bump the id when the words change" is the wrong rule during development --
@@ -104,6 +107,9 @@ CONSENT_STATEMENT_ID: str = "face_recognition.v3"
 # would be wrong the moment a household has actually consented.
 CONSENT_STATEMENT_DIGESTS: dict[str, str] = {
     "face_recognition.v3": "e34bb750b8c4af6f819c28599e65ff744b3d05c77e61431fd10e389cb55a1e32",
+    # v4 narrows the sentence about stopping: see the "stop it while it is taking
+    # pictures" entry in the list above CONSENT_STATEMENT.
+    "face_recognition.v4": "8381cf8120455cb02d158ce8fdef86d7ac530f6bfa08ae493bdcc2f99ddc1d21",
 }
 
 # THE WORDS THEMSELVES, WRITTEN DOWN ONCE, and this is the point of the constant: what
@@ -204,6 +210,16 @@ CONSENT_STATEMENT_DIGESTS: dict[str, str] = {
 #                                    was a promise that would have come true as a lie
 #                                    the day W29 lands, with nothing failing.
 #   "not a lock"                  -- there is no liveness check, and faces/__init__ says so.
+#   "stop it while it is taking pictures, and it undoes what it saved" -- v4's
+#                                    narrowing of v3's "stop at any point before it
+#                                    finishes, and nothing is kept". Ctrl-C, SIGTERM and
+#                                    SIGHUP all reach the rollback now (measured: before,
+#                                    SIGTERM and SIGHUP left the learner and consent rows
+#                                    behind), but nothing can undo a SIGKILL or a power
+#                                    cut after the consent COMMIT, so v3 promised more
+#                                    than any code could keep. "while its screen is
+#                                    still open" because a closed terminal is where the
+#                                    rollback-failed message would have gone.
 #   "delete the numbers"          -- the `enrol --forget` command, which calls
 #                                    delete_faceprint (it erases and checkpoints the
 #                                    WAL). Before that command existed this sentence
@@ -240,7 +256,7 @@ The numbers never leave this robot. No copy of them is sent anywhere. They can t
 
 Other things do leave, and you should know this before you agree. While this robot is switched on, it sends what its microphone hears to a language service on the internet -- your voice, and the voice of anyone else in the room. It sends the name it calls you by, how your lessons are going, and anything it has been asked to remember about you. Anything else it looks up about you in order to teach you goes to that service too. Sometimes it takes a picture to see what is in front of it, and that goes to the same service too. This robot does not keep those pictures. What that company does with any of it is their decision and not this robot's.
 
-You can say no now, or stop at any point before it finishes, and nothing is kept. If the robot cannot finish undoing it, it will say so on screen and tell whoever is running it how to remove you.
+You can say no now, or stop it while it is taking pictures, and it undoes what it saved. If it cannot finish undoing that while its screen is still open, it will say so there and tell whoever is running it how to remove you. The one thing it cannot undo is being switched off, losing power or being forced to quit at that moment: then your name and this agreement can stay on it, without any numbers.
 
 Afterwards you can ask whoever set this robot up to delete the numbers, and they will be deleted. They will need the learner id this robot shows them when you are enrolled, so ask them to keep it. The name and this agreement are kept, so there is always a record of what you were told and when.
 
@@ -326,6 +342,19 @@ class EnrolmentOutcome:
     reason: str | None = None
     error: str | None = None
     learner_id: str | None = None
+
+    def __repr__(self) -> str:
+        """Say what happened and why, never to whom.
+
+        The same privacy control as MatchOutcome and RecognitionOutcome: the generated
+        repr renders the learner id. `error` is one of _REFUSALS' fixed sentences and
+        `reason` a machine code, so both may be shown.
+        """
+        held = "none" if self.learner_id is None else "<set>"
+        return (
+            f"EnrolmentOutcome(enrolled={self.enrolled!r}, reason={self.reason!r}, "
+            f"error={self.error!r}, learner_id={held})"
+        )
 
 
 def _refused(reason: str, learner_id: str | None = None) -> EnrolmentOutcome:
@@ -432,7 +461,13 @@ def _medoid(prints: list[tuple[float, ...]]) -> tuple[float, ...] | None:
     for index, candidate in enumerate(prints):
         others = [other for position, other in enumerate(prints) if position != index]
         similarities = [faceprint_similarity(candidate, other) for other in others]
-        if any(value is None or value < FACE_MATCH_SIMILARITY_FLOOR for value in similarities):
+        # Written positively, as matching.py writes its own floor test, so it fails
+        # CLOSED: `value < FLOOR` is False for NaN and let a non-number through as
+        # agreement. The floor is the matcher's ONLY floor -- there used to be a
+        # higher one for a household of one, and a print accepted here at 0.50 was
+        # then refused against its own owner at 0.65. Measured: four of that
+        # person's own enrolment frames were answered no_one_close_enough.
+        if any(value is None or not (value >= FACE_MATCH_SIMILARITY_FLOOR) for value in similarities):
             return None
         scores.append((sum(value for value in similarities if value is not None), candidate))
     if not scores:
@@ -514,8 +549,16 @@ def _roll_back_left_something(learner_id: str, instance_path: Any) -> bool:
     Collapsing 0 and None, as an earlier version did by testing `== 1`, made every
     interrupt that landed before the write print a warning about a row that did not
     exist -- alarming an operator about nothing, which is its own kind of wrong.
+
+    THE ROLLBACK ITSELF CANNOT BE INTERRUPTED by Ctrl-C, SIGTERM or SIGHUP: they are
+    ignored for the length of this one DELETE. An operator who presses Ctrl-C twice,
+    or a terminal that sends SIGHUP after the SIGTERM that started this, would
+    otherwise abort the very undo the first interrupt asked for. Nothing is lost by
+    ignoring them: on the interrupt path the process is already on its way out, and on
+    the refusal path the command returns within the same call.
     """
-    removed = forget_learner(learner_id, instance_path=instance_path)
+    with _signals_handled_by(signal.SIG_IGN, (*_TERMINATING_SIGNALS, signal.SIGINT)):
+        removed = forget_learner(learner_id, instance_path=instance_path)
     if removed == 1:
         logger.info("Enrolment did not finish; the learner it created was rolled back")
         return False
@@ -524,6 +567,57 @@ def _roll_back_left_something(learner_id: str, instance_path: Any) -> bool:
         return False
     logger.warning("Enrolment did not finish and the learner it created could not be rolled back")
     return True
+
+
+# The ways an operator stops an enrolment OTHER than Ctrl-C, which Python already turns
+# into KeyboardInterrupt. Closing the terminal, or an SSH session dropping -- which is
+# how a Reachy Mini Wireless is reached -- sends SIGHUP; `kill` and a service manager
+# send SIGTERM. Both kill the process outright by default, so the rollback below never
+# ran: measured, an enrolment interrupted by either left its learner row and consent
+# row behind, printed nothing and named no id, while Ctrl-C rolled back cleanly.
+#
+# An allow-list of the signals turned into an exception, not a claim that every way
+# of stopping is covered. SIGKILL and a power cut cannot be caught by anything, and
+# what they leave behind is a person with an agreement and no faceprint.
+_TERMINATING_SIGNALS: tuple[int, ...] = tuple(
+    number for number in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None)) if number is not None
+)
+
+
+def _stop_enrolment(signum: int, _frame: Any) -> None:
+    """Turn a terminating signal into an exception, so the rollback runs before exit.
+
+    SystemExit rather than KeyboardInterrupt: it is what the default handler would have
+    ended the process with, it is a BaseException that `enrol`'s handler catches, and
+    `128 + signum` is the conventional status for a process ended by a signal.
+    """
+    raise SystemExit(128 + signum)
+
+
+def _restorable(handler: Any) -> Any:
+    """Return a handler signal.signal will take back; getsignal answers None for one set outside Python."""
+    return signal.SIG_DFL if handler is None else handler
+
+
+@contextmanager
+def _signals_handled_by(handler: Any, numbers: tuple[int, ...]) -> Iterator[None]:
+    """Route these signals to `handler` for the duration, and put back what was there.
+
+    Only on the main thread, because that is the only thread Python lets install a
+    handler on -- and the only one a signal is delivered to. Called from anywhere
+    else it changes nothing, which leaves the process's own handling in place.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = {number: signal.getsignal(number) for number in numbers}
+    for number in numbers:
+        signal.signal(number, handler)
+    try:
+        yield
+    finally:
+        for number, earlier in previous.items():
+            signal.signal(number, _restorable(earlier))
 
 
 def enrol(
@@ -557,64 +651,68 @@ def enrol(
         # argument. That is worse than a generic message, not better.
         return _refused("consent_role_not_understood")
 
-    # The consent call is INSIDE the guarded region, not above it. It used to sit
-    # outside, and a review reproduced the window against a real database: an
-    # interrupt landing after record_consent's COMMIT and before the try began left a
-    # learner row and a consent row behind, printed nothing, and named no id -- so
-    # both halves of the notice's "stop at any point and nothing is kept" were false,
-    # and the remedy it points at was unreachable. Narrow, and not narrow enough to
-    # leave in a sentence made to a household.
-    # The id is minted HERE, before the try, and handed down. That is what closes the
-    # last of the interrupt window: putting record_consent inside the try was not
-    # enough, because the rollback still needed `agreed` to be BOUND, and an
-    # interrupt landing after the COMMIT but before that assignment -- in the
-    # connection close, or building the outcome object -- left a committed learner
-    # and consent row that nothing could name. Reproduced against a real database
-    # before this change. With the id known up front, every failure after this point
-    # can undo the row whether or not the call ever returned.
-    learner_id = uuid.uuid4().hex
-    try:
-        agreed = record_consent_for_enrolment(
-            display_name, granted_by=granted_by, learner_id=learner_id, instance_path=instance_path
-        )
-        if not agreed.recorded or agreed.learner_id is None:
-            return _refused("name_not_usable" if agreed.reason == "name_not_usable" else "consent_not_recorded")
+    # SIGTERM and SIGHUP raise SystemExit for the length of the enrolment, so they reach
+    # the rollback below the way Ctrl-C always has. See _TERMINATING_SIGNALS for what
+    # that measured and what it cannot cover.
+    with _signals_handled_by(_stop_enrolment, _TERMINATING_SIGNALS):
+        # The consent call is INSIDE the guarded region, not above it. It used to sit
+        # outside, and a review reproduced the window against a real database: an
+        # interrupt landing after record_consent's COMMIT and before the try began left a
+        # learner row and a consent row behind, printed nothing, and named no id -- so
+        # both halves of v3's notice, "stop at any point and nothing is kept", were false,
+        # and the remedy it points at was unreachable. Narrow, and not narrow enough to
+        # leave in a sentence made to a household.
+        # The id is minted HERE, before the try, and handed down. That is what closes the
+        # last of the interrupt window: putting record_consent inside the try was not
+        # enough, because the rollback still needed `agreed` to be BOUND, and an
+        # interrupt landing after the COMMIT but before that assignment -- in the
+        # connection close, or building the outcome object -- left a committed learner
+        # and consent row that nothing could name. Reproduced against a real database
+        # before this change. With the id known up front, every failure after this point
+        # can undo the row whether or not the call ever returned.
+        learner_id = uuid.uuid4().hex
+        try:
+            agreed = record_consent_for_enrolment(
+                display_name, granted_by=granted_by, learner_id=learner_id, instance_path=instance_path
+            )
+            if not agreed.recorded or agreed.learner_id is None:
+                return _refused("name_not_usable" if agreed.reason == "name_not_usable" else "consent_not_recorded")
 
-        outcome = capture_faceprint(
-            agreed.learner_id,
-            media,
-            camera_enabled=camera_enabled,
-            instance_path=instance_path,
-        )
-    except BaseException:
-        # BaseException, not Exception, and this is the sentence it defends:
-        # CONSENT_STATEMENT promises "you can stop at any point before it finishes,
-        # and nothing is kept". The capture is real wall-clock time -- up to twenty
-        # attempts with a pause between them -- and the way a person actually stops it
-        # is the operator pressing Ctrl-C, which raises KeyboardInterrupt and is NOT
-        # an Exception. Without this the promise was false for exactly the scenario it
-        # describes: the learner row and the consent row would stay behind.
-        # REPORTED HERE TOO, and the earlier version of this comment was wrong about
-        # why it need not be. It claimed there was nowhere to print because the
-        # interrupt was on its way up -- but stderr is open inside this block, and
-        # Ctrl-C is precisely the case where the operator is watching the terminal,
-        # because they are the one who just pressed it. Leaving this silent meant the
-        # path the household is MOST likely to take -- somebody changing their mind
-        # mid-capture, which is the scenario this handler exists to honour -- was the
-        # one path where a failed rollback reached only a log nobody reads.
-        # forget_learner answers 0 for a row that was never written, which is the
-        # "interrupted before the commit" case and needs no report -- there is
-        # nothing to tell anybody about. Only a row that EXISTS and would not go is
-        # worth the operator's attention.
-        if _roll_back_left_something(learner_id, instance_path):
-            print(_REFUSALS["rollback_failed"], file=sys.stderr)
-            print(f"  learner id: {learner_id}", file=sys.stderr)
-        raise
+            outcome = capture_faceprint(
+                agreed.learner_id,
+                media,
+                camera_enabled=camera_enabled,
+                instance_path=instance_path,
+            )
+        except BaseException:
+            # BaseException, not Exception, and this is the sentence it defends:
+            # CONSENT_STATEMENT promises "stop it while it is taking pictures, and it
+            # undoes what it saved". The capture is real wall-clock time -- up to twenty
+            # attempts with a pause between them -- and the way a person actually stops it
+            # is the operator pressing Ctrl-C, which raises KeyboardInterrupt and is NOT
+            # an Exception. Without this the promise was false for exactly the scenario it
+            # describes: the learner row and the consent row would stay behind.
+            # REPORTED HERE TOO, and the earlier version of this comment was wrong about
+            # why it need not be. It claimed there was nowhere to print because the
+            # interrupt was on its way up -- but stderr is open inside this block, and
+            # Ctrl-C is precisely the case where the operator is watching the terminal,
+            # because they are the one who just pressed it. Leaving this silent meant the
+            # path the household is MOST likely to take -- somebody changing their mind
+            # mid-capture, which is the scenario this handler exists to honour -- was the
+            # one path where a failed rollback reached only a log nobody reads.
+            # forget_learner answers 0 for a row that was never written, which is the
+            # "interrupted before the commit" case and needs no report -- there is
+            # nothing to tell anybody about. Only a row that EXISTS and would not go is
+            # worth the operator's attention.
+            if _roll_back_left_something(learner_id, instance_path):
+                print(_REFUSALS["rollback_failed"], file=sys.stderr)
+                print(f"  learner id: {learner_id}", file=sys.stderr)
+            raise
 
-    if not outcome.enrolled and _roll_back_left_something(learner_id, instance_path):
-        # The refusal the operator was about to be shown is no longer the whole truth:
-        # somebody is in the database who agreed to something and has no faceprint.
-        # That has to reach the terminal, because the operator is the only one who
-        # can act on it.
-        return _refused("rollback_failed", learner_id)
-    return outcome
+        if not outcome.enrolled and _roll_back_left_something(learner_id, instance_path):
+            # The refusal the operator was about to be shown is no longer the whole truth:
+            # somebody is in the database who agreed to something and has no faceprint.
+            # That has to reach the terminal, because the operator is the only one who
+            # can act on it.
+            return _refused("rollback_failed", learner_id)
+        return outcome

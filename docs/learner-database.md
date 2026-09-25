@@ -131,15 +131,28 @@ ships int8 variants whose numbers differ, so a faceprint from one is not compara
 with a faceprint from the other. CPU only; no GPU is used or required.
 
 **The matching threshold is not calibrated, and that was accepted deliberately.** The
-floor, the margin and the lone-member floor were chosen by argument — the floor sits
-above the model author's published 0.363 operating point — but never measured against
-real faces, because measuring needs face images and this database's whole promise is
+floor (0.65) and the margin (0.10) were chosen by argument — the floor sits above the
+model author's published 0.363 operating point — but never measured against real faces, because measuring needs face images and this database's whole promise is
 that none are kept. A security review raised it during W26; the project owner accepted
 it and assigned it to W29, the task that wires recognition into choosing a profile.
 `faces.THRESHOLD_CALIBRATED` is exported `False` so the state is readable at runtime,
 and `scripts/calibrate_faceprints.py` measures it against an operator's own directory
 outside the repository. Until that is run, a recognition is a good guess and not a
 proof of who is present.
+
+**There is one floor, whatever the household size.** There used to be two: 0.50, and a
+higher 0.65 applied only while one person was enrolled, on the reasoning that a second
+member brings the margin's protection. It does not protect against a visitor, who has no
+real person in the household to be compared with — measured on synthetic vectors, a
+non-member at 0.551 to member A was refused while A was alone and matched as A once an
+unrelated B was enrolled. So the floor is the one control against a stranger in every
+household, and it took the higher value; the margin protects members from each other, in
+addition. Enrolment requires a person's frames to agree with each other at the same
+floor, so a print it accepts is one the matcher will recognise its owner by — with two
+floors, a print accepted at 0.50 was refused against its own owner's frames at 0.65. The
+calibration script now reports four households for every image — member and visitor,
+each with everyone enrolled and with one person enrolled — because the first version
+asked only about a member of a full household, which never exercises the floor alone.
 
 **There is no liveness check.** A photograph held up to the camera, or a face on a
 phone or television, is treated as that person if the detector accepts it. That is

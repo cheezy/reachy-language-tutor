@@ -27,10 +27,24 @@ person:
     ~/faces/ana/{1.jpg,2.jpg,3.jpg}
     ~/faces/ben/{1.jpg,2.jpg}
 
-Everyone present is treated as enrolled. For each image the script asks: with that
-image's own person enrolled from their OTHER images, does the matcher answer
-correctly, refuse, or answer somebody else? The third column is the one that matters
--- a wrong answer is a household member handed another's records.
+Every image is asked about in FOUR households, because the matcher's two controls
+protect against different people and a table that only measures one of them says
+nothing about the other:
+
+  1. MEMBER, everyone enrolled. The image's own person is enrolled from another of
+     their images. Correct, refused, or WRONG PERSON -- a household member handed
+     another's records. This is what the floor and the margin protect together.
+  2. STRANGER, everyone else enrolled. The image's own person is left out, so the only
+     right answer is nobody. Any match is a false accept of a visitor.
+  3. MEMBER, alone. Only the image's own person is enrolled -- the state of every robot
+     between the first enrolment and the second. The margin has nothing to compare
+     here, so this is the floor on its own.
+  4. STRANGER, alone. Only one OTHER person is enrolled, once for each of them. Any
+     match is a visitor answered as the one household member, on the floor alone.
+
+The first version measured only the first, with everyone enrolled: it never asked
+about a household of one or about anybody who was not enrolled, and those are the two
+cases the floor alone decides. Record all four tables beside the constants.
 """
 
 from __future__ import annotations
@@ -63,6 +77,64 @@ def _load(path: Path) -> object | None:
     import cv2
 
     return cv2.imread(str(path))
+
+
+# The outcomes that are a person handed records that are not theirs. Named, so the
+# verdict below is taken from these rows and not from whichever happened to be printed.
+_FALSE_ACCEPTS = ("WRONG PERSON", "VISITOR MATCHED")
+
+
+def _enrolled(learner: str, vector: tuple[float, ...]) -> EnrolledFaceprint:
+    return EnrolledFaceprint(
+        learner_id=learner,
+        embedding_model=EMBEDDING_MODEL_ID,
+        dimension=len(vector),
+        vector=vector,
+    )
+
+
+def _ask(
+    tally: Counter[str],
+    probe: tuple[float, ...],
+    household: list[EnrolledFaceprint],
+    owner: str | None,
+) -> None:
+    """Record one answer. `owner` is who the probe is, or None when they are not enrolled."""
+    outcome = match_faceprint(probe, household, embedding_model=EMBEDDING_MODEL_ID)
+    if not outcome.matched:
+        tally[f"refused ({outcome.reason})"] += 1
+    elif owner is None:
+        tally["VISITOR MATCHED"] += 1
+    elif outcome.learner_id == owner:
+        tally["correct"] += 1
+    else:
+        tally["WRONG PERSON"] += 1
+
+
+def measure(people: dict[str, list[tuple[float, ...]]]) -> dict[str, Counter[str]]:
+    """Ask the matcher about every image in the four households the module docstring names.
+
+    Pure: vectors in, tallies out, nothing read or written -- which is also what lets it
+    be tested with synthetic vectors and no photographs.
+    """
+    tables: dict[str, Counter[str]] = {
+        "1. member, everyone enrolled": Counter(),
+        "2. stranger, everyone else enrolled": Counter(),
+        "3. member, alone in the household": Counter(),
+        "4. stranger, one other person enrolled": Counter(),
+    }
+    first, second, third, fourth = tables.values()
+    for person, vectors in people.items():
+        for index, probe in enumerate(vectors):
+            # Their own enrolment is always another of their images, never the probe.
+            own = _enrolled(person, vectors[(index + 1) % len(vectors)])
+            others = [_enrolled(other, other_vectors[0]) for other, other_vectors in people.items() if other != person]
+            _ask(first, probe, [own, *others], person)
+            _ask(second, probe, others, None)
+            _ask(third, probe, [own], person)
+            for somebody_else in others:
+                _ask(fourth, probe, [somebody_else], None)
+    return tables
 
 
 def main(argv: list[str]) -> int:
@@ -119,43 +191,28 @@ def main(argv: list[str]) -> int:
         return 1
 
     print(f"\n{len(people)} people, {sum(len(v) for v in people.values())} usable images")
-    print(f"floor={FACE_MATCH_SIMILARITY_FLOOR}  margin={FACE_MATCH_MARGIN}\n")
+    print(
+        f"floor={FACE_MATCH_SIMILARITY_FLOOR}  margin={FACE_MATCH_MARGIN}  (one floor, whatever the household size)\n"
+    )
 
-    tally: Counter[str] = Counter()
-    for person, vectors in people.items():
-        for index, candidate in enumerate(vectors):
-            # Enrol everyone; for THIS person use their other images, so a probe is
-            # never matched against itself.
-            enrolled = [
-                EnrolledFaceprint(
-                    learner_id=other,
-                    embedding_model=EMBEDDING_MODEL_ID,
-                    dimension=len(other_vectors[0]),
-                    vector=other_vectors[0] if other != person else vectors[(index + 1) % len(vectors)],
-                )
-                for other, other_vectors in people.items()
-            ]
-            outcome = match_faceprint(candidate, enrolled, embedding_model=EMBEDDING_MODEL_ID)
-            if outcome.matched and outcome.learner_id == person:
-                tally["correct"] += 1
-            elif outcome.matched:
-                tally["WRONG PERSON"] += 1
-            else:
-                tally[f"refused ({outcome.reason})"] += 1
+    tables = measure(people)
+    for title, tally in tables.items():
+        total = sum(tally.values())
+        print(title)
+        print(f"  {'outcome':34} {'count':>6} {'share':>8}")
+        for label, count in tally.most_common():
+            print(f"  {label:34} {count:>6} {count / total:>7.1%}")
+        print()
 
-    total = sum(tally.values())
-    print(f"{'outcome':34} {'count':>6} {'share':>8}")
-    for label, count in tally.most_common():
-        print(f"{label:34} {count:>6} {count / total:>7.1%}")
-    print()
-    if tally["WRONG PERSON"]:
-        print("A WRONG PERSON result is a false accept: one household member answered as another.")
-        print("Raise FACE_MATCH_SIMILARITY_FLOOR or FACE_MATCH_MARGIN until this column is zero,")
-        print("then record this table beside the constant. A refusal is the acceptable error.")
+    false_accepts = sum(tally[label] for tally in tables.values() for label in _FALSE_ACCEPTS)
+    if false_accepts:
+        print(f"{false_accepts} FALSE ACCEPT(S): a household member answered as another, or a visitor answered")
+        print("as a member. Raise FACE_MATCH_SIMILARITY_FLOOR or FACE_MATCH_MARGIN until every such row")
+        print("is zero, then record these tables beside the constants. A refusal is the acceptable error.")
     else:
-        print("No false accepts over this set. Record the table beside the constant, with the")
-        print("set's size -- 'zero false accepts over N images of M people' is the claim, not")
-        print("'the threshold is correct'.")
+        print("No false accepts over this set, in any of the four households. Record the tables beside")
+        print("the constants, with the set's size -- 'zero false accepts over N images of M people' is")
+        print("the claim, not 'the threshold is correct'.")
     return 0
 
 

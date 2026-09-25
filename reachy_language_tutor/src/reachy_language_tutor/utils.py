@@ -67,7 +67,14 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
             "its output writes that name into whatever file you send it to."
         ),
     )
-    enrol_parser.add_argument(
+    # ONE ACTION PER INVOCATION, enforced by argparse rather than by the order of the
+    # handler's if-chain. They were independent flags, and the handler answers the first
+    # it meets: measured, `--forget A --forget-everything B` erased B, silently skipped
+    # A's faceprint and exited 0 -- an erasure somebody asked for, not done, and not
+    # reported. An allow-list of one: exactly one of these, and argparse names the
+    # conflict instead of the handler choosing.
+    enrol_action = enrol_parser.add_mutually_exclusive_group()
+    enrol_action.add_argument(
         "--name",
         dest="enrol_name",
         default=None,
@@ -87,7 +94,7 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
         default=None,
         help="Who is giving permission. Required unless --show is used.",
     )
-    enrol_parser.add_argument(
+    enrol_action.add_argument(
         "--show",
         dest="show_learner",
         default=None,
@@ -97,7 +104,7 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
     # The route the consent notice promises. Without it, "you can ask whoever set this
     # robot up to delete all of it" was a sentence with no code behind it --
     # delete_faceprint existed and had no caller anywhere in the app.
-    enrol_parser.add_argument(
+    enrol_action.add_argument(
         "--forget",
         dest="forget_learner_id",
         default=None,
@@ -108,7 +115,7 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
     # deletes a faceprint, and such a learner has none by construction. This calls
     # forget_learner, which removes the learner, their consent and any faceprint --
     # and refuses anybody with lesson history, in the statement itself.
-    enrol_parser.add_argument(
+    enrol_action.add_argument(
         "--remove",
         dest="remove_learner_id",
         default=None,
@@ -119,7 +126,7 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
     # recognising me" and "forget me" are different requests and a person will want
     # each without the other; one flag doing both would cost somebody a year of
     # learning to turn off a camera feature.
-    enrol_parser.add_argument(
+    enrol_action.add_argument(
         "--forget-everything",
         dest="forget_everything_id",
         default=None,
@@ -143,7 +150,7 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
         action="store_true",
         help="Register this person with a learning record only. No camera, no face data.",
     )
-    enrol_parser.add_argument(
+    enrol_action.add_argument(
         "--serve-when-unrecognised",
         dest="fallback_learner_id",
         default=None,
@@ -154,7 +161,7 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
             "whoever sits down, so use recognition there instead."
         ),
     )
-    enrol_parser.add_argument(
+    enrol_action.add_argument(
         "--serve-nobody-when-unrecognised",
         dest="clear_fallback_learner",
         action="store_true",
@@ -167,7 +174,20 @@ def parse_args() -> tuple[argparse.Namespace, list]:  # type: ignore
         metavar="DIR",
         help="The app instance directory holding the learner database.",
     )
-    return parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+    # parse_known_args stays for the app itself: the robot daemon launches it with
+    # arguments of its own, and refusing those would stop the app from starting. The
+    # enrol command is typed by a person, and there an unknown argument is a typo that
+    # changes what happens -- measured, `--without-fase` was dropped and the enrolment
+    # went down the FACE path, camera and all, for a person who had declined it.
+    if args.command == "enrol":
+        if unknown:
+            enrol_parser.error(f"unrecognized arguments: {' '.join(unknown)}")
+        # --consent-from and --without-face describe an enrolment, so they are refused
+        # beside any other action rather than silently ignored by it.
+        if args.enrol_name is None and (args.consent_from is not None or args.without_face):
+            enrol_parser.error("--consent-from and --without-face apply only with --name")
+    return args, unknown
 
 
 # How deep to describe before giving up. Tool results are shallow; this only stops a

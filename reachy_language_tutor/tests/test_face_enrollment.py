@@ -870,7 +870,10 @@ def test_the_wording_and_its_id_cannot_drift_apart() -> None:
     #
     # The recorded history is a literal here, so growth is permitted while an edit or
     # a deletion of any past entry fails, each naming its own reason.
-    recorded = {"face_recognition.v3": "e34bb750b8c4af6f819c28599e65ff744b3d05c77e61431fd10e389cb55a1e32"}
+    recorded = {
+        "face_recognition.v3": "e34bb750b8c4af6f819c28599e65ff744b3d05c77e61431fd10e389cb55a1e32",
+        "face_recognition.v4": "8381cf8120455cb02d158ce8fdef86d7ac530f6bfa08ae493bdcc2f99ddc1d21",
+    }
     for identifier, recorded_digest in recorded.items():
         assert identifier in digests, f"{identifier} was removed; entries are append-only"
         assert digests[identifier] == recorded_digest, (
@@ -2201,3 +2204,228 @@ def test_no_log_line_in_the_enrolment_module_can_carry_a_name_or_a_vector() -> N
                 offenders.append(f"line {node.lineno}: {ast.dump(argument)[:60]}")
 
     assert offenders == [], offenders
+
+
+# ------------------------------------------------ agreement at enrolment, and the matcher
+
+
+def _pairwise_at(similarity: float, count: int = 5) -> list[tuple[float, ...]]:
+    """`count` unit vectors whose every pairwise cosine is exactly `similarity`.
+
+    Each shares a component of sqrt(similarity) along axis 0 and puts the rest on an
+    axis of its own, so any two meet only on axis 0.
+    """
+    shared = math.sqrt(similarity)
+    rest = math.sqrt(1.0 - similarity)
+    prints = []
+    for index in range(count):
+        vector = [0.0] * DIMENSION
+        vector[0] = shared
+        vector[index + 1] = rest
+        prints.append(tuple(vector))
+    return prints
+
+
+def test_a_print_enrolment_accepts_is_one_the_matcher_recognises_as_its_owner() -> None:
+    """The promise _medoid's docstring makes, checked in the household where it broke.
+
+    Enrolment used to require agreement at 0.50 while a household of one was matched
+    at 0.65, so a print could be accepted and then refused against its own owner --
+    measured, four of that person's own frames answered no_one_close_enough. For
+    every agreement level, a print _medoid accepts must match each of the frames it
+    came from, alone in the household. Restoring the lone-member floor fails this at
+    every level between the two floors.
+    """
+    for hundredths in range(40, 100):
+        prints = _pairwise_at(hundredths / 100)
+        representative = enrollment._medoid(prints)
+        if representative is None:
+            continue
+        household = [faces.EnrolledFaceprint("owner", faces.EMBEDDING_MODEL_ID, DIMENSION, representative)]
+        for frame in prints:
+            if frame is representative:
+                continue
+            outcome = faces.match_faceprint(frame, household, embedding_model=faces.EMBEDDING_MODEL_ID)
+            assert outcome.matched is True, (
+                f"agreement {hundredths / 100}: enrolment accepted a print its owner's own frame is refused against "
+                f"({outcome.reason})"
+            )
+
+
+def test_frames_whose_agreement_is_not_a_number_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The agreement test fails CLOSED, as matching.py's floor test does.
+
+    `value < FLOOR` is False for NaN, so a comparison that produced a non-number was
+    read as agreement and a print was stored from it.
+    """
+    monkeypatch.setattr(enrollment, "faceprint_similarity", lambda _left, _right: float("nan"))
+
+    assert enrollment._medoid(list(_five_agreeing())) is None
+
+
+def test_an_enrolment_outcome_does_not_render_whose_it_is() -> None:
+    """The learner id stays out of any log line or assertion diff this reaches."""
+    learner_id = "learner-4f1d9c"
+    outcome = enrollment.EnrolmentOutcome(enrolled=False, reason="no_face", error="x", learner_id=learner_id)
+
+    assert learner_id not in repr(outcome)
+    assert learner_id not in f"{outcome}"
+    assert "reason='no_face'" in repr(outcome) and "<set>" in repr(outcome)
+
+
+# ------------------------------------------------------- stopped by a signal, not Ctrl-C
+
+_ENROL_UNTIL_STOPPED = """
+import sys, time
+from reachy_language_tutor.faces import enrollment
+from reachy_language_tutor.faces.embedding import FaceEmbedding
+
+enrollment.warm_face_models = lambda: True
+enrollment.describe_face = lambda frame: FaceEmbedding(reason="no_face")
+
+class Camera:
+    camera = object()
+    def get_frame(self):
+        time.sleep(0.2)
+        return object()
+
+enrollment.enrol("Delphine", Camera(), granted_by="the_person_themselves", instance_path=sys.argv[1])
+print("FINISHED")
+"""
+
+
+@pytest.mark.parametrize("signal_name", ["SIGTERM", "SIGHUP"])
+def test_an_enrolment_ended_by_a_terminating_signal_leaves_nothing_behind(instance: Path, signal_name: str) -> None:
+    """Closing the terminal or `kill` must undo the enrolment the way Ctrl-C does.
+
+    Measured before the fix, in a real process: SIGTERM and SIGHUP killed an enrolment
+    mid-capture with its learner row and consent row committed, printed nothing and
+    named no id. On a Reachy Mini Wireless, reached over SSH, a dropped connection is
+    SIGHUP. The signal is sent only once the consent row exists, so what is asserted
+    is an undo, not a race the enrolment won by not having started.
+    """
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    before = _counts(instance)
+    child = subprocess.Popen(
+        [sys.executable, "-c", _ENROL_UNTIL_STOPPED, str(instance)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while _counts(instance)["consents"] == before["consents"]:
+            assert child.poll() is None, child.communicate()
+            assert time.monotonic() < deadline, "the enrolment never recorded its consent"
+            time.sleep(0.05)
+        os.kill(child.pid, getattr(signal, signal_name))
+        stdout, stderr = child.communicate(timeout=30)
+    finally:
+        if child.poll() is None:
+            child.kill()
+
+    assert _counts(instance) == before, "the consented learner was left behind"
+    number = int(getattr(signal, signal_name))
+    assert child.returncode == 128 + number, (child.returncode, stderr[-500:])
+    assert "FINISHED" not in stdout
+
+
+def test_enrolment_puts_back_the_signal_handlers_it_found(
+    instance: Path, monkeypatch: pytest.MonkeyPatch, models_ready: None
+) -> None:
+    """The handlers are the enrolment's for its duration only.
+
+    The app that imports this module has its own shutdown handling; an enrolment that
+    left its SystemExit handler installed would change how that process dies.
+    """
+    import signal
+
+    monkeypatch.setattr(enrollment, "describe_face", _describes(*_five_agreeing()))
+    before = {number: signal.getsignal(number) for number in (*enrollment._TERMINATING_SIGNALS, signal.SIGINT)}
+
+    outcome = enrollment.enrol("Ana", _Camera(), granted_by="the_person_themselves", instance_path=instance)
+
+    assert outcome.enrolled is True, outcome.reason
+    assert {number: signal.getsignal(number) for number in before} == before
+
+
+# ------------------------------------------------------- one action per enrol command
+
+
+def _parse(argv: list[str]):
+    import sys
+    from unittest.mock import patch
+
+    from reachy_language_tutor.utils import parse_args
+
+    with patch.object(sys, "argv", ["app", *argv]):
+        return parse_args()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # Measured before the fix: this erased B, silently skipped A and exited 0.
+        ["enrol", "--forget", "A", "--forget-everything", "B"],
+        ["enrol", "--forget", "A", "--remove", "B"],
+        ["enrol", "--name", "Cleo", "--consent-from", "the-person-themselves", "--forget", "A"],
+        ["enrol", "--show", "A", "--serve-when-unrecognised", "B"],
+        ["enrol", "--serve-when-unrecognised", "A", "--serve-nobody-when-unrecognised"],
+    ],
+)
+def test_two_enrol_actions_in_one_command_are_refused(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    """The handler answers the first action it meets, so two must never reach it."""
+    with pytest.raises(SystemExit) as stopped:
+        _parse(argv)
+
+    assert stopped.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+def test_an_unknown_enrol_argument_is_refused_rather_than_dropped(capsys: pytest.CaptureFixture[str]) -> None:
+    """A typo in a consent-bearing command must stop it, not change what it does.
+
+    Measured before the fix: `--without-fase` was dropped by parse_known_args, the
+    face notice was shown, and the flow went down the camera path for a person who
+    had declined face recognition.
+    """
+    with pytest.raises(SystemExit) as stopped:
+        _parse(["enrol", "--name", "Cleo", "--consent-from", "the-person-themselves", "--without-fase"])
+
+    assert stopped.value.code == 2
+    assert "unrecognized arguments: --without-fase" in capsys.readouterr().err
+
+
+def test_an_enrolment_modifier_without_a_name_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
+    """--consent-from and --without-face describe an enrolment; beside --forget they were ignored."""
+    with pytest.raises(SystemExit) as stopped:
+        _parse(["enrol", "--forget", "A", "--without-face"])
+
+    assert stopped.value.code == 2
+    assert "apply only with --name" in capsys.readouterr().err
+
+
+def test_the_app_itself_still_tolerates_arguments_it_does_not_know() -> None:
+    """The daemon launches the app with arguments of its own; refusing them stops the robot app."""
+    args, unknown = _parse(["--some-daemon-flag=value"])
+
+    assert args.command is None
+    assert unknown == ["--some-daemon-flag=value"]
+
+
+def test_one_enrol_action_on_its_own_still_parses() -> None:
+    """The refusal must not catch the ordinary invocations."""
+    for argv in (
+        ["enrol", "--name", "Cleo", "--consent-from", "the-person-themselves"],
+        ["enrol", "--name", "Cleo", "--consent-from", "an-adult-of-the-household", "--without-face"],
+        ["enrol", "--forget", "A", "--instance-path", "/tmp/x"],
+        ["enrol", "--show", "A"],
+        ["enrol", "--serve-nobody-when-unrecognised"],
+    ):
+        args, unknown = _parse(argv)
+        assert args.command == "enrol" and unknown == [], argv

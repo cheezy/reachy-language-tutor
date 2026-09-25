@@ -18,8 +18,10 @@ is broken without anyone editing the sentence.
 """
 
 from __future__ import annotations
+import hashlib
 import logging
 from typing import Any
+from pathlib import Path
 from dataclasses import dataclass
 
 
@@ -64,6 +66,23 @@ _DETECTOR_REVISION = "3cc26e7f1014a5ee5d74a42acee58bafc9d0a310"
 _RECOGNIZER_REPO = "opencv/face_recognition_sface"
 _RECOGNIZER_FILE = "face_recognition_sface_2021dec.onnx"
 _RECOGNIZER_REVISION = "3d7082438a6e4551e840c9b2bb60b71e8da4b524"
+
+# The SHA-256 of each file's CONTENTS, checked before the file is handed to OpenCV.
+#
+# The revision pins which file the hub serves; it says nothing about the file that is
+# actually on this robot. hf_hub_download returns whatever sits in the local cache, and
+# measured: a cached detector blob replaced with a different ONNX model loaded without
+# complaint, and every faceprint would then have been stamped with EMBEDDING_MODEL_ID
+# regardless of what produced it. These digests make "the model this app names" a
+# property of the bytes.
+#
+# HOW THESE WERE OBTAINED, so they can be re-derived rather than trusted: on
+# 2026-09-24, `shasum -a 256` over the two files in the local huggingface cache at the
+# pinned revisions (232,589 and 38,696,353 bytes), and separately HfApi.get_paths_info
+# for the same repo, file and revision, whose LFS sha256 matched both exactly. Changing
+# a revision above means re-measuring its digest here the same two ways.
+_DETECTOR_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+_RECOGNIZER_SHA256 = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
 
 # What this model is expected to produce. Checked against the loaded model rather than
 # trusted: if the file behind the pin ever stops producing this, the loader refuses to
@@ -153,6 +172,21 @@ class FaceEmbedding:
         return f"FaceEmbedding(vector=<{len(self.vector)} floats>)"
 
 
+class FaceModelMismatch(RuntimeError):
+    """A model file on disk is not the file this app pins, so it is not loaded."""
+
+
+def _verify_model_file(path: str, expected_sha256: str) -> None:
+    """Refuse a model file whose contents are not the pinned file's.
+
+    Read whole, once per process, at start-up: 38 MB for the recognizer. The message
+    names neither the path (a home directory) nor the digest it found; the class is
+    what warm_face_models logs, and it says which failure this was.
+    """
+    if hashlib.sha256(Path(path).read_bytes()).hexdigest() != expected_sha256:
+        raise FaceModelMismatch("a face model file does not match its pinned SHA-256")
+
+
 def load_face_models() -> tuple[Any, Any]:
     """Load the detector and the recognizer, downloading them once if needed.
 
@@ -165,6 +199,8 @@ def load_face_models() -> tuple[Any, Any]:
     if _LOADED_MODELS is None:
         detector_path = hf_hub_download(_DETECTOR_REPO, _DETECTOR_FILE, revision=_DETECTOR_REVISION)
         recognizer_path = hf_hub_download(_RECOGNIZER_REPO, _RECOGNIZER_FILE, revision=_RECOGNIZER_REVISION)
+        _verify_model_file(detector_path, _DETECTOR_SHA256)
+        _verify_model_file(recognizer_path, _RECOGNIZER_SHA256)
         detector = cv2.FaceDetectorYN.create(detector_path, "", _DETECTOR_INPUT_SIZE)
         recognizer = cv2.FaceRecognizerSF.create(recognizer_path, "")
 
@@ -250,8 +286,8 @@ def describe_face(image: Any) -> FaceEmbedding:
         if float(face[-1]) < _DETECTION_CONFIDENCE_FLOOR:
             return FaceEmbedding(reason="not_confident")
         aligned = recognizer.alignCrop(image, face)
-        feature = recognizer.feature(aligned)
-        return FaceEmbedding(vector=tuple(float(value) for value in feature.flatten().tolist()))
+        produced = recognizer.feature(aligned)
+        return FaceEmbedding(vector=tuple(float(value) for value in produced.flatten().tolist()))
     except Exception as exc:
         # Never the frame, never the vector, never a path. The type alone is enough to
         # tell a maintainer which layer failed.

@@ -94,9 +94,8 @@ def test_the_person_themselves_is_matched() -> None:
 def test_a_face_just_below_the_floor_is_refused_and_just_above_it_is_matched() -> None:
     """Both directions at the boundary, which is what makes this a threshold test.
 
-    A single-sided test passes for a threshold of zero. Two enrolled members, so the
-    ordinary floor applies rather than the lone-member one; the runner-up is far away
-    so the margin does not interfere with what this is measuring.
+    A single-sided test passes for a threshold of zero. Two enrolled members, and the
+    runner-up is far away so the margin does not interfere with what this is measuring.
     """
     household = [_enrolled("ana", _unit(0)), _enrolled("ben", _unit(30))]
     floor = matching.FACE_MATCH_SIMILARITY_FLOOR
@@ -108,27 +107,57 @@ def test_a_face_just_below_the_floor_is_refused_and_just_above_it_is_matched() -
     assert above.matched is True and above.learner_id == "ana"
 
 
-def test_a_household_of_one_is_held_to_a_higher_floor() -> None:
+def test_a_household_of_one_is_held_to_the_same_floor_in_both_directions() -> None:
     """The state of every robot between the first enrolment and the second.
 
     With nobody else enrolled the margin has nothing to compare and is skipped, so the
-    floor is the only control left. Measured before the fix: a candidate at
-    floor + 1e-9 was matched. It now has to clear FACE_MATCH_LONE_MEMBER_FLOOR.
-
-    Reverting to the shared floor makes the first assertion below return matched=True.
+    floor is the only control left. Measured before the lone-member floor existed: a
+    candidate at floor + 1e-9 was matched. There is now ONE floor, and it is the higher
+    of the two former values, so a household of one is held to it exactly.
     """
     lone = [_enrolled("ana", _unit(0))]
-    ordinary = matching.FACE_MATCH_SIMILARITY_FLOOR
-    lone_floor = matching.FACE_MATCH_LONE_MEMBER_FLOOR
+    floor = matching.FACE_MATCH_SIMILARITY_FLOOR
 
-    assert lone_floor > ordinary, "the lone-member bar must be higher, or it protects nothing"
+    below = match_faceprint(_at_similarity(floor - 0.01), lone, embedding_model=MODEL)
+    assert below == MatchOutcome(matched=False, reason="no_one_close_enough")
 
-    just_over_the_ordinary_floor = match_faceprint(_at_similarity(ordinary + 0.01), lone, embedding_model=MODEL)
-    assert just_over_the_ordinary_floor.matched is False
-    assert just_over_the_ordinary_floor.reason == "no_one_close_enough"
+    above = match_faceprint(_at_similarity(floor + 0.01), lone, embedding_model=MODEL)
+    assert above == MatchOutcome(matched=True, learner_id="ana")
 
-    over_the_lone_floor = match_faceprint(_at_similarity(lone_floor + 0.01), lone, embedding_model=MODEL)
-    assert over_the_lone_floor == MatchOutcome(matched=True, learner_id="ana")
+
+def test_enrolling_somebody_unrelated_never_lowers_the_bar_for_a_stranger() -> None:
+    """The margin protects one member from another, never a household from a stranger.
+
+    There used to be two floors: a higher one for a household of one, and a lower one
+    once anybody else was enrolled, on the reasoning that the second member brought the
+    margin's protection. Against a STRANGER it brings none -- they have no real person
+    in the household to beat -- so enrolling an unrelated sibling dropped the bar.
+    Measured on synthetic vectors: a non-member at 0.551 to Ana was refused with Ana
+    alone and matched AS Ana once an unrelated member was enrolled.
+
+    Stated as the property rather than at one number, so it does not depend on what
+    the floor is: for every similarity to Ana, adding a member the candidate is
+    orthogonal to must not change the answer. Restoring the lone-member floor makes
+    this fail at every similarity between the two floors.
+    """
+    for hundredths in range(30, 100):
+        similarity = hundredths / 100
+        candidate = _at_similarity(similarity, axis=0, other=1)
+        alone = match_faceprint(candidate, [_enrolled("ana", _unit(0))], embedding_model=MODEL)
+        with_an_unrelated_member = match_faceprint(
+            candidate, [_enrolled("ana", _unit(0)), _enrolled("ben", _unit(30))], embedding_model=MODEL
+        )
+        assert with_an_unrelated_member == alone, (
+            f"at similarity {similarity}, enrolling an unrelated member changed the answer "
+            f"from {alone} to {with_an_unrelated_member}"
+        )
+
+
+def test_there_is_exactly_one_floor() -> None:
+    """A second floor is how the stranger case came to depend on who else is enrolled."""
+    floors = [name for name in vars(matching) if name.startswith("FACE_MATCH_") and name.endswith("_FLOOR")]
+
+    assert floors == ["FACE_MATCH_SIMILARITY_FLOOR"], floors
 
 
 def test_a_one_dimensional_vector_cannot_clear_the_floor_by_geometry() -> None:
@@ -460,6 +489,27 @@ _PERMITTED_CALLS = frozenset(
         "faceprint_similarity", "warm_face_models",
         "info", "sleep",
         "sum", "max", "any", "append", "enumerate",
+        # matching.py's overflow fix, added deliberately. Each vector is scaled by its
+        # own largest element before the arithmetic, so a finite vector of huge values
+        # can no longer make fsum raise or the similarity come back NaN.
+        #   abs -- a float in, a float out.
+        "abs",
+        # enrollment.py's terminating-signal handling, added deliberately. SIGTERM and
+        # SIGHUP used to kill an enrolment before its rollback ran, leaving a consented
+        # learner behind. None of these can put bytes anywhere:
+        #   getsignal, signal -- read and set a process's handler for a signal number.
+        #   current_thread, main_thread -- identity checks; handlers install on main only.
+        #   SystemExit -- what the handler raises so the rollback runs before exit.
+        #   _signals_handled_by, _restorable -- this module's own context manager and
+        #     its helper, which call only the names above.
+        "getsignal", "signal", "current_thread", "main_thread", "SystemExit",
+        "_signals_handled_by", "_restorable",
+        # embedding.py's model integrity check, added deliberately. The cached model
+        # files are hashed before OpenCV is given them. Reading, never writing:
+        #   Path, read_bytes -- read the model file the hub download returned.
+        #   sha256, hexdigest -- hash those bytes.
+        #   _verify_model_file, FaceModelMismatch -- this module's check and its refusal.
+        "Path", "read_bytes", "sha256", "hexdigest", "_verify_model_file", "FaceModelMismatch",
     }
 )
 
@@ -493,6 +543,71 @@ def test_nothing_in_the_faces_package_writes_an_image() -> None:
         "the faces package may only call what _PERMITTED_CALLS names; "
         f"add it there deliberately if it is safe: {offenders}"
     )
+
+
+def _rebindings_of_permitted_names(tree: ast.Module) -> list[tuple[int, str]]:
+    """Every place a name on _PERMITTED_CALLS is bound to something that may not be it.
+
+    The call guard above matches NAMES, so it is only as good as the promise that a
+    permitted name means what it was permitted as. Two lines broke that promise and
+    both passed it -- measured: `from cv2 import imwrite as create` then
+    `create("face.jpg", frame)`, and `detect = open` then `detect(path, "wb")`.
+
+    An allow-list of the two ways a permitted name may come into being in this
+    package: a `def` or `class` of that name (the package's own function), or an import
+    that binds a name under its OWN name (`from pathlib import Path`). Anything else
+    that binds one -- an `as` alias, an assignment, a loop or `with` target, a
+    parameter, an except name, a walrus, an attribute assignment -- is refused.
+    """
+    found: list[tuple[int, str]] = []
+
+    def note(node: ast.AST, name: str | None) -> None:
+        if name in _PERMITTED_CALLS:
+            found.append((getattr(node, "lineno", 0), name))
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                original = alias.name.split(".")[0] if isinstance(node, ast.Import) else alias.name
+                if alias.asname is not None and alias.asname != original:
+                    note(node, alias.asname)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            note(node, node.id)
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+            note(node, node.attr)
+        elif isinstance(node, ast.arg):
+            note(node, node.arg)
+        elif isinstance(node, ast.ExceptHandler):
+            note(node, node.name)
+    return found
+
+
+def test_no_permitted_name_is_bound_to_something_else() -> None:
+    """The call guard's names must mean what they were permitted as."""
+    package = Path(faces.__file__).parent
+    offenders = [
+        f"{path.name}:{line} binds {name}"
+        for path in sorted(package.rglob("*.py"))
+        for line, name in _rebindings_of_permitted_names(ast.parse(path.read_text(encoding="utf-8")))
+    ]
+
+    assert offenders == [], offenders
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from cv2 import imwrite as create\ncreate('face.jpg', frame)\n",
+        "detect = open\ndetect('face.raw', 'wb')\n",
+        "import cv2 as sleep\nsleep.imwrite('face.jpg', frame)\n",
+        "for get in (open,):\n    get('face.raw', 'wb')\n",
+        "def f(info=open):\n    info('face.raw', 'wb')\n",
+        "self.create = cv2.imwrite\n",
+    ],
+)
+def test_the_rebinding_guard_catches_each_way_of_renaming_a_writer(source: str) -> None:
+    """Measured first: the call guard alone reported none of these writers."""
+    assert _rebindings_of_permitted_names(ast.parse(source)), source
 
 
 
@@ -1334,3 +1449,189 @@ def test_any_caller_of_the_matcher_must_consult_whether_it_is_calibrated() -> No
         "these call match_faceprint without BRANCHING on faces.THRESHOLD_CALIBRATED; "
         "an uncalibrated threshold must change behaviour, not just be documented: " + str(offenders)
     )
+
+
+@pytest.mark.parametrize(
+    ("label", "left", "right"),
+    [
+        # Each of these made the unscaled arithmetic fail, measured before the fix.
+        ("large, mixed signs: fsum raised '-inf + inf in fsum'", [1e200, -1e200] * (DIMENSION // 2), [1e200] * DIMENSION),
+        ("large, same sign: fsum raised 'intermediate overflow'", [1e154] * DIMENSION, [1e154] * DIMENSION),
+        ("very large: the similarity came back NaN", [1e200] * DIMENSION, [1e200] * DIMENSION),
+    ],
+)
+def test_finite_vectors_of_any_size_never_raise_and_never_answer_nan(
+    label: str, left: list[float], right: list[float]
+) -> None:
+    """match_faceprint promises never to raise; faceprint_similarity promises None, not NaN.
+
+    _is_usable admits any FINITE value, so these vectors reach the arithmetic. Before
+    the fix each one either raised out of math.fsum or produced NaN. The answer for
+    each is now a finite similarity, and matching completes with a reason code.
+    """
+    similarity = faces.faceprint_similarity(left, right)
+    assert similarity is not None and math.isfinite(similarity), (label, similarity)
+
+    outcome = match_faceprint(left, [_enrolled("ana", right)], embedding_model=MODEL)
+    assert isinstance(outcome, MatchOutcome), label
+
+
+def test_scaling_does_not_change_what_a_similarity_is() -> None:
+    """Cosine is scale-free, so the fix must give the same number at any scale.
+
+    Identical directions at 1e200 and at 1.0 are the same face; so are two vectors at
+    a chosen similarity multiplied by any positive factor.
+    """
+    assert faces.faceprint_similarity([1e200] * DIMENSION, [1e200] * DIMENSION) == pytest.approx(1.0, abs=1e-12)
+    for scale in (1e-300, 1e-3, 1.0, 1e3, 1e300):
+        scaled = [value * scale for value in _at_similarity(0.7)]
+        assert faces.faceprint_similarity(scaled, _unit(0)) == pytest.approx(0.7, abs=1e-12), scale
+
+
+def test_nothing_that_identifies_a_person_is_rendered_by_the_matching_types() -> None:
+    """A privacy control, the one FaceEmbedding and FrameCapture already carry.
+
+    The generated dataclass repr printed all 128 floats and the learner id of an
+    EnrolledFaceprint, and the learner id of a MatchOutcome, into any log line,
+    f-string or assertion diff that touched them.
+    """
+    learner_id = "learner-4f1d9c"
+    element = 0.123456789
+    rendered = [
+        repr(EnrolledFaceprint(learner_id, MODEL, DIMENSION, tuple([element] * DIMENSION))),
+        str(EnrolledFaceprint(learner_id, MODEL, DIMENSION, tuple([element] * DIMENSION))),
+        repr(MatchOutcome(matched=True, learner_id=learner_id)),
+        f"{MatchOutcome(matched=True, learner_id=learner_id)}",
+    ]
+    for text in rendered:
+        assert learner_id not in text, text
+        assert str(element) not in text, text
+    # Still useful: the shape and the decision survive.
+    assert "matched=True" in rendered[2] and "<set>" in rendered[2]
+    assert f"<{DIMENSION} floats>" in rendered[0]
+
+
+def test_a_model_file_that_is_not_the_pinned_one_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The revision pins what the hub serves; the digest pins what this robot loads.
+
+    Measured before the fix: a cached detector blob replaced with a different ONNX
+    model was loaded without complaint, and every faceprint would have been stamped
+    with EMBEDDING_MODEL_ID regardless. The refusal happens before OpenCV is handed
+    the file, and warm_face_models reports it by class, with no path.
+    """
+    import logging
+    from types import SimpleNamespace
+
+    from reachy_language_tutor.faces import embedding
+
+    if not embedding.FACE_EMBEDDING_AVAILABLE:
+        pytest.skip("cv2 is not installed")
+    impostor = tmp_path / "alice-household" / "model.onnx"
+    impostor.parent.mkdir()
+    impostor.write_bytes(b"not the pinned model")
+    monkeypatch.setattr(embedding, "_LOADED_MODELS", None)
+    monkeypatch.setattr(embedding, "hf_hub_download", lambda *_args, **_kwargs: str(impostor))
+    handed_to_opencv: list[str] = []
+
+    class _Recording:
+        """Stands in for OpenCV's two model factories, recording what they were handed."""
+
+        @staticmethod
+        def create(path: str, *_args: object) -> None:
+            handed_to_opencv.append(path)
+            raise AssertionError("the file reached OpenCV before it was checked")
+
+    monkeypatch.setattr(embedding, "cv2", SimpleNamespace(FaceDetectorYN=_Recording, FaceRecognizerSF=_Recording))
+
+    with pytest.raises(embedding.FaceModelMismatch):
+        embedding.load_face_models()
+    assert handed_to_opencv == [], "the file reached OpenCV before it was checked"
+
+    with caplog.at_level(logging.WARNING):
+        assert embedding.warm_face_models() is False
+    assert "FaceModelMismatch" in caplog.text
+    assert "alice-household" not in caplog.text
+    assert embedding.loaded_face_models() is None
+
+
+@_needs_models
+def test_the_pinned_digests_are_the_digests_of_the_pinned_files() -> None:
+    """The pins, re-measured wherever the real files are present.
+
+    A digest that does not match the genuine file would make recognition unavailable
+    on every robot; this catches a mistyped pin, or a revision bumped without it.
+    """
+    import hashlib
+
+    from huggingface_hub import hf_hub_download
+    from reachy_language_tutor.faces import embedding
+
+    for repo, name, revision, expected in (
+        (embedding._DETECTOR_REPO, embedding._DETECTOR_FILE, embedding._DETECTOR_REVISION, embedding._DETECTOR_SHA256),
+        (
+            embedding._RECOGNIZER_REPO,
+            embedding._RECOGNIZER_FILE,
+            embedding._RECOGNIZER_REVISION,
+            embedding._RECOGNIZER_SHA256,
+        ),
+    ):
+        path = Path(hf_hub_download(repo, name, revision=revision))
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected, name
+
+
+def _calibration_script():
+    """Load scripts/calibrate_faceprints.py as a module; it is not part of the package."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "calibrate_faceprints.py"
+    spec = importlib.util.spec_from_file_location("calibrate_faceprints_under_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_calibration_measures_the_visitor_and_the_household_of_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The table that decides THRESHOLD_CALIBRATED must include the cases the floor decides alone.
+
+    The first version enrolled everybody and asked only who each image was: it never
+    tested a household of one or anybody who was not enrolled -- measured, every call
+    it made was about a household of all three people. Here "Cleo" is a visitor whose
+    face clears the floor against Ana's and nobody else's, so with Cleo not enrolled
+    she is answered as Ana. A calibration that cannot show that row cannot justify
+    flipping the flag.
+    """
+    calibrate = _calibration_script()
+    floor = matching.FACE_MATCH_SIMILARITY_FLOOR
+    faces_by_image = {
+        "ana": [_unit(0), _at_similarity(0.99, axis=0, other=10)],
+        "ben": [_unit(1), _at_similarity(0.99, axis=1, other=11)],
+        # Close enough to Ana to clear the floor against her, far from everybody else.
+        "cleo": [_at_similarity(floor + 0.05, axis=0, other=20), _at_similarity(floor + 0.05, axis=0, other=21)],
+    }
+    root = tmp_path / "faces"
+    for person, vectors in faces_by_image.items():
+        (root / person).mkdir(parents=True)
+        for index in range(len(vectors)):
+            (root / person / f"{index}.jpg").write_bytes(b"")
+
+    def describe(image: object) -> faces.FaceEmbedding:
+        path = Path(str(image))
+        return faces.FaceEmbedding(vector=tuple(faces_by_image[path.parent.name][int(path.stem)]))
+
+    monkeypatch.setattr(calibrate, "_load", lambda path: str(path))
+    monkeypatch.setattr(calibrate, "describe_face", describe)
+    monkeypatch.setattr(calibrate, "warm_face_models", lambda: True)
+    monkeypatch.setattr(calibrate, "FACE_EMBEDDING_AVAILABLE", True)
+
+    assert calibrate.main(["calibrate", str(root)]) == 0
+    printed = capsys.readouterr().out
+
+    assert "stranger, one other person enrolled" in printed, printed
+    assert "member, alone in the household" in printed, printed
+    assert "VISITOR MATCHED" in printed, "a visitor answered as the lone member was not reported"
+    assert "FALSE ACCEPT" in printed

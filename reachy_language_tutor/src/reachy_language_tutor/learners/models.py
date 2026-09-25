@@ -397,6 +397,20 @@ class Faceprint:
     vector: tuple[float, ...]
     created_at: int
 
+    def __repr__(self) -> str:
+        """Describe the faceprint's shape, never whose it is or a number of it.
+
+        A PRIVACY CONTROL, the one faces.EnrolledFaceprint carries for the same row:
+        the generated repr rendered all 128 floats and the learner id -- measured,
+        1,398 characters of one person's biometric data -- into any log line, f-string
+        or assertion diff that touched it, including through SaveFaceprintOutcome.
+        """
+        length = len(self.vector) if isinstance(self.vector, (tuple, list)) else None
+        return (
+            f"Faceprint(learner_id=<set>, embedding_model={self.embedding_model!r}, "
+            f"dimension={self.dimension!r}, vector=<{length} floats>, created_at={self.created_at!r})"
+        )
+
 
 @dataclass(frozen=True)
 class SaveFaceprintOutcome:

@@ -56,7 +56,20 @@ MATCH_REASONS: tuple[str, ...] = (
 # runs it and records the table here, this number is a defensible default and is
 # labelled as one. THRESHOLD_CALIBRATED below is that label, in a form a caller can
 # read -- it is deliberately not a comment, because a comment cannot be checked.
-FACE_MATCH_SIMILARITY_FLOOR = 0.50
+#
+# ONE FLOOR, WHATEVER THE HOUSEHOLD SIZE. There used to be two: 0.50 here, and a
+# separate 0.65 "lone-member floor" applied when only one person was enrolled, on the
+# reasoning that a second member adds the margin's protection. It does not -- not
+# against the case this floor exists for. The margin asks "is another enrolled PERSON
+# nearly as close?", which protects one member from being answered as another. A
+# STRANGER has no real person in the household to be compared with, so an unrelated
+# second member adds nothing, and yet enrolling one dropped the bar from 0.65 to 0.50.
+# Measured on the two-floor version: a non-enrolled candidate at similarity 0.551 to
+# member A was refused in a household of A alone and MATCHED AS A once an unrelated B
+# (similarity -0.108) was enrolled. So the floor is the one control against a
+# stranger in every household, and it carries the higher of the two former values,
+# which is the direction to fail in while neither has been measured.
+FACE_MATCH_SIMILARITY_FLOOR = 0.65
 
 # How far ahead of the runner-up the best match must be before it is trusted.
 #
@@ -80,21 +93,7 @@ FACE_MATCH_MARGIN = 0.10
 # free of the heavy dependency -- that is what lets its tests run with no model.
 EXPECTED_MATCH_DIMENSION = 128
 
-# The floor that applies when there is NO runner-up to compare against.
-#
-# A household with one enrolled member is not a corner case: it is the state of every
-# robot between the first enrolment and the second, and the steady state of a
-# one-adult home. With nobody else enrolled the margin has nothing to compare and is
-# silently skipped, which left the unmeasured floor as the sole authorization control
-# -- measured: a candidate at floor + 1e-9 was matched. So the lone-member case gets
-# its own, higher bar, explicitly, instead of falling out of a len() > 1 test.
-#
-# Higher because the margin's protection is absent, not because one-person homes are
-# riskier: with a second member enrolled, a wrong answer has to beat the real person
-# by the margin as well as clear the floor. Alone, there is nothing else to beat.
-FACE_MATCH_LONE_MEMBER_FLOOR = 0.65
-
-# Whether the two numbers above have been measured against real faces. False, today.
+# Whether the floor and the margin above have been measured against real faces. False, today.
 #
 # This exists because "the threshold is unvalidated" is a fact a reviewer can read in a
 # comment and a running robot cannot. A caller that is about to act on a recognition --
@@ -119,7 +118,7 @@ FACE_MATCH_LONE_MEMBER_FLOOR = 0.65
 # BEFORE YOU SET THIS True, TWO THINGS ARE OWED, not one.
 #
 #   1. MEASURE IT. Run scripts/calibrate_faceprints.py against a directory of real
-#      faces outside this repository and record the table it prints beside the three
+#      faces outside this repository and record the table it prints beside the two
 #      constants above. Both error directions, not just the false rejects.
 #
 #   2. DECIDE WHAT HAPPENS WHEN THE PERSON CHANGES MID-SESSION. This one is easy to
@@ -149,6 +148,16 @@ class MatchOutcome:
     learner_id: str | None = None
     reason: str | None = None
 
+    def __repr__(self) -> str:
+        """Say whether somebody was matched and why not, never who.
+
+        A PRIVACY CONTROL, the same one FaceEmbedding, FrameCapture and
+        RecognitionOutcome carry: the generated repr renders the learner id into any
+        log line, f-string or assertion diff that touches this object.
+        """
+        held = "none" if self.learner_id is None else "<set>"
+        return f"MatchOutcome(matched={self.matched!r}, learner_id={held}, reason={self.reason!r})"
+
 
 @dataclass(frozen=True)
 class EnrolledFaceprint:
@@ -163,6 +172,19 @@ class EnrolledFaceprint:
     embedding_model: str
     dimension: int
     vector: tuple[float, ...]
+
+    def __repr__(self) -> str:
+        """Describe the row's shape, never whose it is or a number of it.
+
+        The generated repr printed all 128 floats and the learner id -- 1392
+        characters of one person's biometric data -- into anything that rendered it.
+        The model id and dimension are machine codes and carry nobody.
+        """
+        length = len(self.vector) if isinstance(self.vector, (tuple, list)) else None
+        return (
+            f"EnrolledFaceprint(learner_id=<set>, embedding_model={self.embedding_model!r}, "
+            f"dimension={self.dimension!r}, vector=<{length} floats>)"
+        )
 
 
 def _is_usable(vector: object, dimension: int | None = None) -> bool:
@@ -194,15 +216,32 @@ def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float |
     that a threshold comparison then depends on. A zero-magnitude vector has no
     direction and therefore no similarity to anything -- None, never 0.0, which would
     read as "maximally dissimilar" and quietly pass the refusal path.
+
+    EACH VECTOR IS SCALED BY ITS OWN LARGEST ELEMENT FIRST. Cosine does not change
+    under scaling, so this costs no meaning, and it is what keeps the arithmetic
+    inside the range a float can hold. Unscaled, a vector of large FINITE values --
+    which _is_usable admits -- made math.fsum raise ("-inf + inf in fsum",
+    "intermediate overflow in fsum") and made this return NaN, in a module whose entry
+    point promises never to raise and whose published similarity promises None rather
+    than a non-number. Measured with elements of 1e200 and 1e154. After scaling every
+    element is in [-1, 1], so no product, square or 128-element sum can overflow.
+
+    And the result is returned only when it is a finite number -- the one shape a
+    floor test can safely compare. Anything else is None.
     """
     if len(left) != len(right):
         return None
+    left_scale = max((abs(a) for a in left), default=0.0)
+    right_scale = max((abs(b) for b in right), default=0.0)
+    if not (0.0 < left_scale < math.inf and 0.0 < right_scale < math.inf):
+        return None
+    left = [a / left_scale for a in left]
+    right = [b / right_scale for b in right]
     dot = math.fsum(a * b for a, b in zip(left, right))
     left_magnitude = math.sqrt(math.fsum(a * a for a in left))
     right_magnitude = math.sqrt(math.fsum(b * b for b in right))
-    if left_magnitude == 0.0 or right_magnitude == 0.0:
-        return None
-    return dot / (left_magnitude * right_magnitude)
+    similarity = dot / (left_magnitude * right_magnitude)
+    return similarity if math.isfinite(similarity) else None
 
 
 def faceprint_similarity(left: Sequence[float], right: Sequence[float]) -> float | None:
@@ -297,9 +336,10 @@ def match_faceprint(
     scored = sorted(((score, learner) for learner, score in best_per_learner.items()), reverse=True)
     best_similarity, best_learner = scored[0]
 
-    # The lone-member case is named, not inferred from the absence of a runner-up.
-    lone = len(scored) == 1
-    floor = FACE_MATCH_LONE_MEMBER_FLOOR if lone else FACE_MATCH_SIMILARITY_FLOOR
+    # One floor, whoever else is enrolled -- see FACE_MATCH_SIMILARITY_FLOOR for the
+    # measurement that removed the lone-member floor. The margin below is ADDITIONAL
+    # protection between enrolled people, never a reason to lower this one.
+    floor = FACE_MATCH_SIMILARITY_FLOOR
 
     # Written positively -- `not (x >= floor)` rather than `x < floor` -- so it fails
     # CLOSED on NaN. Every comparison against NaN is false, so the obvious spelling
@@ -310,7 +350,7 @@ def match_faceprint(
     if not (best_similarity >= floor):
         return MatchOutcome(matched=False, reason="no_one_close_enough")
 
-    if not lone:
+    if len(scored) > 1:
         runner_up = scored[1][0]
         # Positive for the same reason as the floor above.
         if not (best_similarity - runner_up >= FACE_MATCH_MARGIN):
