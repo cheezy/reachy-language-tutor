@@ -581,6 +581,12 @@ def main() -> None:
             # name, and log_safe is what keeps the exception from quoting it.
             logger.error("enrol command failed: %s", log_safe(exc))
             raise SystemExit(1) from exc
+    if args.command is not None:
+        # A subcommand parse_args registers and nothing above dispatches. Falling through
+        # to run() would start the robot app in answer to an operator command -- the
+        # failure module_main exists to prevent -- so the only commands that reach run()
+        # are none at all.
+        raise SystemExit(f"No handler for the {args.command!r} command; nothing was run.")
     run(args)
 
 
@@ -947,9 +953,34 @@ class ReachyLanguageTutor(ReachyMiniApp):  # type: ignore[misc]
         )
 
 
-if __name__ == "__main__":
+def module_main() -> None:
+    """Entry point for `python -m reachy_language_tutor.main`.
+
+    Two callers reach this, and they need different things. The daemon launches the app
+    as `python -u -m reachy_language_tutor.main` with NO arguments (reachy_mini's
+    apps/manager.py), and that must start the robot app. An operator at a shell types
+    `python -m reachy_language_tutor.main enrol --forget-everything ID`, and that must
+    run the operator command and nothing else.
+
+    Before this, the module path went straight to wrapped_run(), so a subcommand was
+    parsed, ignored, and the app started instead -- camera, microphone, a live voice
+    session and a server on every interface, in answer to a request to ERASE somebody.
+    The subcommands only ever worked through the `reachy-language-tutor` console script.
+
+    The test is the command argparse recognised, not a list of names here: any
+    subcommand utils.parse_args registers goes to main(), which owns their dispatch,
+    so a subcommand added later cannot fall through to the app by being forgotten.
+    """
+    args, _ = parse_args()
+    if args.command is not None:
+        main()
+        return
     app = ReachyLanguageTutor()
     try:
         app.wrapped_run()
     except KeyboardInterrupt:
         app.stop()
+
+
+if __name__ == "__main__":
+    module_main()

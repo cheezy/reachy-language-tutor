@@ -77,3 +77,8 @@ external_content/profile_toolsets.json
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Instance-local startup settings: names the learner served when recognition cannot
+# answer (`enrol --serve-when-unrecognised`), so it holds a learner id. In development
+# the instance directory is the package itself, which is inside the published Space.
+startup_settings.json
