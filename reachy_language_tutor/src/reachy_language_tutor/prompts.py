@@ -12,6 +12,7 @@ from reachy_language_tutor.profile_store import (
     read_profile,
     read_packaged_default_profile,
 )
+from reachy_language_tutor.logging_safety import log_safe
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def get_session_instructions(instance_path: str | Path | None = None) -> str:
         profile = _active_profile()
         instructions = profile.instructions.strip()
     except (FileNotFoundError, ProfileFormatError) as exc:
-        logger.warning("Failed to load profile %r: %s", profile_name, exc)
+        logger.warning("Failed to load profile %r: %s", profile_name, log_safe(exc))
         instructions = ""
 
     if not instructions and selected_profile and selected_profile != DEFAULT_PROFILE_NAME:
@@ -58,7 +59,7 @@ def get_session_voice(default: str | None = None) -> str:
     try:
         return _active_profile().voice or fallback
     except (FileNotFoundError, ProfileFormatError) as exc:
-        logger.warning("Failed to load the active profile voice: %s", exc)
+        logger.warning("Failed to load the active profile voice: %s", log_safe(exc))
         return fallback
 
 
@@ -67,5 +68,5 @@ def get_session_greeting_prompt() -> str:
     try:
         return _active_profile().greeting or DEFAULT_GREETING_PROMPT
     except (FileNotFoundError, ProfileFormatError) as exc:
-        logger.warning("Failed to load the active profile greeting: %s", exc)
+        logger.warning("Failed to load the active profile greeting: %s", log_safe(exc))
         return DEFAULT_GREETING_PROMPT

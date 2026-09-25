@@ -43,7 +43,7 @@ from reachy_language_tutor.config import (
 )
 from reachy_language_tutor.prompts import get_session_voice, get_session_instructions
 from reachy_language_tutor.streaming import AdditionalOutputs, audio_to_float32
-from reachy_language_tutor.logging_safety import log_safe
+from reachy_language_tutor.logging_safety import where, log_safe
 from reachy_language_tutor.startup_settings import read_startup_settings, write_startup_settings
 from reachy_language_tutor.tools.core_tools import initialize_tools
 from reachy_language_tutor.tool_space_routes import register_tool_space_methods
@@ -867,8 +867,8 @@ class LocalStream:
         if hasattr(settings_app, "mount"):
             try:
                 settings_app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-            except Exception:
-                logger.exception("Failed to mount settings UI static assets")
+            except Exception as exc:
+                logger.error("Failed to mount settings UI static assets: %s at %s", log_safe(exc), where(exc))
                 raise
 
         def _status_payload() -> dict[str, object]:
@@ -1027,8 +1027,12 @@ class LocalStream:
             # personalities.* / voices.* over JSON-RPC — the local UI and remote
             # clients drive personalities the same way, one control surface.
             register_personality_methods(rpc, personality_ops)
-        except Exception:
-            logger.exception("Failed to register personality methods; the personality UI will be unavailable")
+        except Exception as exc:
+            logger.error(
+                "Failed to register personality methods; the personality UI will be unavailable: %s at %s",
+                log_safe(exc),
+                where(exc),
+            )
 
         try:
             register_tool_space_methods(
@@ -1037,8 +1041,12 @@ class LocalStream:
                 self.request_backend_restart,
                 instance_path=self._instance_path,
             )
-        except Exception:
-            logger.exception("Failed to register Tool Space methods; remote tool settings will be unavailable")
+        except Exception as exc:
+            logger.error(
+                "Failed to register Tool Space methods; remote tool settings will be unavailable: %s at %s",
+                log_safe(exc),
+                where(exc),
+            )
 
         try:
             register_profile_tool_methods(
@@ -1047,8 +1055,12 @@ class LocalStream:
                 self.request_backend_restart,
                 instance_path=self._instance_path,
             )
-        except Exception:
-            logger.exception("Failed to register profile tool methods; personality tool settings will be unavailable")
+        except Exception as exc:
+            logger.error(
+                "Failed to register profile tool methods; personality tool settings will be unavailable: %s at %s",
+                log_safe(exc),
+                where(exc),
+            )
 
         self._settings_initialized = True
 
@@ -1068,10 +1080,10 @@ class LocalStream:
                 except Exception as e:
                     self._set_backend_connection_state("disconnected", e)
                     logger.warning(
-                        "Backend handler failed to initialize: %s. Retrying in %.1f seconds.",
+                        "Backend handler failed to initialize: %s at %s. Retrying in %.1f seconds.",
                         log_safe(e),
+                        where(e),
                         self._backend_retry_delay,
-                        exc_info=logger.isEnabledFor(logging.DEBUG),
                     )
                     await self._sleep_or_restart_requested(self._backend_retry_delay)
                     continue
@@ -1091,10 +1103,10 @@ class LocalStream:
             except Exception as e:
                 self._set_backend_connection_state("disconnected", e)
                 logger.warning(
-                    "Backend failed to start: %s. Settings UI remains available; retrying in %.1f seconds.",
+                    "Backend failed to start: %s at %s. Settings UI remains available; retrying in %.1f seconds.",
                     log_safe(e),
+                    where(e),
                     self._backend_retry_delay,
-                    exc_info=logger.isEnabledFor(logging.DEBUG),
                 )
             else:
                 if self._stop_event.is_set():

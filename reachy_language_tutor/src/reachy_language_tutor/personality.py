@@ -22,6 +22,7 @@ from reachy_language_tutor.profile_store import (
     read_profile_from_directory,
     read_packaged_default_profile,
 )
+from reachy_language_tutor.logging_safety import log_safe
 from reachy_language_tutor.profile_toolsets import (
     read_profile_toolsets,
     write_profile_toolsets,
@@ -50,7 +51,7 @@ def _visible_profile_names(profiles_root: Path, prefix: str = "") -> list[str]:
         try:
             profile = read_profile_from_directory(profile_name, profiles_root / profile_name)
         except (FileNotFoundError, ProfileFormatError) as exc:
-            logger.warning("Skipping invalid profile %r: %s", profile_name, exc)
+            logger.warning("Skipping invalid profile %r: %s", profile_name, log_safe(exc))
             continue
         if not profile.hidden:
             visible.append(f"{prefix}{profile_name}")
@@ -104,7 +105,7 @@ def available_tool_catalog() -> list[AvailableTool]:
                     "description": tool.description,
                 }
     except (RuntimeError, ValueError) as exc:
-        logger.warning("Failed to list installed Tool Space tools: %s", exc)
+        logger.warning("Failed to list installed Tool Space tools: %s", log_safe(exc))
     return [catalog[tool_id] for tool_id in sorted(catalog)]
 
 
@@ -138,7 +139,7 @@ def delete_personality(name: str) -> bool:
     try:
         clear_profile_tool_override(name, config.INSTANCE_PATH)
     except (OSError, RuntimeError) as exc:
-        logger.warning("Deleted personality %r but could not remove its tool override: %s", name, exc)
+        logger.warning("Deleted personality %r but could not remove its tool override: %s", name, log_safe(exc))
     return True
 
 
@@ -209,6 +210,8 @@ def save_user_personality(
                 elif authored_tools is not None:
                     toolsets_path.unlink(missing_ok=True)
             except OSError as exc:
-                logger.warning("Failed to restore profile toolsets after saving profile %r: %s", profile_name, exc)
+                logger.warning(
+                    "Failed to restore profile toolsets after saving profile %r: %s", profile_name, log_safe(exc)
+                )
             raise
     return selection

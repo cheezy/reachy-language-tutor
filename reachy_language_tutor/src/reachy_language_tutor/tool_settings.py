@@ -8,6 +8,7 @@ from collections.abc import Callable, Coroutine
 from concurrent.futures import Future
 
 from reachy_mini.io.jsonrpc import JsonRpcError
+from reachy_language_tutor.logging_safety import where, log_safe
 from reachy_language_tutor.tools.core_tools import initialize_tools
 
 
@@ -24,8 +25,8 @@ def raise_tool_settings_error(reason: str, detail: str) -> NoReturn:
 def _log_restart_completion(future: Future[None]) -> None:
     try:
         future.result()
-    except Exception:
-        logger.exception("Failed to restart the conversation after a tool change")
+    except Exception as exc:
+        logger.error("Failed to restart the conversation after a tool change: %s at %s", log_safe(exc), where(exc))
 
 
 def apply_tool_change(
@@ -37,14 +38,16 @@ def apply_tool_change(
     """Reload active tools and reconnect a running conversation."""
     try:
         initialize_tools(instance_path=instance_path, force=True)
-    except Exception:
-        logger.exception("Failed to reload tools after saving tool settings")
+    except Exception as exc:
+        logger.error("Failed to reload tools after saving tool settings: %s at %s", log_safe(exc), where(exc))
         return "Saved. Restart the conversation app to apply the tool changes."
 
     try:
         conversation_loop = get_loop()
-    except Exception:
-        logger.exception("Failed to inspect the conversation loop after a tool change")
+    except Exception as exc:
+        logger.error(
+            "Failed to inspect the conversation loop after a tool change: %s at %s", log_safe(exc), where(exc)
+        )
         return "Saved. Restart the conversation app to apply the tool changes."
     if conversation_loop is None or not conversation_loop.is_running():
         return "Tools will apply when the conversation starts or restarts."
@@ -56,10 +59,12 @@ def apply_tool_change(
             restart_coroutine,
             conversation_loop,
         )
-    except Exception:
+    except Exception as exc:
         if restart_coroutine is not None:
             restart_coroutine.close()
-        logger.exception("Failed to schedule a conversation restart after a tool change")
+        logger.error(
+            "Failed to schedule a conversation restart after a tool change: %s at %s", log_safe(exc), where(exc)
+        )
         return "Saved. Restart the conversation app to apply the tool changes."
     restart_future.add_done_callback(_log_restart_completion)
     return "Reconnecting the conversation to apply the tool changes."

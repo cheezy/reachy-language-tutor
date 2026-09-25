@@ -1910,7 +1910,13 @@ def test_log_safe_still_renders_the_families_an_operator_needs() -> None:
     """
     assert "UNIQUE constraint failed" in str(store._log_safe(sqlite3.IntegrityError("UNIQUE constraint failed: t.id")))
     assert "too large" in str(store._log_safe(OverflowError("Python int too large to convert to SQLite INTEGER")))
-    assert "home" in str(store._log_safe(RuntimeError("Could not determine home directory")))
+    # RuntimeError is no longer rendered in full (other modules raise it with paths in
+    # the message); the store turns its one diagnosable RuntimeError -- no home
+    # directory -- into its own refusal, so the operator still reads what happened.
+    assert "home directory" in str(
+        store._log_safe(store._StoreRefusal("the home directory could not be determined, so there is no place"))
+    )
+    assert str(store._log_safe(RuntimeError("Could not determine home directory /home/alice"))) == "RuntimeError"
     assert "not a str" in str(store._log_safe(store._StoreRefusal("instance_path must be a path, not int, not a str")))
 
 

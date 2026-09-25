@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Any
 
+from reachy_language_tutor.logging_safety import log_safe
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 
@@ -32,5 +33,5 @@ class GoToSleep(Tool):
         try:
             return await asyncio.to_thread(deps.go_to_sleep)
         except Exception as e:
-            logger.error("go_to_sleep failed: %s", e)
+            logger.error("go_to_sleep failed: %s", log_safe(e))
             return {"error": f"go_to_sleep failed: {type(e).__name__}: {e}"}

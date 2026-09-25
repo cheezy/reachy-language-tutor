@@ -9,6 +9,8 @@ from importlib.resources import files
 
 from dotenv import find_dotenv, load_dotenv
 
+from reachy_language_tutor.logging_safety import log_safe
+
 
 # Locked profile: set to a profile name (e.g., "astronomer") to lock the app
 # to that profile and disable all profile switching. Leave as None for normal behavior.
@@ -302,7 +304,7 @@ def list_tool_module_names(tools_root: Path | None) -> list[str]:
                 continue
             tool_names.append(tool_file.stem)
     except OSError as exc:
-        logger.warning("Failed to list tool modules in %s: %s", tools_root, exc)
+        logger.warning("Failed to list the tool modules directory: %s", log_safe(exc))
     return sorted(tool_names)
 
 

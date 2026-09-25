@@ -39,6 +39,7 @@ from reachy_mini import ReachyMini
 from reachy_mini.utils import create_head_pose
 from reachy_mini.motion.move import Move
 from reachy_mini.utils.interpolation import compose_world_offset, linear_pose_interpolation
+from reachy_language_tutor.logging_safety import log_safe
 from reachy_language_tutor.dance_emotion_moves import EmotionQueueMove
 
 
@@ -381,7 +382,7 @@ class MovementManager:
                 else:
                     self.current_robot.stop_head_tracking()
             except Exception as e:
-                logger.warning("Head-tracking toggle failed: %s", e)
+                logger.warning("Head-tracking toggle failed: %s", log_safe(e))
         elif command == "set_speaking":
             if not self._head_tracking:
                 return
@@ -398,7 +399,7 @@ class MovementManager:
                     self._track_anchor = None
                     self.current_robot.start_head_tracking(weight=1.0)
             except Exception as e:
-                logger.warning("Head-tracking speaking handoff failed: %s", e)
+                logger.warning("Head-tracking speaking handoff failed: %s", log_safe(e))
         else:
             logger.warning("Unknown command received by MovementManager: %s", command)
 
@@ -452,7 +453,7 @@ class MovementManager:
                     logger.debug("Started breathing after %.1fs of inactivity", idle_for)
                 except Exception as e:
                     self._breathing_active = False
-                    logger.error("Failed to start breathing: %s", e)
+                    logger.error("Failed to start breathing: %s", log_safe(e))
 
         if isinstance(self.state.current_move, BreathingMove) and self.move_queue:
             self.state.current_move = None
@@ -660,7 +661,7 @@ class MovementManager:
             try:
                 self.current_robot.stop_head_tracking()
             except Exception as e:
-                logger.warning("Failed to stop head tracking: %s", e)
+                logger.warning("Failed to stop head tracking: %s", log_safe(e))
 
         if not reset_to_neutral:
             return
@@ -682,7 +683,7 @@ class MovementManager:
             logger.info("Reset to neutral position completed")
 
         except Exception as e:
-            logger.error(f"Failed to reset to neutral position: {e}")
+            logger.error("Failed to reset to neutral position: %s", log_safe(e))
 
     def get_status(self) -> Dict[str, Any]:
         """Return a lightweight status snapshot for observability."""

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from collections.abc import Iterable
 
 from reachy_language_tutor.config import DEFAULT_PROFILES_DIRECTORY, config
+from reachy_language_tutor.logging_safety import log_safe
 
 
 logger = logging.getLogger(__name__)
@@ -187,7 +188,7 @@ def migrate_legacy_profiles(profiles_root: Path) -> list[str]:
                 overwrite=False,
             )
         except Exception as exc:
-            logger.warning("Could not migrate legacy profile %r: %s", profile_name, exc)
+            logger.warning("Could not migrate legacy profile %r: %s", profile_name, log_safe(exc))
             continue
         logger.info("Migrated legacy profile %r to %s.", profile_name, PROFILE_FILENAME)
         migrated.append(profile_name)
@@ -278,5 +279,5 @@ def write_profile(
             try:
                 temporary_path.unlink(missing_ok=True)
             except OSError as exc:
-                logger.warning("Failed to remove temporary profile file %s: %s", temporary_path, exc)
+                logger.warning("Failed to remove a temporary profile file: %s", log_safe(exc))
         return profile_path

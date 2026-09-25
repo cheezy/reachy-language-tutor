@@ -694,7 +694,7 @@ def run(
             sys.exit(1)
 
         except Exception as e:
-            logger.error(f"Unexpected error during robot initialization: {type(e).__name__}: {e}")
+            logger.error("Unexpected error during robot initialization: %s", log_safe(e))
             logger.error("Please check your configuration and try again.")
             sys.exit(1)
 

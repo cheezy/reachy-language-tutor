@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
+from reachy_language_tutor.logging_safety import log_safe
+
 
 AudioControlValue = float | int
 AudioStartupParameter = tuple[str, tuple[AudioControlValue, ...]]
@@ -49,7 +51,7 @@ def apply_audio_startup_config(
             )
         )
     except Exception as exc:
-        log.warning("Skipping Reachy audio startup config: SDK audio config failed: %s", exc)
+        log.warning("Skipping Reachy audio startup config: SDK audio config failed: %s", log_safe(exc))
         return False
 
     if applied:

@@ -28,6 +28,7 @@ from reachy_language_tutor.profile_store import (
     normalize_tool_names,
     canonical_profile_name,
 )
+from reachy_language_tutor.logging_safety import where, log_safe
 from reachy_language_tutor.profile_toolsets import (
     read_profile_tool_override,
 )
@@ -89,7 +90,7 @@ class PersonalityOps:
                     return canonical_profile_name(persisted)
             return canonical_profile_name(config.REACHY_MINI_CUSTOM_PROFILE)
         except Exception as exc:
-            logger.warning("Failed to read configured startup personality: %s", exc)
+            logger.warning("Failed to read configured startup personality: %s", log_safe(exc))
             return DEFAULT_PROFILE_NAME
 
     def _startup_choice_value(self) -> str:
@@ -99,7 +100,7 @@ class PersonalityOps:
                 if persisted:
                     return canonical_profile_name(persisted)
         except Exception as exc:
-            logger.warning("Failed to read persisted startup personality: %s", exc)
+            logger.warning("Failed to read persisted startup personality: %s", log_safe(exc))
         return self._startup_choice
 
     def _set_startup_choice(self, selected_name: str) -> None:
@@ -113,7 +114,7 @@ class PersonalityOps:
             callback = self._get_current_voice or self._handler.get_current_voice
             return callback()
         except Exception as exc:
-            logger.warning("Failed to read current voice override: %s", exc)
+            logger.warning("Failed to read current voice override: %s", log_safe(exc))
             return None
 
     async def _run_on_loop(
@@ -231,12 +232,12 @@ class PersonalityOps:
         except FileExistsError as exc:
             raise RouteError("profile_exists") from exc
         except ProfileFormatError as exc:
-            logger.warning("Failed to edit profile %r: %s", name, exc)
+            logger.warning("Failed to edit profile %r: %s", name, log_safe(exc))
             raise RouteError("profile_unavailable", message=str(exc)) from exc
         except ValueError as exc:
             raise RouteError("invalid_name", message=str(exc)) from exc
         except (OSError, RuntimeError) as exc:
-            logger.exception("Failed to save personality %r", name)
+            logger.error("Failed to save personality %r: %s at %s", name, log_safe(exc), where(exc))
             raise RouteError("profile_save_failed", message=str(exc)) from exc
         return {"ok": True, "value": value, "choices": list_personalities()}
 
@@ -251,7 +252,7 @@ class PersonalityOps:
         try:
             deleted = delete_personality(profile_name)
         except OSError as exc:
-            logger.exception("Failed to delete personality %r", profile_name)
+            logger.error("Failed to delete personality %r: %s at %s", profile_name, log_safe(exc), where(exc))
             raise RouteError("profile_delete_failed", message=str(exc)) from exc
         if not deleted:
             raise RouteError("not_deletable", extra={"choices": choices})
@@ -276,7 +277,7 @@ class PersonalityOps:
                 self._set_startup_choice(selected_name)
                 persisted_choice = self._startup_choice_value()
             except Exception as exc:
-                logger.warning("Failed to persist startup personality: %s", exc)
+                logger.warning("Failed to persist startup personality: %s", log_safe(exc))
 
         if selected_name == self._current_choice() and not force:
             _persist_if_requested()
@@ -310,7 +311,7 @@ class PersonalityOps:
         try:
             return await self._run_on_loop(_get_available())
         except Exception as exc:
-            logger.warning("Failed to read available voices: %s", exc)
+            logger.warning("Failed to read available voices: %s", log_safe(exc))
             return get_available_voices()
 
     def current_voice(self) -> dict[str, str]:
@@ -319,7 +320,7 @@ class PersonalityOps:
             callback = self._get_current_voice or self._handler.get_current_voice
             return {"voice": callback()}
         except Exception as exc:
-            logger.warning("Failed to read current voice: %s", exc)
+            logger.warning("Failed to read current voice: %s", log_safe(exc))
             return {"voice": get_default_voice()}
 
     async def apply_voice(self, voice: str) -> dict[str, Any]:

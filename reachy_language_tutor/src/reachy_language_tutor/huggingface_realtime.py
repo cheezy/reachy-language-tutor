@@ -44,6 +44,7 @@ from reachy_language_tutor.prompts import (
     get_session_greeting_prompt,
 )
 from reachy_language_tutor.streaming import AdditionalOutputs, audio_to_int16
+from reachy_language_tutor.logging_safety import where, log_safe
 from reachy_language_tutor.tools.core_tools import (
     ToolSpec,
     ToolDependencies,
@@ -282,7 +283,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                 )
                 return f"Voice changed to {resolved_voice}."
             except Exception as e:
-                logger.warning("Failed to update live session for voice change: %s", e)
+                logger.warning("Failed to update live session for voice change: %s", log_safe(e))
                 return "Voice change failed. Will take effect on next connection."
         return "Voice changed. Will take effect on next connection."
 
@@ -302,7 +303,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
             core_tools.initialize_tools(force=True)
         except Exception as exc:
             set_custom_profile(previous_profile)
-            logger.error("Failed to resolve personality %r: %s", profile, exc)
+            logger.error("Failed to resolve personality %r: %s", profile, log_safe(exc))
             return f"Failed to apply personality: {exc}"
 
         if self.connection is not None:
@@ -320,13 +321,13 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                 )
                 logger.info("Applied personality via live update: %s", profile or "default")
             except Exception as exc:
-                logger.warning("Live update failed; will restart session: %s", exc)
+                logger.warning("Live update failed; will restart session: %s", log_safe(exc))
 
             try:
                 await self._restart_session()
                 return "Applied personality and restarted realtime session."
             except Exception as exc:
-                logger.warning("Failed to restart session after apply: %s", exc)
+                logger.warning("Failed to restart session after apply: %s", log_safe(exc))
                 return "Applied personality. Will take effect on next connection."
 
         logger.info(
@@ -343,7 +344,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
             input_transcript = self.input_transcript_chunks_by_item
             if input_transcript.item_id == item_id and len(input_transcript.deltas) - 1 == sequence_counter:
                 await self.output_queue.put(AdditionalOutputs({"role": "user_partial", "content": transcript}))
-                logger.debug(f"Debounced partial emitted: {transcript}")
+                logger.debug("Debounced partial emitted: %s", describe_for_log(transcript))
         except asyncio.CancelledError:
             logger.debug("Debounced partial cancelled")
             raise
@@ -370,7 +371,9 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                 return
             except ConnectionClosedError as e:
                 # Abrupt close (e.g., "no close frame received or sent") → retry
-                logger.warning("Realtime websocket closed unexpectedly (attempt %d/%d): %s", attempt, max_attempts, e)
+                logger.warning(
+                    "Realtime websocket closed unexpectedly (attempt %d/%d): %s", attempt, max_attempts, log_safe(e)
+                )
                 if attempt < max_attempts:
                     self.client = await self._build_realtime_client()
                     # exponential backoff with jitter
@@ -421,7 +424,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
             except asyncio.TimeoutError:
                 logger.warning("Realtime session restart timed out; continuing in background.")
         except Exception as e:
-            logger.warning("_restart_session failed: %s", e)
+            logger.warning("_restart_session failed: %s", log_safe(e))
 
     async def _safe_response_create(self, **kwargs: Any) -> None:
         """Enqueue a response.create() kwargs for the sender worker _response_sender_loop().
@@ -480,7 +483,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
             await self._safe_response_create()
             logger.info("Queued startup greeting prompt")
         except Exception as e:
-            logger.warning("Failed to queue startup greeting prompt: %s", e)
+            logger.warning("Failed to queue startup greeting prompt: %s", log_safe(e))
 
     async def _response_sender_loop(self) -> None:
         """Dedicated worker that sends ``response.create()`` calls serially.
@@ -529,7 +532,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                 try:
                     await self.connection.response.create(**kwargs)
                 except Exception as e:
-                    logger.debug("_response_sender_loop: send failed: %s", e)
+                    logger.debug("_response_sender_loop: send failed: %s", log_safe(e))
                     self._response_done_event.set()
                     break
 
@@ -767,8 +770,11 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                     getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
                     self.get_current_voice(),
                 )
-            except Exception:
-                logger.exception("Realtime session.update failed; aborting startup")
+            except Exception as exc:
+                # Shape and frames, not logger.exception: the session config carries the
+                # instructions, which include every remembered fact about the household,
+                # and a traceback renders whatever message the failure quoted back.
+                logger.error("Realtime session.update failed; aborting startup: %s at %s", log_safe(exc), where(exc))
                 raise
 
             logger.info("Realtime session updated successfully")
@@ -817,7 +823,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                         logger.debug("response text delta")
 
                     if event.type == "response.output_text.done":
-                        logger.debug("response text done: %s", event.text)
+                        logger.debug("response text done: %s", describe_for_log(event.text))
 
                     if event.type == "response.created":
                         self._mark_activity("response_created")
@@ -840,7 +846,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
 
                     if event.type == "conversation.item.input_audio_transcription.delta":
                         self._mark_activity("user_transcription_delta")
-                        logger.debug(f"User partial transcript: {event.delta}")
+                        logger.debug("User partial transcript: %s", describe_for_log(event.delta))
 
                         item_id = event.item_id
                         delta = event.delta or ""
@@ -863,7 +869,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                         self._mark_activity("user_transcription_completed")
                         raw_transcript = event.transcript or ""
                         transcript = raw_transcript.strip()
-                        logger.debug("User transcript: %s", raw_transcript)
+                        logger.debug("User transcript: %s", describe_for_log(raw_transcript))
                         self.deps.movement_manager.set_listening(False)
 
                         await self._cancel_partial_transcript_task()
@@ -884,7 +890,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                     # Handle assistant transcription
                     if event.type == "response.output_audio_transcript.done":
                         self._mark_activity("assistant_transcript_done")
-                        logger.debug(f"Assistant transcript: {event.transcript}")
+                        logger.debug("Assistant transcript: %s", describe_for_log(event.transcript))
                         await self.output_queue.put(
                             AdditionalOutputs({"role": "assistant", "content": event.transcript})
                         )
@@ -980,7 +986,11 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
                             # here, not less: a support bundle is collected exactly
                             # when this line has fired.
                             logger.error("Realtime error [%s]: %s", code, describe_for_log(msg))
-                            logger.debug("Realtime error [%s]: %s (raw=%s)", code, msg, err)
+                            # No DEBUG copy of the words here. The console already logs this
+                            # string at DEBUG, once and truncated, when it arrives as the
+                            # "[error]" line queued below; a second, untruncated copy of the
+                            # message and the raw error object was the same leak as the
+                            # transcript lines above (docs/privacy-and-consent.md, logs).
 
                         if code == "input_audio_buffer_commit_empty":
                             self.deps.movement_manager.set_listening(False)
@@ -1040,7 +1050,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
             audio_message = base64.b64encode(audio_frame.tobytes()).decode("utf-8")
             await self.connection.input_audio_buffer.append(audio=audio_message)
         except Exception as e:
-            logger.debug("Dropping audio frame: connection not ready (%s)", e)
+            logger.debug("Dropping audio frame: connection not ready (%s)", log_safe(e))
             return
 
     async def shutdown(self) -> None:
@@ -1057,9 +1067,9 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
             try:
                 await self.connection.close()
             except ConnectionClosedError as e:
-                logger.debug(f"Connection already closed during shutdown: {e}")
+                logger.debug("Connection already closed during shutdown: %s", log_safe(e))
             except Exception as e:
-                logger.debug(f"connection.close() ignored: {e}")
+                logger.debug("connection.close() ignored: %s", log_safe(e))
             finally:
                 self.connection = None
 
@@ -1104,7 +1114,7 @@ class HuggingFaceRealtimeHandler(ConversationHandler):
         try:
             hardware_id = self.deps.reachy_mini.client.get_status(wait=False).hardware_id
         except (AssertionError, ConnectionError, TimeoutError) as e:
-            logger.warning("Daemon status unavailable for realtime session allocation: %s", e)
+            logger.warning("Daemon status unavailable for realtime session allocation: %s", log_safe(e))
         else:
             if hardware_id:
                 allocator_payload["hardware_id"] = hardware_id

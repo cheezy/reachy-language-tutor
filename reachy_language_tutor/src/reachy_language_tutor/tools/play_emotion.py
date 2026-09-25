@@ -4,6 +4,7 @@ import logging
 import unicodedata
 from typing import TYPE_CHECKING, Any, Dict
 
+from reachy_language_tutor.logging_safety import where, log_safe
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 
@@ -19,7 +20,7 @@ try:
 
     EMOTION_AVAILABLE = True
 except Exception as e:
-    logger.warning(f"Emotion library not available: {e}")
+    logger.warning("Emotion library not available: %s", log_safe(e))
     EMOTION_AVAILABLE = False
 
 
@@ -242,7 +243,7 @@ def warm_emotion_library() -> bool:
     try:
         load_emotion_library()
     except Exception as e:
-        logger.warning("Could not load the emotion library at startup: %s", e)
+        logger.warning("Could not load the emotion library at startup: %s", log_safe(e))
         return False
     return True
 
@@ -340,5 +341,5 @@ class PlayEmotion(Tool):
             return {"status": "queued", "emotion": emotion_name}
 
         except Exception as e:
-            logger.exception("Failed to play emotion")
+            logger.error("Failed to play emotion: %s at %s", log_safe(e), where(e))
             return {"error": f"Failed to play emotion: {e!s}"}

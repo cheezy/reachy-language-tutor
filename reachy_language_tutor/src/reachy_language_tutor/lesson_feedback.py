@@ -23,6 +23,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from reachy_language_tutor.tools import play_emotion
+from reachy_language_tutor.logging_safety import where, log_safe
 
 
 if TYPE_CHECKING:
@@ -40,7 +41,7 @@ try:
 
     EMOTION_AVAILABLE = True
 except Exception as e:  # pragma: no cover - exercised by monkeypatching the flag
-    logger.warning(f"Emotion library not available: {e}")
+    logger.warning("Emotion library not available: %s", log_safe(e))
     EMOTION_AVAILABLE = False
 
 
@@ -145,10 +146,10 @@ def react_to_lesson_event(event: object, *, movement_manager: Any) -> str | None
             return None
         move: EmotionQueueMove = EmotionQueueMove(move_name, library)
         movement_manager.queue_move(move)
-    except Exception:
+    except Exception as exc:
         # The lesson is already started or already saved. Only the reaction is lost, and
         # the one place that is decided is here, so neither tool can forget it.
-        logger.exception("lesson_feedback: could not queue a reaction")
+        logger.error("lesson_feedback: could not queue a reaction: %s at %s", log_safe(exc), where(exc))
         return None
 
     # The event name and the move: both safe constants. Never the learner, never the

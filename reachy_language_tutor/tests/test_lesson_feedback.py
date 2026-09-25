@@ -236,6 +236,12 @@ def test_the_policy_may_import_only_what_it_needs_to_choose_and_queue_a_move() -
         "reachy_language_tutor.tools",
         "reachy_language_tutor.tools.play_emotion",
         "reachy_language_tutor.dance_emotion_moves",
+        # Added deliberately when the exception this module logs was routed through
+        # log_safe and where. logging_safety imports sqlite3 and traceback and nothing of
+        # this package: no learner, no thread, no timer.
+        "reachy_language_tutor.logging_safety",
+        "reachy_language_tutor.logging_safety.log_safe",
+        "reachy_language_tutor.logging_safety.where",
     }
     source = Path(lesson_feedback.__file__).read_text(encoding="utf-8")
 

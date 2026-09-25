@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 
 from reachy_language_tutor.streaming import AdditionalOutputs, AsyncStreamHandler, wait_for_item
 from reachy_language_tutor.idle_policy import start_idle_tool_call
+from reachy_language_tutor.logging_safety import where, log_safe
 from reachy_language_tutor.tools.core_tools import ToolDependencies, get_tool_specs
 from reachy_language_tutor.tools.background_tool_manager import BackgroundToolManager
 
@@ -58,8 +59,10 @@ class ConversationHandler(AsyncStreamHandler, ABC):
         if observer is not None and text:
             try:
                 observer(role, text, final)
-            except Exception:
-                logger.debug("transcript observer raised (ignored)", exc_info=True)
+            except Exception as exc:
+                # The shape and the frames, never exc_info: a traceback renders the
+                # exception's MESSAGE, and this observer is handed the transcript.
+                logger.debug("transcript observer raised (ignored): %s at %s", log_safe(exc), where(exc))
 
     def _note_lesson_coverage(self, role: str, text: str) -> None:
         """Tell the running lesson what just happened in it: a line said, or a reply.
@@ -92,8 +95,9 @@ class ConversationHandler(AsyncStreamHandler, ABC):
                 deps.lesson_session.note_spoken(deps.current_learner_id, text)
             elif role == "user":
                 deps.lesson_session.note_learner_turn(deps.current_learner_id)
-        except Exception:
-            logger.debug("lesson coverage note raised (ignored)", exc_info=True)
+        except Exception as exc:
+            # Frames and shape only: this is handed the transcript and the learner id.
+            logger.debug("lesson coverage note raised (ignored): %s at %s", log_safe(exc), where(exc))
 
     def _mark_activity(self, reason: str) -> None:
         """Record non-idle conversation activity for the idle timer."""
@@ -102,8 +106,8 @@ class ConversationHandler(AsyncStreamHandler, ABC):
         if self._activity_observer is not None:
             try:
                 self._activity_observer(reason)
-            except Exception:
-                logger.debug("activity observer raised (ignored)", exc_info=True)
+            except Exception as exc:
+                logger.debug("activity observer raised (ignored): %s at %s", log_safe(exc), where(exc))
 
     def _idle_behavior_ready(self) -> bool:
         """Return whether idle behavior may run now. Backends can add guards."""
@@ -123,7 +127,7 @@ class ConversationHandler(AsyncStreamHandler, ABC):
             try:
                 await self.send_idle_signal(idle_duration)
             except Exception as e:
-                logger.warning("Idle tool skipped (connection closed?): %s", e)
+                logger.warning("Idle tool skipped (connection closed?): %s", log_safe(e))
                 return None
             self.last_idle_behavior_time = now
         handler_output = await wait_for_item(self.output_queue)

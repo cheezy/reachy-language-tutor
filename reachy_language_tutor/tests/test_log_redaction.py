@@ -1558,27 +1558,26 @@ _SPEECH_NAMES = ("transcript", "text", "delta", "content", "speech", "message", 
 _RENDERERS = frozenset({"describe_for_log", "describe_json_for_log"})
 
 
-def test_the_handlers_own_transcript_lines_stay_at_debug() -> None:
-    """The second sink, kept consistent with the console's.
+def test_the_handlers_own_transcript_lines_carry_shape_at_every_level() -> None:
+    """The second sink, and it no longer carries the words at all.
 
-    huggingface_realtime logs the same words one layer down. Those calls are already
-    DEBUG, which is what made this the cheap half of the decision -- but nothing said
-    so, and promoting one while chasing a bug would undo the console's half in a file
-    where the word INFO never appears next to the word transcript.
+    huggingface_realtime logged the same words the console logs, one layer down --
+    at DEBUG, which this test used to accept. But the console's DEBUG copy is the
+    one docs/privacy-and-consent.md describes, "truncated at 500 characters", and
+    these were a second copy with no truncation: measured, a 1,598-character user
+    transcript and the assistant's reply each appeared whole, beside the console's
+    truncated line. So the handler now renders speech as its shape at every level,
+    and the console's single DEBUG line is the only place the words are written.
 
     A line that renders its argument through describe_for_log is reading shape rather
-    than words, so it is what this policy asks for and the scan lets it past at any
-    level -- otherwise the error branch's fix would look exactly like its defect.
-
-    What this does NOT catch: a log line that neither mentions transcript in its text
-    nor interpolates a raw variable whose name is in _SPEECH_NAMES.
-    ``logger.info("%s", event.payload)`` is invisible here. The scan reads names, and
-    a name is the only handle this layer has -- so the list is the guard, and a line
-    that starts carrying speech under a new name needs adding to it.
+    than words, so it is what this policy asks for. What this does NOT catch: a log
+    line that neither mentions transcript in its text nor interpolates a raw variable
+    whose name is in _SPEECH_NAMES. ``logger.info("%s", event.payload)`` is invisible
+    here. The scan reads names, and a name is the only handle this layer has.
     """
-    at_debug = 0
+    rendered_speech = 0
     measurements = 0
-    above_debug: list[tuple[int, str, list[str]]] = []
+    raw_speech: list[tuple[int, str, list[str]]] = []
 
     for node in ast.walk(_realtime_tree()):
         if not isinstance(node, ast.Call):
@@ -1588,29 +1587,77 @@ def test_the_handlers_own_transcript_lines_stay_at_debug() -> None:
             continue
         if not (isinstance(func.value, ast.Name) and func.value.id == "logger"):
             continue
-        # A bare constant is the format string; only an interpolated value carries words.
         interpolated = [arg for arg in node.args if not isinstance(arg, ast.Constant)]
         raw = [arg for arg in interpolated if not _is_rendered(arg)]
-        names = [name for arg in raw for name in _identifiers_in(arg)]
-        about_speech = "transcript" in _literal_text(node).lower() or any(
-            word in name.lower() for name in names for word in _SPEECH_NAMES
-        )
-        if not (about_speech and raw):
+        rendered = [arg for arg in interpolated if _is_rendered(arg)]
+        raw_names = [name for arg in raw for name in _identifiers_in(arg)]
+
+        def _speech(names: list[str]) -> bool:
+            return any(word in name.lower() for name in names for word in _SPEECH_NAMES)
+
+        if _speech([name for arg in rendered for name in _identifiers_in(arg)]) and not _speech(raw_names):
+            rendered_speech += 1
+        if not ("transcript" in _literal_text(node).lower() or _speech(raw_names)) or not raw:
             continue
-        if names and all(name in _MEASUREMENTS for name in names):
+        if all(name in _MEASUREMENTS for name in raw_names):
             measurements += 1  # "first audio delta %.0f ms after user transcript"
             continue
-        if func.attr == "debug":
-            at_debug += 1
-        else:
-            above_debug.append((node.lineno, func.attr, sorted(set(names))))
+        raw_speech.append((node.lineno, func.attr, sorted(set(raw_names))))
 
-    assert above_debug == [], above_debug
+    assert raw_speech == [], raw_speech
     # Non-vacuity, checked AFTER the claim so a scan that reads nothing cannot be
-    # mistaken for a promoted line, and a promoted line cannot be reported as an
-    # empty scan. Both happened while writing this.
-    assert at_debug >= 6, f"only {at_debug} speech lines found, so this scan proves nothing"
+    # mistaken for a clean one.
+    assert rendered_speech >= 6, f"only {rendered_speech} rendered speech lines found, so this scan proves nothing"
     assert measurements >= 1, "the latency lines vanished, so the exemption is untested"
+
+
+def test_a_transcript_reaches_the_debug_log_once_and_truncated(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Executed, not scanned: the documented DEBUG exception is exactly one copy.
+
+    docs/privacy-and-consent.md says --debug logs the words "truncated at 500
+    characters". Measured before the fix, the realtime handler added its own
+    untruncated copies of the user transcript, the assistant transcript, the partial
+    transcript and response text. A sentinel past character 1,500 of each proves no
+    untruncated copy is written by the handler, and the console's truncated copy is
+    what remains.
+    """
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_huggingface_realtime import HF_DEFAULT_VOICE, _FakeEvent, _make_fake_realtime_client
+
+    sentinel = "ZEBEDIAH"
+    long_user = "x" * 1500 + f" my name is Alice {sentinel}"
+    long_assistant = "y" * 1500 + f" hello Alice {sentinel}"
+
+    async def run() -> None:
+        handler = HuggingFaceRealtimeHandler(ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock()))
+        handler.partial_debounce_delay = 0
+        handler.client = _make_fake_realtime_client(
+            events=(
+                _FakeEvent("conversation.item.input_audio_transcription.delta", item_id="i1", delta=f"it is {sentinel}"),
+                _FakeEvent("conversation.item.input_audio_transcription.completed", item_id="i1", transcript=long_user),
+                _FakeEvent("response.output_audio_transcript.done", transcript=long_assistant),
+                _FakeEvent("response.output_text.done", text=f"text {sentinel}"),
+            )
+        )
+        monkeypatch.setattr(type(handler.tool_manager), "start_up", MagicMock())
+        monkeypatch.setattr(type(handler.tool_manager), "shutdown", AsyncMock())
+        await handler._run_realtime_session()
+        await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(hf_mod, "get_session_instructions", lambda _instance_path=None: "test")
+    monkeypatch.setattr(hf_mod, "get_session_voice", lambda default=HF_DEFAULT_VOICE: "Aiden")
+    monkeypatch.setattr(hf_mod, "get_tool_specs", lambda: [])
+    with caplog.at_level(logging.DEBUG):
+        asyncio.run(run())
+
+    from_the_handler = [r for r in caplog.records if r.name == hf_mod.__name__]
+    assert from_the_handler, "the handler logged nothing, so this proves nothing"
+    leaked = [f"{r.lineno}: {r.getMessage()[:80]}" for r in from_the_handler if sentinel in r.getMessage()]
+    assert leaked == [], leaked
 
 
 def test_a_turn_with_no_text_still_leaves_a_trace(caplog: pytest.LogCaptureFixture) -> None:
@@ -1764,71 +1811,208 @@ async def test_the_idle_reason_is_described_rather_than_quoted(
 # store printed "/.../alice-smith-household/instance" from a line whose format string
 # mentions no path at all, and memory.py printed the household directory twice.
 #
-# The rule is logging_safety.log_safe. These are the modules that hold it.
+# The rule is logging_safety.log_safe, and it holds in EVERY module of the package.
+#
+# It used to hold in a list of modules -- four, then ten -- and "a module joins it when
+# it has been swept". That list was the deny-list shape one level up: the guard covered
+# what somebody had remembered to add, and ninety call sites in twenty-odd modules sat
+# outside it, including a traceback of session.update (every remembered fact) and a
+# raw exception quoting the instance directory. So the guard now names what a logging
+# call may DO with a caught exception, and applies it to every file under src.
 
-_REDACTED_MODULES = (
-    "learners/store.py",
-    "memory.py",
-    "console.py",
-    "main.py",
-)
+# The methods that make a call a logging call, on any receiver -- `logger`, the `log`
+# parameter audio/startup_config.py takes, logging's own module functions. A receiver
+# list would be one more thing to forget; a stray argparse `.error` is checked too, and
+# is harmless because it carries no exception.
+_LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "critical", "log", "exception"})
 
-_SAFE_RENDERERS = frozenset({"log_safe", "_log_safe", "describe_for_log", "describe_json_for_log"})
+# The only calls a caught exception may be passed to inside a logging call. Each
+# renders a shape: log_safe a class (or a message this app worded from types), where
+# the file:line frames, describe_for_log a type and a size.
+_SAFE_RENDERERS = frozenset({"log_safe", "_log_safe", "describe_for_log", "describe_json_for_log", "where"})
 
 
 def _source_root() -> Path:
     return Path(__file__).resolve().parents[1] / "src" / "reachy_language_tutor"
 
 
-def _exception_bound_names(tree: ast.Module) -> set[str]:
-    """Names an `except ... as` binds, which therefore hold an exception."""
-    return {node.name for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler) and node.name}
+def _every_module() -> list[Path]:
+    return sorted(path for path in _source_root().rglob("*.py") if "__pycache__" not in path.parts)
 
 
-@pytest.mark.parametrize("module", _REDACTED_MODULES)
-def test_no_caught_exception_is_logged_without_being_rendered_safe(module: str) -> None:
-    """An exception reaching a log line goes through log_safe, in every module that holds it.
+def _called_name(call: ast.Call) -> str | None:
+    return getattr(call.func, "id", None) or getattr(call.func, "attr", None)
 
-    This is an allow-list over one shape rather than a search for paths: a caught
-    exception is rendered through a redactor, or it does not reach the log. Naming the
-    forbidden thing instead -- "no argument called path" -- is what missed it the first
-    time, because the offending argument was called `exc`.
 
-    Wrapping is what the fix was: 26 log lines across console.py and main.py, plus the
-    learner modules. Unwrapping any of them fails this.
+def _logging_shape_offences(tree: ast.Module) -> tuple[list[tuple[int, str]], int]:
+    """Every logging call that renders a caught exception other than as a shape.
 
-    NOT covered, and deliberately: the other modules in the package. They have the same
-    shape at roughly a hundred more call sites, which is a change too large to make
-    without its own review -- see the completion notes on D31. This list is the set that
-    has actually been swept, and a module joins it when it has been.
+    AN ALLOW-LIST OF SHAPES. Inside the `except ... as NAME` block that bound it, NAME
+    may appear in a logging call's arguments only as
+
+      - the argument of a safe renderer:   log_safe(NAME), where(NAME), ...
+      - its class name:                    type(NAME).__name__
+
+    Anything else -- the bare name, str(NAME), NAME.args, an f-string, `%r` of it --
+    is refused without having to be foreseen. A logging call must also never render a
+    traceback: `.exception(...)` and any `exc_info=` other than a literal False print
+    the exception's message beside its frames, which is the same raw rendering by
+    another route. `where` gives the frames without the message.
+
+    Returns the offences and how many exception references were checked, so a scan
+    that read nothing cannot be mistaken for a clean one.
+
+    NOT covered, said here rather than implied: an exception copied into another
+    variable and logged under that name, or rendered by a helper before it reaches the
+    call (traceback.format_exc(), a message built with f"{exc}" on the line above).
+    The scan follows the name the except clause binds, within that clause.
     """
-    tree = ast.parse((_source_root() / module).read_text(encoding="utf-8"))
-    caught = _exception_bound_names(tree)
-    assert caught, f"{module} catches nothing, so this scan proves nothing"
-
-    raw: list[str] = []
+    offences: list[tuple[int, str]] = []
     checked = 0
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-            continue
-        if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "logger"):
-            continue
-        for argument in list(node.args) + [keyword.value for keyword in node.keywords]:
-            for name in (n for n in ast.walk(argument) if isinstance(n, ast.Name)):
-                if name.id not in caught:
-                    continue
-                checked += 1
-                enclosing = [
-                    call
-                    for call in ast.walk(argument)
-                    if isinstance(call, ast.Call)
-                    and getattr(call.func, "id", getattr(call.func, "attr", "")) in _SAFE_RENDERERS
-                    and any(n is name for n in ast.walk(call))
-                ]
-                # type(exc).__name__ is a shape, not a value, and is equally fine.
-                shaped = any(isinstance(a, ast.Attribute) and a.attr == "__name__" for a in ast.walk(argument))
-                if not enclosing and not shaped:
-                    raw.append(f"{module}:{node.lineno}: `{name.id}` is logged without log_safe")
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
 
-    assert checked, f"no caught exception reaches a log line in {module}, so this scan proves nothing"
-    assert raw == [], raw
+    def is_logging_call(node: ast.AST) -> bool:
+        return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _LOG_METHODS
+
+    for node in ast.walk(tree):
+        if is_logging_call(node):
+            assert isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            if node.func.attr == "exception":
+                offences.append((node.lineno, "a traceback via .exception()"))
+            for keyword in node.keywords:
+                if keyword.arg == "exc_info" and not (
+                    isinstance(keyword.value, ast.Constant) and keyword.value.value is False
+                ):
+                    offences.append((node.lineno, "a traceback via exc_info="))
+
+    for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name):
+        for statement in handler.body:
+            for call in (n for n in ast.walk(statement) if is_logging_call(n)):
+                assert isinstance(call, ast.Call)
+                for argument in [*call.args, *(keyword.value for keyword in call.keywords)]:
+                    for name in ast.walk(argument):
+                        if not (isinstance(name, ast.Name) and name.id == handler.name):
+                            continue
+                        checked += 1
+                        parent = parents.get(name)
+                        rendered = isinstance(parent, ast.Call) and _called_name(parent) in _SAFE_RENDERERS
+                        rendered = rendered and name in parent.args  # type: ignore[union-attr]
+                        typed = (
+                            isinstance(parent, ast.Call)
+                            and _called_name(parent) == "type"
+                            and isinstance(parents.get(parent), ast.Attribute)
+                            and parents[parent].attr == "__name__"  # type: ignore[attr-defined]
+                        )
+                        if not (rendered or typed):
+                            offences.append((call.lineno, f"`{handler.name}` rendered as {ast.unparse(argument)[:60]}"))
+    return offences, checked
+
+
+def test_no_module_logs_a_caught_exception_in_any_shape_but_a_rendered_one() -> None:
+    """Every file under src, against the allow-list of shapes above.
+
+    Wrapping was the fix, module by module: 26 lines across console.py and main.py
+    first, then the learner modules, then ten more, then the remaining twenty-odd
+    modules at once. Unwrapping any one of them, or adding a new raw one anywhere, fails
+    this -- including in a module written after this test.
+    """
+    offences: list[str] = []
+    checked = 0
+    modules = _every_module()
+    for path in modules:
+        found, counted = _logging_shape_offences(ast.parse(path.read_text(encoding="utf-8")))
+        checked += counted
+        relative = path.relative_to(_source_root())
+        offences.extend(f"{relative}:{line}: {what}" for line, what in found)
+
+    assert offences == [], offences
+    # Non-vacuity: the package logs caught exceptions in well over a hundred places.
+    assert len(modules) > 50, f"only {len(modules)} modules found, so the scan read the wrong tree"
+    assert checked > 100, f"only {checked} exception references checked, so this scan proves nothing"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # Each is a shape this package actually shipped, or the one-token neighbour of one.
+        "try:\n    f()\nexcept OSError as exc:\n    logger.warning('failed: %s', exc)\n",
+        "try:\n    f()\nexcept Exception as e:\n    logger.error(f'failed: {e}')\n",
+        "try:\n    f()\nexcept Exception as e:\n    logger.error(f'{type(e).__name__}: {e}')\n",
+        "try:\n    f()\nexcept Exception as e:\n    logger.error('failed: %s', str(e))\n",
+        "try:\n    f()\nexcept Exception as e:\n    log.warning('failed: %s', e)\n",
+        "try:\n    f()\nexcept Exception:\n    logger.exception('failed')\n",
+        "try:\n    f()\nexcept Exception:\n    logger.warning('failed', exc_info=True)\n",
+        "try:\n    f()\nexcept Exception as e:\n    logger.warning('failed', exc_info=logger.isEnabledFor(10))\n",
+        "try:\n    f()\nexcept Exception as e:\n    logger.warning('failed: %s', log_safe(e.args))\n",
+    ],
+)
+def test_the_shape_guard_refuses_each_raw_rendering(source: str) -> None:
+    """The guard, pointed at the shapes it exists for, so it cannot pass by reading nothing."""
+    offences, _checked = _logging_shape_offences(ast.parse(source))
+
+    assert offences, source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "try:\n    f()\nexcept OSError as exc:\n    logger.warning('failed: %s', log_safe(exc))\n",
+        "try:\n    f()\nexcept OSError as exc:\n    logger.warning('failed: %s at %s', log_safe(exc), where(exc))\n",
+        "try:\n    f()\nexcept OSError as exc:\n    logger.warning('failed: %s', type(exc).__name__)\n",
+        "try:\n    f()\nexcept OSError as exc:\n    logger.warning('failed', exc_info=False)\n",
+    ],
+)
+def test_the_shape_guard_permits_the_rendered_shapes(source: str) -> None:
+    """The other direction, or a guard that refuses everything would pass the test above."""
+    offences, checked = _logging_shape_offences(ast.parse(source))
+
+    assert offences == [], offences
+    assert checked == (0 if "exc_info" in source else 1 + source.count("where(exc)"))
+
+
+def test_a_runtime_error_is_rendered_by_its_class_alone() -> None:
+    """RuntimeError left the allow-list, because this package puts paths in them.
+
+    profile_toolsets.py raises `RuntimeError(f"Failed to read profile toolsets from
+    {settings_path}: {exc}")`. log_safe rendered that in full, on the justification
+    that a RuntimeError here "names no path".
+    """
+    from reachy_language_tutor.logging_safety import SafeToLog, log_safe
+
+    household = "/Users/x/alice-zebediah-household/instance/profile_toolsets.json"
+    assert str(log_safe(RuntimeError(f"Failed to read profile toolsets from {household}"))) == "RuntimeError"
+    # A message this app worded from types alone still gets through, by saying so.
+    worded = SafeToLog("instance_path must be a path, not int")
+    assert log_safe(worded) is worded
+
+
+def test_a_broken_settings_file_does_not_put_the_instance_directory_in_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end, through the lines that printed it.
+
+    Measured before the fix: with the instance directory under a household's name, a
+    corrupt installed_tool_spaces.json made main's "Failed to initialize tools" line and
+    app_lifecycle's fallback line print that directory at ERROR.
+    """
+    from reachy_language_tutor import app_lifecycle
+    from reachy_language_tutor.logging_safety import log_safe
+
+    instance = tmp_path / "alice-zebediah-household" / "instance"
+    instance.mkdir(parents=True)
+    (instance / "installed_tool_spaces.json").write_text("{bad", encoding="utf-8")
+    logger = logging.getLogger("reachy_language_tutor.main")
+
+    # initialize_tools remembers the instance it was last given; put the registry back
+    # as it was so no later test inherits a broken instance.
+    for name in ("_TOOLS_INSTANCE_PATH", "_TOOLS_SIGNATURE", "ALL_TOOLS"):
+        monkeypatch.setattr(core_tools, name, getattr(core_tools, name))
+
+    with caplog.at_level(logging.DEBUG):
+        try:
+            app_lifecycle.initialize_tools_with_default_fallback(instance, logger)
+        except Exception as exc:
+            logger.error("Failed to initialize tools: %s", log_safe(exc))
+
+    assert caplog.records, "nothing was logged, so this proves nothing"
+    assert "zebediah" not in caplog.text, [r.getMessage() for r in caplog.records if "zebediah" in r.getMessage()]

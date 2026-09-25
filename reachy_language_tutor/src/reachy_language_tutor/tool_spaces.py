@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 import json
 import asyncio
 import logging
@@ -27,6 +28,7 @@ from reachy_language_tutor.mcp_client import (
     build_namespaced_tool_name,
 )
 from reachy_language_tutor.profile_store import DEFAULT_PROFILE_NAME, list_profile_names
+from reachy_language_tutor.logging_safety import log_safe
 from reachy_language_tutor.profile_toolsets import (
     ProfileToolsets,
     enable_profile_tools,
@@ -376,7 +378,8 @@ def write_installed_tool_spaces(
             try:
                 temporary_path.unlink(missing_ok=True)
             except OSError as exc:
-                logger.warning("Failed to remove temporary Tool Space manifest %s: %s", temporary_path, exc)
+                # The errno, never the path: the manifest sits in the instance directory.
+                logger.warning("Failed to remove the temporary Tool Space manifest: %s", log_safe(exc))
         return manifest_path
 
 
@@ -741,12 +744,16 @@ def handle_tool_spaces_command(args: argparse.Namespace, *, instance_path: str |
                 profile=target_profile,
             )
         except (RuntimeError, ValueError) as exc:
-            logger.error("%s", exc)
+            # To the operator's terminal, not the log. These messages name the manifest
+            # path and quote the OS error, which is what makes them actionable for the
+            # person who just typed the command -- and exactly what log_safe withholds
+            # from a log. The same split the enrol command makes.
+            print(exc, file=sys.stderr)
             return 1
 
         action = "Refreshed" if install_result.refreshed else "Installed"
         logger.info("%s Space tool source: %s", action, install_result.resolved_space.slug)
-        logger.info("Manifest: %s", install_result.manifest_path)
+        print(f"Manifest: {install_result.manifest_path}")  # terminal, not log: the path is a home directory
         logger.info("%s", format_space_tool_listing(install_result.resolved_space))
 
         if args.install_only:
@@ -763,10 +770,14 @@ def handle_tool_spaces_command(args: argparse.Namespace, *, instance_path: str |
         try:
             removal_result = remove_tool_space(args.space_slug, instance_path)
         except ToolSpaceNotInstalledError as exc:
-            logger.warning("%s", exc)
+            print(exc, file=sys.stderr)
             return 1
         except (RuntimeError, ValueError) as exc:
-            logger.error("%s", exc)
+            # To the operator's terminal, not the log. These messages name the manifest
+            # path and quote the OS error, which is what makes them actionable for the
+            # person who just typed the command -- and exactly what log_safe withholds
+            # from a log. The same split the enrol command makes.
+            print(exc, file=sys.stderr)
             return 1
 
         logger.info("Removed Space tool source: %s", removal_result.removed_space.slug)
@@ -777,7 +788,7 @@ def handle_tool_spaces_command(args: argparse.Namespace, *, instance_path: str |
     if command == "list":
         manifest = read_installed_tool_spaces(instance_path)
         manifest_path = get_installed_tool_spaces_path(instance_path)
-        logger.info("Manifest: %s", manifest_path)
+        print(f"Manifest: {manifest_path}")  # terminal, not log: the path is a home directory
         if not manifest.spaces:
             logger.info("No installed Space tool sources.")
             return 0

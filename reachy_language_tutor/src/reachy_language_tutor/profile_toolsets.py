@@ -14,6 +14,7 @@ from reachy_language_tutor.profile_store import (
     normalize_tool_names,
     canonical_profile_name,
 )
+from reachy_language_tutor.logging_safety import log_safe
 
 
 logger = logging.getLogger(__name__)
@@ -102,7 +103,8 @@ def write_profile_toolsets(
             try:
                 temporary_path.unlink(missing_ok=True)
             except OSError as exc:
-                logger.warning("Failed to remove temporary profile toolsets file %s: %s", temporary_path, exc)
+                # The errno, never the path: this file sits in the instance directory.
+                logger.warning("Failed to remove the temporary profile toolsets file: %s", log_safe(exc))
         return settings_path
 
 

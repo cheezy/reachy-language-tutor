@@ -2,6 +2,7 @@ import random
 import logging
 from typing import Any, Dict
 
+from reachy_language_tutor.logging_safety import log_safe
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 
 
@@ -14,7 +15,7 @@ try:
 
     DANCE_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"Dance library not available: {e}")
+    logger.warning("Dance library not available: %s", log_safe(e))
     AVAILABLE_MOVES = {}
     DANCE_AVAILABLE = False
 

@@ -23,6 +23,7 @@ from reachy_language_tutor.tool_settings import (
     apply_tool_change,
     raise_tool_settings_error,
 )
+from reachy_language_tutor.logging_safety import where, log_safe
 from reachy_language_tutor.profile_toolsets import read_profile_tool_names
 
 
@@ -83,23 +84,25 @@ def register_tool_space_methods(
                 install_only=True,
             )
         except ToolSpaceAliasConflictError as exc:
-            logger.warning("Tool Space alias conflict: %s", exc)
+            logger.warning("Tool Space alias conflict: %s", log_safe(exc))
             raise_tool_settings_error("tool_space_alias_conflict", _error_detail(exc))
         except ValueError as exc:
-            logger.warning("Invalid tool Space slug %r: %s", slug, exc)
+            logger.warning("Invalid tool Space slug %r: %s", slug, log_safe(exc))
             raise_tool_settings_error("invalid_tool_space_slug", _error_detail(exc))
         except RuntimeError as exc:
-            logger.error("Failed to install tool Space %r: %s", slug, exc)
+            logger.error("Failed to install tool Space %r: %s", slug, log_safe(exc))
             raise_tool_settings_error("tool_space_install_failed", _error_detail(exc))
         except Exception as exc:
-            logger.exception("Unexpected failure installing tool Space %r", slug)
+            logger.error("Unexpected failure installing tool Space %r: %s at %s", slug, log_safe(exc), where(exc))
             raise_tool_settings_error("tool_space_install_failed", _error_detail(exc))
 
         active_profile = canonical_profile_name(config.REACHY_MINI_CUSTOM_PROFILE)
         try:
             active_tools = await asyncio.to_thread(read_profile_tool_names, active_profile, instance_path)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            logger.warning("Installed Tool Space but could not inspect active profile %r: %s", active_profile, exc)
+            logger.warning(
+                "Installed Tool Space but could not inspect active profile %r: %s", active_profile, log_safe(exc)
+            )
             active_tools = []
         apply_detail = (
             await asyncio.to_thread(
@@ -134,19 +137,19 @@ def register_tool_space_methods(
             result = await asyncio.to_thread(remove_tool_space, slug, instance_path)
             disabled_profiles = result.disabled_profiles
         except ToolSpaceNotInstalledError as exc:
-            logger.warning("Cannot remove tool Space %r: %s", slug, exc)
+            logger.warning("Cannot remove tool Space %r: %s", slug, log_safe(exc))
             raise_tool_settings_error("tool_space_not_installed", _error_detail(exc))
         except ToolSpaceProfileUpdateError as exc:
-            logger.error("Failed to disable removed tool Space: %s", exc)
+            logger.error("Failed to disable removed tool Space: %s", log_safe(exc))
             raise_tool_settings_error("profile_disable_failed", _error_detail(exc))
         except ValueError as exc:
-            logger.warning("Invalid tool Space slug %r: %s", slug, exc)
+            logger.warning("Invalid tool Space slug %r: %s", slug, log_safe(exc))
             raise_tool_settings_error("invalid_tool_space_slug", _error_detail(exc))
         except RuntimeError as exc:
-            logger.error("Failed to remove tool Space %r: %s", slug, exc)
+            logger.error("Failed to remove tool Space %r: %s", slug, log_safe(exc))
             raise_tool_settings_error("tool_space_remove_failed", _error_detail(exc))
         except Exception as exc:
-            logger.exception("Unexpected failure removing tool Space %r", slug)
+            logger.error("Unexpected failure removing tool Space %r: %s at %s", slug, log_safe(exc), where(exc))
             raise_tool_settings_error("tool_space_remove_failed", _error_detail(exc))
 
         active_profile = canonical_profile_name(config.REACHY_MINI_CUSTOM_PROFILE)

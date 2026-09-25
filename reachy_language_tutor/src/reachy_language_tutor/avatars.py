@@ -10,6 +10,7 @@ from pathlib import Path
 
 from reachy_language_tutor.config import ProfileNameError, config
 from reachy_language_tutor.profile_store import DEFAULT_PROFILE_NAME, canonical_profile_name
+from reachy_language_tutor.logging_safety import log_safe
 
 
 DEFAULT_AVATAR_FILE = "default.svg"
@@ -55,7 +56,7 @@ def _own_avatar_path(name: str) -> Path | None:
         # read closed.
         return None
     except OSError as exc:
-        logger.warning("Failed to inspect avatar for profile %r: %s", profile_name, exc)
+        logger.warning("Failed to inspect avatar for profile %r: %s", profile_name, log_safe(exc))
         return None
 
 
@@ -83,7 +84,7 @@ def read_avatar_svg(name: str) -> str | None:
         try:
             return own.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
-            logger.warning("Failed to read avatar %s: %s", own, exc)
+            logger.warning("Failed to read an avatar file: %s", log_safe(exc))
 
     key = canonical_profile_name(name)
     file = AVATAR_BY_PROFILE.get(key, DEFAULT_AVATAR_FILE)
@@ -92,6 +93,6 @@ def read_avatar_svg(name: str) -> str | None:
             try:
                 return candidate.read_text(encoding="utf-8")
             except (OSError, UnicodeError) as exc:
-                logger.warning("Failed to read avatar %s: %s", candidate, exc)
+                logger.warning("Failed to read an avatar file: %s", log_safe(exc))
                 continue
     return None

@@ -20,6 +20,7 @@ from reachy_language_tutor.tool_settings import (
     apply_tool_change,
     raise_tool_settings_error,
 )
+from reachy_language_tutor.logging_safety import where, log_safe
 from reachy_language_tutor.profile_toolsets import (
     read_profile_tool_override,
     clear_profile_tool_override,
@@ -111,8 +112,8 @@ def register_profile_tool_methods(
         except ValueError:
             logger.warning("Unknown profile requested for tools: %r", requested_profile)
             raise_tool_settings_error("unknown_profile", "Unknown personality.")
-        except Exception:
-            logger.exception("Failed to read profile tools for %r", requested_profile)
+        except Exception as exc:
+            logger.error("Failed to read profile tools for %r: %s at %s", requested_profile, log_safe(exc), where(exc))
             raise_tool_settings_error("profile_tools_unavailable", "Could not read the profile's tools.")
         return _profile_tool_payload(
             profile_name,
@@ -144,7 +145,7 @@ def register_profile_tool_methods(
         except ValueError as exc:
             raise_tool_settings_error("unknown_profile", str(exc))
         except Exception as exc:
-            logger.exception("Failed to save profile tools for %r", requested_profile)
+            logger.error("Failed to save profile tools for %r: %s at %s", requested_profile, log_safe(exc), where(exc))
             raise_tool_settings_error("profile_tools_save_failed", str(exc))
 
         if unknown_tools:
@@ -167,7 +168,7 @@ def register_profile_tool_methods(
                 else "The tools will apply next time this personality is selected."
             )
         except Exception as exc:
-            logger.exception("Failed to save profile tools for %r", requested_profile)
+            logger.error("Failed to save profile tools for %r: %s at %s", requested_profile, log_safe(exc), where(exc))
             raise_tool_settings_error("profile_tools_save_failed", str(exc))
 
         response = _profile_tool_payload(
@@ -205,7 +206,9 @@ def register_profile_tool_methods(
         except ValueError as exc:
             raise_tool_settings_error("unknown_profile", str(exc))
         except Exception as exc:
-            logger.exception("Failed to reset profile tools for %r", requested_profile)
+            logger.error(
+                "Failed to reset profile tools for %r: %s at %s", requested_profile, log_safe(exc), where(exc)
+            )
             raise_tool_settings_error("profile_tools_reset_failed", str(exc))
 
         response = _profile_tool_payload(

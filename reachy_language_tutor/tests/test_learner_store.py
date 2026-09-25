@@ -3884,7 +3884,10 @@ def test_no_entry_point_raises_when_the_home_directory_cannot_be_found(
         assert store.store_is_available() is False
         assert store.record_result("sample-learner", "es-01-greetings", "completed").recorded is False
 
-    assert "no home" in caplog.text, "still diagnosable"
+    # Still diagnosable, in the store's own words -- and the RuntimeError's own
+    # message, which elsewhere can carry a path, is not what reaches the log.
+    assert "home directory could not be determined" in caplog.text, "still diagnosable"
+    assert "no home" not in caplog.text, "the raw RuntimeError message reached the log"
 
 
 def test_a_bad_instance_path_is_a_caller_error_not_a_broken_store(

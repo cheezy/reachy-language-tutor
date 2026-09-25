@@ -511,10 +511,20 @@ def learner_db_path_for_instance(instance_path: str | Path | None = None) -> Pat
         refusal = _cannot_be_a_path(instance_path)
         if refusal is not None:
             raise _StoreRefusal(f"instance_path must be a path, not {refusal}")
-        return Path(instance_path).expanduser() / LEARNER_DB_FILENAME
-
-    data_home = os.getenv("XDG_DATA_HOME")
-    data_root = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
+    # Path.home() and expanduser() raise RuntimeError when the home directory cannot be
+    # determined. log_safe renders a RuntimeError by its class alone -- other modules'
+    # RuntimeErrors carry paths -- so the store words this one itself and raises it as
+    # its own refusal, which is safe to log in full and still tells an operator what
+    # went wrong. The original message is dropped, not chained into the log.
+    try:
+        if instance_path is not None:
+            return Path(instance_path).expanduser() / LEARNER_DB_FILENAME
+        data_home = os.getenv("XDG_DATA_HOME")
+        data_root = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
+    except RuntimeError:
+        raise _StoreRefusal(
+            "the home directory could not be determined, so there is no place for the database"
+        ) from None
     return data_root / "reachy_language_tutor" / LEARNER_DB_FILENAME
 
 

@@ -14,6 +14,7 @@ from numpy.typing import NDArray
 from reachy_mini.motion.move import Move
 from reachy_mini.motion.recorded_move import RecordedMoves
 from reachy_mini_dances_library.dance_move import DanceMove
+from reachy_language_tutor.logging_safety import log_safe
 
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ class DanceQueueMove(Move):  # type: ignore
             return (head_pose, antennas, body_yaw)
 
         except Exception as e:
-            logger.error(f"Error evaluating dance move '{self.move_name}' at t={t}: {e}")
+            logger.error("Error evaluating dance move %r at t=%s: %s", self.move_name, t, log_safe(e))
             # Return neutral pose on error
             from reachy_mini.utils import create_head_pose
 
@@ -79,7 +80,7 @@ class EmotionQueueMove(Move):  # type: ignore
             return (head_pose, antennas, body_yaw)
 
         except Exception as e:
-            logger.error(f"Error evaluating emotion '{self.emotion_name}' at t={t}: {e}")
+            logger.error("Error evaluating emotion %r at t=%s: %s", self.emotion_name, t, log_safe(e))
             # Return neutral pose on error
             from reachy_mini.utils import create_head_pose
 
@@ -147,7 +148,7 @@ class GotoQueueMove(Move):  # type: ignore
             return (head_pose, antennas, body_yaw)
 
         except Exception as e:
-            logger.error(f"Error evaluating goto move at t={t}: {e}")
+            logger.error("Error evaluating goto move at t=%s: %s", t, log_safe(e))
             # Return target pose on error - convert to float64
             target_head_pose_f64 = self.target_head_pose.astype(np.float64)
             target_antennas_array = np.array([self.target_antennas[0], self.target_antennas[1]], dtype=np.float64)

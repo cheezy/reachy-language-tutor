@@ -20,6 +20,7 @@ from reachy_language_tutor.mcp_client import McpToolTimeoutError, McpToolInvocat
 from reachy_language_tutor.tool_spaces import build_remote_client, read_installed_tool_spaces
 from reachy_language_tutor.profile_store import DEFAULT_PROFILE_NAME
 from reachy_language_tutor.lesson_session import LessonSessionHolder
+from reachy_language_tutor.logging_safety import where, log_safe
 from reachy_language_tutor.profile_toolsets import read_profile_tool_names
 from reachy_language_tutor.tools.tool_constants import SystemTool
 
@@ -333,17 +334,6 @@ def _load_module_from_file(module_name: str, file_path: Path) -> ModuleType:
     return module
 
 
-def _format_error(error: Exception) -> str:
-    """Format an exception for logging."""
-    if isinstance(error, FileNotFoundError):
-        return f"Tool file not found: {error}"
-    if isinstance(error, ModuleNotFoundError):
-        return f"Missing dependency: {error}"
-    if isinstance(error, ImportError):
-        return f"Import error: {error}"
-    return f"{type(error).__name__}: {error}"
-
-
 def _normalize_signature_path(value: str | Path | None) -> str | None:
     """Normalize a path-like value for registry invalidation and cache keys."""
     if value is None:
@@ -471,7 +461,7 @@ def _read_profile_tool_names(instance_path: str | Path | None) -> list[str]:
     try:
         tool_names = read_profile_tool_names(profile, instance_path)
     except (OSError, RuntimeError, ValueError) as exc:
-        logger.error("Failed to read tools for profile %r: %s", profile, exc)
+        logger.error("Failed to read tools for profile %r: %s", profile, log_safe(exc))
         raise RuntimeError(f"Failed to read tools for profile {profile!r}") from exc
 
     tool_names.extend(tool.value for tool in SystemTool if tool.value not in tool_names)
@@ -562,7 +552,9 @@ def _load_enabled_tools(tool_names: list[str], remote_tool_names: set[str]) -> L
         except (ModuleNotFoundError, FileNotFoundError):
             logger.warning("⚠️ Tool '%s' not found in shared or external tools", tool_name)
         except Exception as e:
-            logger.error("❌ Failed to load tool '%s': %s", tool_name, _format_error(e))
+            # The shape and where, never the text: an import or file error quotes the path
+            # it failed on, and TOOLS_DIRECTORY is under somebody's home directory.
+            logger.error("❌ Failed to load tool '%s': %s at %s", tool_name, log_safe(e), where(e))
             logger.error("  Module path: %s", shared_module_path)
 
     return loaded_tool_classes

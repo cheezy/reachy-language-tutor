@@ -260,6 +260,13 @@ robot somebody is debugging — the words themselves are logged:
 | the transcript — the learner's speech and the tutor's reply | who spoke and how much | the words, truncated at 500 characters |
 | the `remember` and `forget` tools' own text | the shape of the fact or query | the words, truncated at 120 characters |
 
+**The first row was false until a later fix, and is recorded as such.** The console's
+DEBUG line truncates at 500 characters, but `huggingface_realtime.py` wrote its own DEBUG
+copies of the user transcript, the partial transcript, the assistant transcript and the
+response text, whole — measured, a 1,598-character transcript appeared untruncated beside
+the console's truncated line. Those lines now log the shape only, so the console's is the
+one copy, and a test drives the handler with a sentinel past character 1,500 to keep it so.
+
 The second one is the more personal of the two, and `remember.py` says so where it makes
 the choice: "this tool's own description tells the model to store a name, so its argument
 is the most reliably personal string in the app." An earlier version of this section

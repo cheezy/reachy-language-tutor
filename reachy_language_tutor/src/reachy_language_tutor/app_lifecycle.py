@@ -14,6 +14,7 @@ from reachy_mini.reachy_mini import SLEEP_HEAD_POSE
 from reachy_mini.utils.interpolation import distance_between_poses
 from reachy_language_tutor.config import config, set_custom_profile
 from reachy_language_tutor.profile_store import DEFAULT_PROFILE_NAME, migrate_legacy_profiles
+from reachy_language_tutor.logging_safety import log_safe
 from reachy_language_tutor.tools.core_tools import ToolDependencies, initialize_tools
 from reachy_language_tutor.tools.go_to_sleep import GoToSleep
 
@@ -37,7 +38,7 @@ def initialize_tools_with_default_fallback(
     try:
         migrate_legacy_profiles(config.user_personalities_root())
     except Exception as exc:
-        logger.warning("Legacy profile migration failed: %s", exc)
+        logger.warning("Legacy profile migration failed: %s", log_safe(exc))
 
     try:
         initialize_tools(instance_path=instance_path)
@@ -55,7 +56,7 @@ def initialize_tools_with_default_fallback(
                 "Profile %r could not be loaded (%s) and this build is locked to it, "
                 "so there is no profile to fall back to.",
                 selected_profile,
-                exc,
+                log_safe(exc),
             )
             raise
 
@@ -63,7 +64,7 @@ def initialize_tools_with_default_fallback(
             "Profile %r could not be loaded (%s); starting on the %r profile instead. "
             "Reselect or repair it from the settings UI to restore it.",
             selected_profile,
-            exc,
+            log_safe(exc),
             DEFAULT_PROFILE_NAME,
         )
         initialize_tools(instance_path=instance_path, force=True)
@@ -78,7 +79,7 @@ def request_stop_current_app(robot: ReachyMini, logger: logging.Logger) -> bool:
         with urllib.request.urlopen(request, timeout=_STOP_CURRENT_APP_TIMEOUT_S) as response:
             response.read()
     except urllib.error.URLError as e:
-        logger.error("Failed to request current app stop via %s: %s", stop_current_app_url, e)
+        logger.error("Failed to request current app stop via %s: %s", stop_current_app_url, log_safe(e))
         return False
 
     logger.info("Requested current app stop via %s", stop_current_app_url)
@@ -108,7 +109,7 @@ def wake_up_if_sleeping(robot: ReachyMini, logger: logging.Logger) -> bool:
     try:
         head_pose = robot.get_current_head_pose()
     except Exception as e:
-        logger.warning("Could not read robot pose before startup wake-up check: %s", e)
+        logger.warning("Could not read robot pose before startup wake-up check: %s", log_safe(e))
         return False
 
     if not _is_sleep_head_pose(head_pose):
@@ -119,7 +120,7 @@ def wake_up_if_sleeping(robot: ReachyMini, logger: logging.Logger) -> bool:
         robot.enable_motors()
         robot.wake_up()
     except Exception as e:
-        logger.error("Failed to run wake-up movement: %s", e)
+        logger.error("Failed to run wake-up movement: %s", log_safe(e))
         return False
     return True
 
@@ -129,5 +130,5 @@ def run_go_to_sleep_tool(deps: ToolDependencies, logger: logging.Logger) -> dict
     try:
         return asyncio.run(GoToSleep()(deps))
     except Exception as e:
-        logger.error("Failed to run go_to_sleep tool during shutdown: %s", e)
+        logger.error("Failed to run go_to_sleep tool during shutdown: %s", log_safe(e))
         return {"error": f"go_to_sleep failed: {type(e).__name__}: {e}"}
