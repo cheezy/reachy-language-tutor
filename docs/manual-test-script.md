@@ -5,23 +5,56 @@ settles each claim. It exists because the parts passing their unit tests has nev
 the same as the robot doing the thing: every check below is one a person performs out
 loud, because the microphone is the only way in.
 
-**There is no way to type at this app.** The `/rpc` control surface
-(`docs/rpc-control-surface.md`) exposes twelve methods over the network, pinned as an
-allow-list in `_RPC_METHODS_EXPOSED_ON_THE_NETWORK` (`console.py:156-171`) -- among them
-`conversation.status`, `.say`, `.interrupt` and `.mic`, but **not** `backend.config`,
-which D20 refuses over the network. `conversation.say` makes the *robot* speak, and none
-of the twelve injects a learner utterance. So an automated end-to-end voice test is not
-possible from the control surface, and this script is the substitute: a human speaks,
-and the database is the oracle.
+**The microphone is not the only way in, but it is the one this script tests.** The `/rpc`
+control surface (`docs/rpc-control-surface.md`) exposes twelve methods over the network,
+pinned as an allow-list in `_RPC_METHODS_EXPOSED_ON_THE_NETWORK` in `console.py`. One of
+them, `conversation.say`, does inject a turn: `HuggingFaceRealtimeHandler.say` creates a
+`"role": "user"` message item and asks the model to respond, which is the same shape as a
+learner's transcribed speech. An earlier version of this paragraph said none of the twelve
+injected a learner utterance; the code says otherwise, and so does
+`tests/conversation_probe.py`, which drives the identity probe through that same `say()`.
+
+So a text-level end-to-end test is possible. What it cannot test is everything this script
+is for: speech recognition of a learner speaking two languages, what the tutor sounds
+like, and whether a person following the lesson can actually do so. For those a human
+speaks, and the database is the oracle. That `conversation.say` reaches the model from the
+household's network is recorded as an open exposure in `docs/privacy-and-consent.md`.
 
 ## Before you start
 
-Start the Reachy Mini Control desktop app in mockup-sim, then:
+Start the Reachy Mini Control desktop app in mockup-sim.
+
+**Then tell the app who to serve, once.** Recognition chooses the learner now; nothing is
+hard-coded. With `--no-camera` recognition cannot answer, so a fresh robot serves
+**nobody** and every learner tool refuses. Measured: a newly seeded instance started with
+the camera off logs `Serving nobody: camera_disabled`. Configure the seeded learner as
+the fallback, in the instance directory the app actually reads. In development that is
+the package directory:
 
 ```bash
 cd reachy_language_tutor
+~/dev/reachy/reachy_mini_env/bin/python -m reachy_language_tutor.main enrol \
+    --serve-when-unrecognised sample-learner --instance-path src/reachy_language_tutor
+```
+
+It should print `When recognition cannot name anybody, the app will serve Sample Learner.`
+It writes `src/reachy_language_tutor/startup_settings.json`, which is gitignored because
+it holds a learner id. Undo it with `enrol --serve-nobody-when-unrecognised` and the same
+`--instance-path`. Before the fix that came with this paragraph, `python -m … main enrol`
+ignored the subcommand and started the whole app. If you see the robot wake up, you are
+on an old checkout: stop it, and use the `reachy-language-tutor enrol …` console script instead.
+
+Then start the app:
+
+```bash
 ~/dev/reachy/reachy_mini_env/bin/python -m reachy_language_tutor.main --ui --no-camera
 ```
+
+The startup log says which path set the identity. With the fallback configured and the
+camera off, it must carry this WARNING, measured on this path:
+`Recognition answered nobody (camera_disabled), so the app is serving the learner
+configured as the fallback.` If it says `Serving nobody: camera_disabled` instead, the
+fallback did not reach the instance the app is reading. Check `--instance-path`.
 
 **Do not pass `--debug` if you intend to check the log for personal data.** `--debug` is
 the opt-in that moves transcript words into the log on purpose (see "Check the log" at
@@ -134,11 +167,14 @@ no unit test of the conversation will show.
 **Must:** work from the lesson's written material — or, when a lesson has none, say so
 and refuse to invent vocabulary.
 
-**Italian and Spanish both have written material now** — six converted units each, at
-positions 1-6, with the six title-and-objective placeholders behind them at 7-12. French,
-German and Portuguese still have none. So for Spanish this step tests the tutor TEACHING
-the material, not refusing for want of it; the refusal branch is now reached by French,
-German or Portuguese. `docs/lesson-flow.md`'s coverage table carries the measured figures.
+**Four of the five languages have written material now.** Measured on a freshly seeded
+database: Italian, Spanish and Portuguese have six converted units each at positions 1-6,
+with six title-and-objective placeholders behind them at 7-12. French has five converted
+units at 1-5 and six placeholders at 6-11. German has none: its six lessons are all
+placeholders. So for Spanish this step tests the tutor TEACHING the material. The refusal
+branch is reached by German, or by any placeholder. `es-03-numbers` below is one of those
+placeholders, which is why it returns `0|0|0`. `docs/lesson-flow.md`'s coverage table
+carries the measured figures.
 
 Confirm what a lesson actually contains before judging this step:
 

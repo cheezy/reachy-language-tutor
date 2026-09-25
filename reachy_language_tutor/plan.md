@@ -33,10 +33,13 @@ milestone 1 moving; swappable later without touching lesson logic.
 | # | Goal | Status |
 |---|------|--------|
 | 1 | Scaffold from the conversation template, Reachy talking in the simulator | **done** |
-| 2 | SQLite learner DB + `get_profile` / `get_progress` / the lesson tools, learner hard-coded | not started |
-| 3 | Lesson flow: choose language, find next lesson, run it, record results, expressive feedback | not started |
-| 4 | Household face recognition + enrolment, prototyped on the Mac webcam | not started |
+| 2 | SQLite learner DB + `get_profile` / `get_progress` / the lesson tools, learner hard-coded | **done** |
+| 3 | Lesson flow: choose language, find next lesson, run it, record results, expressive feedback | **done**; the spoken walkthrough (W46) is still to be run by a person |
+| 4 | Household face recognition + enrolment, prototyped on the Mac webcam | **built, gated off**: recognition, consent, enrolment and erasure work, but every match is withheld until the threshold is calibrated (`faces.THRESHOLD_CALIBRATED`) |
 | 5 | Hosted backend for learner data, LLM calls via a proxy | not started |
+
+*Status updated 2026-09-24. The sections below record milestone 1 as it happened and are kept
+as history; `../docs/plan.md` section 11 is the current list of what is open.*
 
 ## Milestone 1 scope
 
@@ -78,7 +81,8 @@ number — a hallucinated "you're on lesson 6" during a demo would be worse than
 
    The daemon must then be fully restarted — `POST /api/daemon/restart` killed both the daemon
    and the control app, so relaunch Reachy Mini Control (`open -a "Reachy Mini Control"`).
-   SDK and daemon are now both 1.10.0, mockup-sim still enabled. **A future desktop app update
+   SDK and daemon were then both 1.10.0, mockup-sim still enabled. (Both are 1.11.0 now;
+   `../docs/SETUP.md` is the current record.) **A future desktop app update
    may re-provision 1.8.0; if motion starts failing again, redo this.**
 
 4. **The assistant's "next steps" message is stale.** It prints
@@ -136,7 +140,14 @@ So prototype against a camera directly. The machine has two — the USB webcam t
 and an iPhone Continuity Camera — and no built-in one. Whether the daemon holds the webcam
 exclusively while running was not tested. See `docs/SETUP.md`, Troubleshooting, the 8443 timeout.
 
-## Open questions (not blocking milestone 1)
+## Open questions (as asked at milestone 1)
+
+Answered since, and kept so the answers have their questions: languages (five, four
+converted); one learner or several (both are served — recognition, an operator fallback, or
+`enrol --without-face`); where the catalog lives (shipped in the app, in
+`learners/converted_lessons.json`, so content changes need a republish); and children (yes —
+consent records who gave it, `docs/privacy-and-consent.md`). Practice minutes and the budget
+are still open, with milestone 5.
 
 1. **Which languages first?** Decides how hard we lean on the voice backend's pronunciation
    quality, and whether HF realtime survives contact with, say, Mandarin tone.

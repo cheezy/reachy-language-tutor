@@ -255,8 +255,19 @@ changing entry points or dependencies.
 
 ## 9. Run the app
 
+First, once per instance, tell the app who to serve. Recognition chooses the learner, and
+with `--no-camera` it cannot answer, so an unconfigured app serves **nobody** and every
+learner tool refuses. In development the instance directory is the package directory:
+
 ```bash
 cd ~/dev/reachy/learn_language/reachy_language_tutor
+~/dev/reachy/reachy_mini_env/bin/python -m reachy_language_tutor.main enrol \
+    --serve-when-unrecognised sample-learner --instance-path src/reachy_language_tutor
+```
+
+Then run it:
+
+```bash
 ~/dev/reachy/reachy_mini_env/bin/python -m reachy_language_tutor.main --ui --no-camera
 ```
 

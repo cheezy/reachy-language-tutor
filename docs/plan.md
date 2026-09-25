@@ -141,7 +141,7 @@ MCP works in both directions:
 ## 8. Architecture for home users
 
 ```
-EACH HOME (x20)                         YOUR BACKEND (shared)
+EACH HOME (one per household)           YOUR BACKEND (shared)
 +---------------------------+           +----------------------------+
 | Reachy Mini (Wireless)    |  HTTPS    | Accounts + progress        |
 |  - Language app           | --------> | Lesson catalog             |
@@ -166,7 +166,7 @@ EACH HOME (x20)                         YOUR BACKEND (shared)
 - **Face recognition:** it only has to tell apart the few people in one home, which is far more reliable than matching against a large group. Faceprints (numeric face data, not photos) stay on the robot. If most homes have one learner, face recognition could be replaced by Reachy asking "Who's practicing today?" Test early on a real Wireless unit whether it runs fast enough on the onboard computer; the simulator runs on a Mac and won't show this.
 - **Voice and LLM loop:** start from the conversation template. Test speech recognition and pronunciation in every target language before choosing a backend.
 - **Learner tools:** functions such as `get_profile`, `get_progress(language)`, and `record_result`. They run inside the app and call the backend over HTTPS.
-- **Backend:** a small hosted database and API for accounts, progress, and the lesson catalog. Twenty users is a very light load. Central progress survives a robot reset and could support a phone app later.
+- **Backend:** a small hosted database and API for accounts, progress, and the lesson catalog. How many households it serves is deliberately open (section 1), so its design must not depend on the number: per-household load is tiny, and the questions that matter are per-robot credentials, isolation between households and graceful behaviour when a robot is offline, not throughput. Central progress survives a robot reset and could support a phone app later.
 - **LLM proxy:** the robots call your backend, which calls the LLM provider. This keeps the API key out of the app, where anyone could extract it, and allows per-user usage caps.
 
 ### Key design decisions
@@ -189,7 +189,15 @@ wrote it, and a test suite re-measures the ones that can be re-measured. The par
 below are the commitments this section made; that document is the record of how far
 they are kept, and it is the one to hand a privacy lawyer.
 
-Only names, emails, and learning progress leave the home. Faceprints stay on each robot. Still needed:
+The target is that only names, emails, and learning progress leave the home, and that
+faceprints stay on each robot. **That is not what happens today, and the gap is the voice
+loop, not the database.** In the default `deployed` connection mode the app allocates a
+session through Pollen's Space (`HF_REALTIME_SESSION_PROXY_URL` in `config.py`) and
+streams the conversation there: the learner's audio, and every tool result the model
+reads — which includes the learner's display name and their progress. Faceprints and the
+database stay on the robot; the conversation does not. Section 6 names the alternative
+(a local or self-chosen endpoint, `HF_REALTIME_CONNECTION_MODE=local`), and milestone 5's
+proxy is where this gets decided. Still needed:
 
 - A clear privacy policy and a way to delete accounts and data. **Partly done:** the
   deletion paths exist and are measured (`enrol --forget`, `--forget-everything`,
@@ -223,9 +231,12 @@ constrains what a child is actually taught.
 > and are kept because they are the argument for the decision below. They no longer
 > describe the app: W23 added the content tables, W24 converted six units of Italian FAST
 > into them, and W18 added the `get_lesson_content` tool and rewrote the locked profile, so
-> the tutor teaches a converted unit from its own dialogue, notes and drills. Italian is
-> the only language converted so far; the other four still hold title-and-objective
-> lessons, which the tutor still improvises around.
+> the tutor teaches a converted unit from its own dialogue, notes and drills. Since then
+> Spanish, Portuguese and French have been converted the same way — six units each from
+> Spanish and Portuguese FAST, five from Metropolitan French FAST — each with its own
+> curation log. German is the one language still holding only title-and-objective
+> lessons, and `start_lesson` now refuses to open such a lesson
+> (`lesson_not_written_yet`) rather than letting the tutor improvise one.
 
 **Decision: base lesson content on the Foreign Service Institute and Defense Language
 Institute courses** published at https://www.fsi-language-courses.org/fsi-courses/.
@@ -268,8 +279,9 @@ only one of the five that is, which is exactly why a prefix-only listing looked 
 for German, Italian and Portuguese and was wrong only here. FAST stands for
 Familiarization And Short-Term Training, so the filename is the course name spelled out.
 
-**French has two FAST courses**, Metropolitan and Sub-Saharan, and nothing has yet decided
-between them; that decision belongs to W42 and should be recorded there.
+**French has two FAST courses**, Metropolitan and Sub-Saharan. W42 chose Metropolitan; the
+reasoning is in [curation-log-french-fast.md](curation-log-french-fast.md), under "The
+choice".
 
 This is a listing of a mutable third-party bucket on one day. Re-run the command rather
 than trusting the table.
@@ -423,12 +435,42 @@ If the robots were ever placed in shared settings such as classrooms or librarie
 
 ## 11. Open questions and next steps
 
-- Which languages will be offered first, and does the chosen voice backend handle them well?
-- Re-OCR the scans, or correct the existing text layer unit by unit? Section 9 measures the
-  accent loss that makes this a real decision rather than a detail.
-- Will most homes have one learner or several? This decides whether face recognition is needed.
-- Which LLM provider fits the budget at the expected practice minutes?
-- Next: set up the simulator, build a simple app, then design the database tables and learner tools.
+*Updated 2026-09-24. Milestones 1 to 3 are done; milestone 4 is built and gated; milestone 5
+has not started.*
+
+**Settled since these notes were first written:**
+
+- **Languages:** French, German, Italian, Portuguese and Spanish. Four are converted from FAST
+  courses; German is not yet. Whether the voice backend handles each of them well has still
+  not been measured by a native speaker (section 9, "Still missing").
+- **Re-OCR or correct by hand:** neither, in the sense the question meant. Nothing ships
+  from the text layer at all; every line is read on the page image
+  ([converting-a-course.md](converting-a-course.md), Step 4).
+- **One learner per home or several:** the app no longer needs the answer to work. Recognition
+  serves a household of several; an operator-configured fallback
+  (`enrol --serve-when-unrecognised`) serves a household of one without a camera; and
+  `enrol --without-face` registers a learner with no face data at all.
+
+**Still open:**
+
+- **Calibrating face matching.** The threshold has never been measured against real faces,
+  so the app withholds every recognition (`faces.THRESHOLD_CALIBRATED = False`). Until
+  `scripts/calibrate_faceprints.py` is run on real photos, recognition cannot serve
+  anybody, and the fallback is the only working path.
+- **Recognition runs once, at startup.** A different person sitting down later is not
+  noticed (`current_learner.py` carries the reasoning).
+- **The voice loop leaves the home** (section 8, Privacy). Which provider or proxy carries
+  it is a milestone 5 decision, and so is its cost at the expected practice minutes.
+- **The `/rpc` control surface is reachable from the household's network without a
+  credential** (`rpc-control-surface.md`). What a LAN caller may still do is recorded
+  there and in `privacy-and-consent.md`.
+- **German** needs converting, and the remaining placeholders behind each converted course
+  either converting or removing.
+- **A lawyer** on in-home enrolment of minors, before any public launch.
+
+**Next:** the spoken walkthrough of a French lesson (W46, `manual-test-script.md`), which only
+a person can run. Then calibration, because until it happens milestone 4 is built but
+never used.
 
 ## Sources
 

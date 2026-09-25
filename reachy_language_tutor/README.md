@@ -49,7 +49,10 @@ You are Reachy Mini, a patient language-practice partner.
 
 TOML front matter between `+++` markers declares the schema version and which tools the
 profile may use; everything after it is the system prompt. Tool names must match a `Tool`
-subclass in `src/reachy_language_tutor/tools/`, or the app will not start.
+subclass in `src/reachy_language_tutor/tools/`. The app does **not** refuse to start on a name it
+cannot resolve: it logs `Tool '<name>' not found in shared or external tools` and starts
+without that tool (pinned by `test_the_loader_drops_an_unresolvable_tool_without_failing_startup`).
+What catches a typo is the test suite: `test_every_declared_tool_exists` fails on it.
 
 > An older profile format used separate `instructions.txt` and `tools.txt` files. It is no
 > longer read. If you find those files anywhere in this app, they are dead.
@@ -63,6 +66,17 @@ python -m reachy_language_tutor.main --ui --no-camera
 The settings UI is served at <http://127.0.0.1:7860/>. Use `--no-camera` when running against
 the simulator: a **standalone SDK script** gets no camera there. The daemon in mockup-sim is a
 different path and does have one — see `docs/SETUP.md`.
+
+**With the camera off, recognition cannot choose a learner, so the app serves nobody** and every
+learner tool refuses. Configure who it serves instead, once, in the instance directory the app
+reads (in development, the package directory):
+
+```bash
+python -m reachy_language_tutor.main enrol --serve-when-unrecognised sample-learner \
+    --instance-path src/reachy_language_tutor
+```
+
+`docs/manual-test-script.md` has the details, and what the startup log says on each path.
 
 Full setup instructions — including the SDK/daemon version trap that breaks all motion — are
 in `docs/SETUP.md` at the repository root. Run `scripts/check-env.sh` to verify an environment.

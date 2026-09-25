@@ -263,6 +263,12 @@ lesson progress, remembered facts, and — when a tool takes one — a camera fr
 derives that list from the tool code rather than from the sentence, so the notice fails
 when the data flow changes.
 
+Where it goes, concretely: in the default `deployed` connection mode the app asks
+`HF_REALTIME_SESSION_PROXY_URL` (`config.py`, a Space under the `pollen-robotics` namespace
+on Hugging Face) for a session and streams the conversation to what that returns.
+`HF_REALTIME_CONNECTION_MODE=local` points it at an endpoint the operator chooses instead.
+Which of the two a production robot uses is milestone 5's decision (`plan.md`, section 8).
+
 ---
 
 ## What the logs contain

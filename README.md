@@ -5,10 +5,15 @@ spoken conversation. It loads a learner's profile, knows which languages they ha
 and runs their next lesson out loud — reacting with expressive movement as they go.
 
 **Where it is right now:** the conversation, the lesson flow, the learner database and the
-expressive reactions all work. Face recognition is *built but not yet wired in* — the
-`faces/` package turns a frame into a faceprint and matches one against a household, and the
-`faceprints` table stores them, but the current learner is still a constant in `main.py`.
-Connecting the camera to it, and then to identity, is the milestone in progress.
+expressive reactions all work, and face recognition chooses who the app serves. At startup
+the app pulls one camera frame, matches it against the household's enrolled faceprints, and
+serves that learner — or, when recognition cannot answer, the learner an operator configured
+as the fallback (`enrol --serve-when-unrecognised`), or nobody. Enrolment, consent and
+erasure are operator commands at the robot (`enrol`). What is *not* done: the matching
+threshold has never been calibrated against real faces, so a recognised face is declined
+rather than served until it is (`faces.THRESHOLD_CALIBRATED`); recognition runs once per
+start rather than noticing who sits down later; and milestone 5 (hosted backend, LLM proxy)
+has not started.
 
 The target deployment is unrelated households, each with their own robot, and the count is
 deliberately left open — it could be a handful or a few thousand. The *shape* is what drives
@@ -22,7 +27,7 @@ calls through a proxy — names, emails and progress may leave the home; facepri
 ## How it works
 
 ```
-      camera ┈┈► faces/ ┈┈► "who is this?" ┈┈┐         ( ┈┈► = built, not yet wired )
+      camera ──► faces/ ──► "who is this?" ──┐        (once, at startup)
                                              ▼
                                          learners/ ──► "what have they done?"
                                              │
@@ -36,9 +41,9 @@ calls through a proxy — names, emails and progress may leave the home; facepri
 it never decides what counts as completed. Anything the tutor says about what a learner has
 finished comes from SQLite, through a small set of tools.
 
-**The model is never told who it is talking to.** Identity is set by the app — from a
-constant today, from recognition once that is wired — and the learner tools take no identity
-argument from the conversation, so nobody can talk their way into another person's profile. `docs/identity-boundary-probe.md`
+**The model is never told who it is talking to.** Identity is set by the app — from
+recognition, or from a fallback an operator configured at the robot — and the learner tools
+take no identity argument from the conversation, so nobody can talk their way into another person's profile. `docs/identity-boundary-probe.md`
 is the suite that attacks that boundary on every run.
 
 ## What is here today
@@ -46,14 +51,15 @@ is the suite that attacks that boundary on every run.
 | | |
 |---|---|
 | Languages | French, German, Italian, Portuguese, Spanish |
-| Lessons | 36 seeded; 6 carry full converted content (dialogue, notes, drills) |
-| Learner database | SQLite, schema version 3 — `learners`, `lesson_results`, `faceprints` and the lesson catalog |
-| Tools the model can call | 19, covering profile, progress, lessons, movement and memory |
-| Tests | 1486 passing, 30 skipped |
+| Converted lessons (dialogue, notes, drills) | Italian, Spanish and Portuguese FAST: six units each. Metropolitan French FAST: five. German: none yet — its lessons are title-and-objective placeholders |
+| Learner database | SQLite, schema version 5 — `learners`, `lesson_results`, `faceprints`, `consents`, the lesson catalog and its content tables |
+| Tools the model can call | `get_profile`, `get_progress`, `start_lesson`, `get_lesson_content`, `finish_lesson`, `redo_lesson`; movement (`play_emotion`, `stop_emotion`, `move_head`, `sweep_look`, `head_tracking`, `idle_do_nothing`, `go_to_sleep`); and the runtime's `task_status`, `task_cancel`. The locked profile's `default_tools` is the authority |
+| Tests | Run the suite; the collection floor in `.stride.md` is the recorded minimum |
 
 Lesson content is converted from public-domain Foreign Service Institute courses. The method
 — including what gets excluded and why — is written down in `docs/converting-a-course.md`,
-and the decisions made on the first course are in `docs/curation-log-italian-fast.md`.
+and every curation decision is in a log per course: `docs/curation-log-italian-fast.md`,
+`-spanish.md`, `-portuguese-fast.md` and `-french-fast.md`.
 
 ## Privacy posture
 
@@ -115,6 +121,9 @@ scripts/          operator utilities that run outside the test suite
 | [docs/plan.md](docs/plan.md) | The planning notes: the concept, the hardware, the costs, the risks |
 | [docs/SETUP.md](docs/SETUP.md) | Getting a development environment that actually works |
 | [docs/learner-database.md](docs/learner-database.md) | Every table, what it deliberately does not store, and the query interface |
+| [docs/privacy-and-consent.md](docs/privacy-and-consent.md) | What the robot captures, stores and erases, and what has not been done |
+| [docs/lesson-flow.md](docs/lesson-flow.md) | How a lesson is chosen, run, recorded and reacted to |
+| [docs/manual-test-script.md](docs/manual-test-script.md) | The spoken walkthrough, with the database query that settles each step |
 | [docs/converting-a-course.md](docs/converting-a-course.md) | Turning a published course into lessons this app can teach |
 | [docs/identity-boundary-probe.md](docs/identity-boundary-probe.md) | How the identity boundary is attacked on every run |
 | [docs/rpc-control-surface.md](docs/rpc-control-surface.md) | What the robot exposes on the network, and what it refuses |
