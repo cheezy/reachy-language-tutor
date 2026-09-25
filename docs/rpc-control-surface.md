@@ -159,9 +159,43 @@ So the protection could not be *who may call*; it had to be *what a call can do*
   `.all`, `.load`, `.avatar`, `voices.list`, `voices.current`, `tool_spaces.list`,
   `profile_tools.get` — plus `conversation.mic` (which reports state and refuses a `muted`
   parameter rather than ignoring it), and `conversation.say` / `conversation.interrupt`.
-  Those last two are **not** reads and are the accepted exposure here: they make the robot
-  speak and cut it off, they persist nothing, and the dashboard's conversation view is what
-  they are for. That is a decision, not an oversight.
+  Those last two are **not** reads. `conversation.interrupt` cuts the robot off and
+  persists nothing. **`conversation.say` is wider than this bullet used to say.** It does
+  not make the robot recite text: it injects the text into the live model session as a
+  **user turn** — the same `role: "user"` message a spoken sentence becomes (measured: a
+  call from an anonymous `/rpc` peer produced exactly that item and queued a response).
+  The model may act on it with every tool it has, all bound to the learner the app is
+  currently serving: read their profile and progress aloud, start a lesson, record a
+  lesson result. So anyone on the household network can, in effect, speak to the robot as
+  the current learner, without being in the room. It cannot reach a *different* learner —
+  no tool takes an identity — and with transcripts no longer broadcast (below) the caller
+  does not receive the reply as text, but it is spoken aloud in the room. That a live
+  model does call a writer tool from such a turn was not measured here; the repository's
+  identity probe drives its turns through the same `handler.say()`, and its recorded session
+  (`docs/identity-boundary-probe.md`) reports that its control turns reached the tools. **This is an open exposure, not a settled decision:** it stays exposed only
+  because nobody has yet verified whether the dashboard depends on it, and removing it is
+  a decision for the maintainer.
+- **What the surface sends is an allow-list too.** The method allow-list only ever governed
+  what a caller could *ask for*. Notifications are broadcast to every attached socket
+  whether it calls anything or not, and the transcript notification carried the learner's
+  words and the tutor's replies verbatim to any peer — measured by dialling the robot's LAN
+  address with no Origin and no credential. `_NetworkRestrictedRpcServer.broadcast` now
+  sends only what `_NOTIFICATIONS_SENT_ON_THE_NETWORK` names (`conversation.turn`,
+  `.activity`, `.phase`, `.level`), and only with params whose every string is a machine
+  code, so free text cannot ride inside a permitted notification either.
+  `conversation.transcript` is withheld unless `REACHY_MINI_DEV_BROADCAST_TRANSCRIPT=1` is
+  set when the app starts — a developer switch that logs a warning on every start. The
+  shipped settings UI never subscribed to it, so nothing it shows changed. The daemon relay
+  re-broadcasts app notifications to every daemon client, so withholding at the source
+  closes that route as well.
+- **What a failing method answers is a reason code, and nothing else.** A JSON-RPC error
+  goes back to whoever asked, which here is anyone on the network. Every handler is
+  wrapped at registration: a `JsonRpcError` keeps its code and reason with the reason as
+  its message and no data, and any other exception becomes `internal_error`. Measured
+  before: `personalities.load` with a 300-character name answered with the full path of
+  the profile it tried to open, and `tool_spaces.list` with a corrupt manifest answered
+  with the instance directory. `conversation.status`'s `backend_error` is rendered the way
+  the log line beside it is (`log_safe`), rather than as the raw exception.
 - **An `Origin` check** on the handshake, added by registering the route rather than
   patching the SDK. It closes the cross-origin-browser route — a WebSocket handshake is
   exempt from the same-origin policy and is not preflighted. Comparing Origin to the Host

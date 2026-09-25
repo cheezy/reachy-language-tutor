@@ -126,7 +126,13 @@ what a person was told *on the day* rather than what the constant says today.
 
 Separate from the database, and **not learner-scoped**: it holds short facts the robot was
 asked to remember, for the household as a whole. A fact can name somebody and say
-something about them. This matters for erasure — see below.
+something about them. This matters for erasure — see below. It also means one learner's
+facts reach another learner's session. `prompts.py` puts every stored fact in front of
+the session instructions whoever is being served, and the `forget` tool returns the other
+facts matching its query, measured with two learners sharing one instance. Neither tool is
+in the tutor's locked profile today, so nothing shipped writes this file. It is still an
+**open item**, not a fixed one: enabling `remember` would share one learner's facts with
+every other learner.
 
 ### `startup_settings.json`
 
@@ -187,15 +193,21 @@ nothing the SDK carries to the app could supply one; `rpc-control-surface.md` re
 in full. An `Origin` check refuses a cross-origin browser page and, stated plainly, does
 not stop a direct caller on the LAN, which can send whatever headers it likes.
 
-**A device on your Wi-Fi can read the conversation as it happens.** This is the most
-important sentence in this document that is not about faces. `/rpc` is not
-request-and-response only: the server *broadcasts* notifications to every attached
-websocket, and `conversation.transcript` carries the verbatim speech — what the learner
-said and what the tutor replied. A peer that presents no credential, sends no `Origin`
-header and calls no method at all still receives them. Proven live against the running
-app by a review, which watched `{"role": "user", "text": "my name is Alice Zebediah and I
-am seven"}` arrive on such a connection. Nothing in the app prevents this today, and it
-is listed below as an open item rather than explained away.
+**The conversation is no longer broadcast to your Wi-Fi, unless a developer switches it
+on.** `/rpc` is not request-and-response only: the server *broadcasts* notifications to
+every attached websocket, and `conversation.transcript` carries the verbatim speech —
+what the learner said and what the tutor replied. Until this was fixed, a peer that
+presented no credential, sent no `Origin` header and called no method still received
+them. A review proved it live, watching `{"role": "user", "text": "my name is Alice
+Zebediah and I am seven"}` arrive on such a connection, and it was measured again by
+dialling a server's LAN address. The earlier version of this section said nothing could
+prevent it because no credential is available. That was wrong: the fix needs no
+credential. The server now sends only the notifications `console.py` names
+(`_NOTIFICATIONS_SENT_ON_THE_NETWORK`: turn, activity, phase, audio level, carrying machine
+codes and numbers only). It withholds `conversation.transcript` unless the app was
+started with `REACHY_MINI_DEV_BROADCAST_TRANSCRIPT=1`, a development switch that logs a
+warning on every start and must never be set on a robot in somebody's home. The settings
+UI never displayed transcripts, so it shows nothing less.
 
 **Which methods a caller may invoke** is an allow-list — `_RPC_METHODS_EXPOSED_ON_THE_NETWORK`
 in `console.py` — and anything outside it, including any method added later, is replaced
@@ -204,7 +216,7 @@ document cannot drift from it:
 
 | method | what it does | read? |
 |---|---|---|
-| `conversation.say` | **makes the robot speak** | no |
+| `conversation.say` | **injects a turn the model treats as the learner speaking** — see below | no |
 | `conversation.interrupt` | cuts it off mid-sentence | no |
 | `conversation.status` | whether it is connected and listening | yes |
 | `conversation.mic` | whether the microphone is muted | yes |
@@ -400,17 +412,21 @@ delete the files by hand. **This is the largest open item in this document.**
 honoured by the faceprint gate — a withdrawn consent stops a faceprint being stored — but
 no code path sets it yet. Withdrawing consent today means deleting the faceprint.
 
-**Anyone on the household Wi-Fi can read the conversation as it happens.** The
-transcript is broadcast to every attached websocket with no credential and no method
-call. This is the largest unresolved exposure in the app, and nothing mitigates it today:
-the port must be open for the dashboard, and there is no credential the SDK can carry to
-the app. A household should assume that anyone who can join the Wi-Fi can hear, in text,
-what is said to the robot.
-
-**Anyone on the household Wi-Fi can make the robot speak.** Described above rather than
-hidden, but it belongs on this list too: the port must be open for the dashboard, there
-is no credential available to the app, and `conversation.say` is deliberately exposed.
-The microphone cannot be turned on remotely and no learner data crosses that surface.
+**Anyone on the household Wi-Fi can speak to the robot as the current learner.** This
+replaces an earlier entry that said only "make the robot speak" and that "no learner data
+crosses that surface". Both were wrong. `conversation.say` does not recite text. It
+injects the text into the live model session as a *user* turn, the same message a spoken
+sentence becomes. Measured: a call from an anonymous `/rpc` peer produced exactly that.
+The model may then use any of its tools for whoever the app is serving: read their name
+and progress aloud, start a lesson, record a lesson result. It cannot reach a different
+learner, because no tool takes an identity. The reply is spoken aloud in the room. With
+transcripts withheld (above), it no longer comes back to the caller as text unless the
+developer switch is on. That a live model does call a writer tool from such a turn was
+not measured for this entry. The port must be open for the dashboard, and there is no
+credential available to the app. The method stays exposed only because nobody has
+verified whether the dashboard depends on it. **This is the largest unresolved exposure
+in the app.** Removing it is a decision for the maintainer. The microphone cannot be
+turned on remotely.
 
 **Remembered facts are capped, not kept.** The 61st fact silently evicts the oldest. That
 is the one thing in the app that discards data without anybody asking.

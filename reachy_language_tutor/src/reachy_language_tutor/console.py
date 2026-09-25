@@ -145,10 +145,14 @@ def _is_an_hf_host(host: str) -> bool:
 # later, by this file or by the register_*_methods helpers, which is the property that
 # survives the next change rather than the next reading.
 #
-# conversation.say and conversation.interrupt are here deliberately and are not reads: they
-# make the robot speak and cut it off. They persist nothing, the dashboard's conversation
-# view is what they are for, and keeping them is an exposure accepted in writing in
-# docs/rpc-control-surface.md rather than an oversight.
+# conversation.say and conversation.interrupt are here deliberately and are not reads.
+# interrupt cuts the robot off. say is more than "make the robot speak": it injects a
+# role=user message and asks the model to respond, exactly like a transcribed learner
+# turn, so the model may call learner tools on it -- including finish_lesson, which
+# writes -- for whoever the app is serving. The method itself persists nothing; what the
+# model does next can. Keeping it is recorded as an open exposure in
+# docs/rpc-control-surface.md and docs/privacy-and-consent.md, pending a decision on
+# whether the dashboard needs it.
 #
 # Re-allowing a writer means re-adding whatever restriction made it safe -- notably
 # backend.config, whose host-validation and .env-sink checks stop being reachable once it is
@@ -169,6 +173,122 @@ _RPC_METHODS_EXPOSED_ON_THE_NETWORK = frozenset(
         "profile_tools.get",
     }
 )
+
+
+# The developer opt-in that lets conversation.transcript leave this process. Read ONCE,
+# when the /rpc server is built at startup (after the instance .env has been loaded), and
+# only the exact value "1" switches it on -- an allow-list of one, so "true", "yes" or a
+# stray "0" mean off rather than whatever a parser guessed.
+#
+# Why it is off by default: /rpc is LAN-reachable and cannot be authenticated (see
+# docs/rpc-control-surface.md), and a broadcast reaches every attached socket whether or
+# not it calls a method. Measured before this change: a client dialling the robot's LAN
+# address, with no Origin and no credential, received the learner's words and the tutor's
+# replies verbatim. The shipped settings UI never subscribes to conversation.transcript
+# (static/ uses conversation.status, .mic and .activity only), so switching it off costs
+# the UI nothing. docs/manual-test-script.md is the one workflow that reads it, and it
+# sets this variable on purpose.
+DEV_BROADCAST_TRANSCRIPT_ENV = "REACHY_MINI_DEV_BROADCAST_TRANSCRIPT"
+
+# What a machine code looks like: lower-case, underscores, digits, short. Every string an
+# allowed notification carries has to be one of these, which is what keeps free text --
+# a name, a sentence somebody said -- out of the params even of a permitted notification.
+_MACHINE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _is_code(value: object) -> bool:
+    return isinstance(value, str) and _MACHINE_CODE.fullmatch(value) is not None
+
+
+def _is_code_or_none(value: object) -> bool:
+    return value is None or _is_code(value)
+
+
+def _is_speaker(value: object) -> bool:
+    return value in ("user", "assistant")
+
+
+def _is_unit_level(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 1.0
+
+
+def _is_text(value: object) -> bool:
+    return isinstance(value, str)
+
+
+def _is_flag(value: object) -> bool:
+    return isinstance(value, bool)
+
+
+# The only notifications /rpc may SEND, and the only params each may carry. The outgoing
+# half of the allow-list above, and for the same reason: the methods allow-list governed
+# what a caller may ask for, while every broadcast went to every peer unfiltered, so the
+# exposure the port was judged by never looked at the one thing that carried a learner's
+# words. A notification not named here, a param not named for it, or a value its check
+# refuses, is dropped rather than sent -- so a broadcast added later is withheld by
+# default until somebody decides here that it may cross the network.
+_NOTIFICATIONS_SENT_ON_THE_NETWORK: dict[str, dict[str, Callable[[object], bool]]] = {
+    "conversation.turn": {"state": _is_code, "reason": _is_code},
+    "conversation.activity": {"reason": _is_code},
+    "conversation.phase": {"phase": _is_code, "reason": _is_code_or_none},
+    "conversation.level": {"role": _is_speaker, "rms": _is_unit_level},
+}
+
+# Added to the set above only under DEV_BROADCAST_TRANSCRIPT_ENV. Text is free text by
+# definition, which is exactly why it is not in the default set.
+_TRANSCRIPT_NOTIFICATION = ("conversation.transcript", {"role": _is_speaker, "text": _is_text, "final": _is_flag})
+
+
+def _transcript_broadcast_opted_in() -> bool:
+    """Say whether a developer asked, in the environment, for transcripts on /rpc."""
+    return (os.getenv(DEV_BROADCAST_TRANSCRIPT_ENV) or "").strip() == "1"
+
+
+def _notification_is_permitted(
+    allowed: dict[str, dict[str, Callable[[object], bool]]], method: object, params: object
+) -> bool:
+    if not isinstance(method, str) or method not in allowed:
+        return False
+    if params is None:
+        return True
+    if not isinstance(params, dict):
+        return False
+    shape = allowed[method]
+    return all(key in shape and shape[key](value) for key, value in params.items())
+
+
+# What a caller is told when a method fails. A JSON-RPC error goes back to whoever sent
+# the request, and on this port that is anyone on the household network, so its text is
+# built here from the error's REASON -- a machine code the UI branches on
+# (static/js/api.js ERROR_MESSAGES) -- and never from an exception's message or data.
+# Measured before this: personalities.load answered a 300-character name with
+# "[Errno 63] File name too long: '<instance>/user_personalities/.../profile.md'",
+# tool_spaces.list quoted the manifest's full path, and the SDK turns any other exception
+# into its str(). One wrapper at registration covers every handler, including ones added
+# later, instead of a try/except per route that the next route forgets.
+_INTERNAL_ERROR_REASON = "internal_error"
+
+
+def _answer_the_network_safely(name: str, handler: Any) -> Any:
+    """Wrap a handler so a failure reaches the caller as a reason code and nothing else."""
+
+    async def _sanitised(params: dict[str, Any]) -> Any:
+        try:
+            result = handler(params)
+            if asyncio.iscoroutine(result):
+                result = await result
+            return result
+        except asyncio.CancelledError:
+            raise
+        except JsonRpcError as exc:
+            reason = exc.reason if _is_code(exc.reason) else _INTERNAL_ERROR_REASON
+            raise JsonRpcError(reason, reason=reason, code=exc.code) from None
+        except Exception as exc:
+            # The type, never the message: this is the text the caller no longer gets.
+            logger.warning("/rpc method %s failed: %s", name, log_safe(exc))
+            raise JsonRpcError(_INTERNAL_ERROR_REASON, reason=_INTERNAL_ERROR_REASON, code=-32603) from None
+
+    return _sanitised
 
 
 def _refuse_over_the_network(name: str) -> Any:
@@ -192,13 +312,40 @@ class _NetworkRestrictedRpcServer(JsonRpcServer):
     calls in personality_routes, tool_space_routes and profile_tool_routes. A method is
     therefore refused by DEFAULT -- someone adding one has to come here to expose it, which
     is the opposite of the situation that made D20's first attempt wrong.
+
+    It also owns the two things that go back OUT: every handler is wrapped so a failure
+    answers with a reason code and no exception text, and `broadcast` -- which
+    `broadcast_threadsafe` delegates to, so it is the one sink every notification passes
+    through -- sends only what _NOTIFICATIONS_SENT_ON_THE_NETWORK names.
     """
+
+    def __init__(self, *, broadcast_transcript: bool = False) -> None:
+        """Fix, at construction, which notifications this server may send."""
+        super().__init__()
+        allowed = dict(_NOTIFICATIONS_SENT_ON_THE_NETWORK)
+        if broadcast_transcript:
+            allowed[_TRANSCRIPT_NOTIFICATION[0]] = _TRANSCRIPT_NOTIFICATION[1]
+        self._notifications_allowed = allowed
 
     def register(self, name: str, handler: Any) -> None:
         """Register a handler, or a refusal in its place when the method is not exposed."""
         if name not in _RPC_METHODS_EXPOSED_ON_THE_NETWORK:
             handler = _refuse_over_the_network(name)
-        super().register(name, handler)
+        super().register(name, _answer_the_network_safely(name, handler))
+
+    async def broadcast(self, method: str, params: Optional[dict[str, Any]] = None) -> None:
+        """Send a notification to every peer, if it is one this server may send."""
+        if not _notification_is_permitted(self._notifications_allowed, method, params):
+            # The name only when it is one of ours; never the params, which are what
+            # was refused. DEBUG, because a withheld transcript is the normal case.
+            shown = (
+                method
+                if method in _NOTIFICATIONS_SENT_ON_THE_NETWORK or method == _TRANSCRIPT_NOTIFICATION[0]
+                else "an unlisted notification"
+            )
+            logger.debug("Withheld %s from /rpc: not permitted on the network", shown)
+            return
+        await super().broadcast(method, params)
 
 
 def _origin_is_this_server(origin: str, host_header: str) -> bool:
@@ -357,10 +504,11 @@ def log_handler_message(msg: dict) -> None:
         #   household whose logs nobody chose to collect. The argument does not depend on
         #   how many households there are, and only gets stronger as they multiply.
         #
-        # The console UI is untouched. It is fed by ConsoleApp._dispatch_transcript
-        # over JSON-RPC, not by this log line, so the conversation still displays in
-        # full either way. Do not reach for log_safe here: that seam is for payloads
-        # that are DATA, and transcript is the app's own speech.
+        # This log line is not the only transcript sink: LocalStream._dispatch_transcript
+        # offers the same words to /rpc as conversation.transcript, where the network
+        # server withholds them unless DEV_BROADCAST_TRANSCRIPT_ENV is set -- the shipped
+        # settings UI never displays them. Do not reach for log_safe here: that seam is
+        # for payloads that are DATA, and transcript is the app's own speech.
         logger.debug(
             "role=%s content=%s",
             msg.get("role"),
@@ -434,8 +582,9 @@ class LocalStream:
         self._backend_error: str | None = None
         self._backend_retry_delay = BACKEND_RETRY_DELAY_SECONDS
         # JSON-RPC control surface (mounted at /rpc in _init_settings_ui_if_needed).
-        # Notifications (conversation.turn/phase/transcript/activity) are pushed
-        # here from activity + transcripts. Survives handler rebuilds (mounted once).
+        # Notifications (conversation.turn/phase/activity/level) are pushed here, and
+        # only the ones _NOTIFICATIONS_SENT_ON_THE_NETWORK names leave it -- transcripts
+        # only under the developer opt-in. Survives handler rebuilds (mounted once).
         self._rpc: Optional[JsonRpcServer] = None
         self._last_turn_state: Optional[str] = None
         # Per-role throttle timestamps for conversation.level (orb audio meter).
@@ -458,7 +607,12 @@ class LocalStream:
             transcript_setter(self._dispatch_transcript)
 
     def _dispatch_transcript(self, role: str, text: str, final: bool) -> None:
-        """Push a conversation.transcript notification to JSON-RPC clients."""
+        """Offer a conversation.transcript notification to JSON-RPC clients.
+
+        Offered, not sent: _NetworkRestrictedRpcServer.broadcast withholds it unless
+        DEV_BROADCAST_TRANSCRIPT_ENV was set at startup, because every /rpc peer on the
+        household network would otherwise receive the learner's words verbatim.
+        """
         if self._rpc is not None:
             self._rpc.broadcast_threadsafe(
                 "conversation.transcript",
@@ -612,9 +766,22 @@ class LocalStream:
 
     @staticmethod
     def _format_backend_error(error: BaseException | str) -> str:
-        """Return a compact user-facing backend error string."""
+        """Return a compact user-facing backend error string, rendered the way a log line is.
+
+        This string is not only user-facing: conversation.status hands it to every /rpc
+        peer on the household network. The log line beside each caller already renders
+        the same exception through log_safe, and this used the raw str() -- so an OSError
+        naming a path under somebody's home directory was withheld from the log and sent
+        to the network. The same rule now decides both: a family log_safe renders in full
+        keeps its message, anything else is its type (or type and errno for an OSError).
+        A plain str is the app's own wording (see the waiting_for_config caller), not an
+        exception's, and passes through.
+        """
         if isinstance(error, str):
             return error
+        rendered = log_safe(error)
+        if rendered is not error:
+            return str(rendered)
         message = str(error).strip()
         if message:
             return f"{type(error).__name__}: {message}"
@@ -920,7 +1087,16 @@ class LocalStream:
         # The single wire format both the local browser UI and remote WebRTC
         # clients use (the daemon relays it over the DataChannel). Notifications
         # (conversation.turn/phase/transcript/activity) are pushed from activity.
-        rpc = _NetworkRestrictedRpcServer()
+        broadcast_transcript = _transcript_broadcast_opted_in()
+        if broadcast_transcript:
+            # WARNING, every start: this is a development switch that puts the
+            # conversation on the network, and nobody should run with it by accident.
+            logger.warning(
+                "%s=1: conversation transcripts are being broadcast on /rpc. Anyone who can "
+                "reach this port can read what is said to the robot. Development use only.",
+                DEV_BROADCAST_TRANSCRIPT_ENV,
+            )
+        rpc = _NetworkRestrictedRpcServer(broadcast_transcript=broadcast_transcript)
 
         # SDK isn't marked py.typed, so mypy sees rpc.method as untyped; safe here.
         @rpc.method("conversation.status")  # type: ignore[untyped-decorator]

@@ -161,6 +161,16 @@ rather than the question being settled by reading these two lines and forming an
   without changing a line of this repository, so this is a result with a date on it, not a
   permanent property. Re-run it after any prompt or model change.
 - The probe drives **text** turns. Audio adds a transcription layer this does not exercise.
+- **Who else can drive a text turn.** The probe's `say()` is the same `handler.say()` that
+  `/rpc conversation.say` calls, and that method is reachable by anyone on the household
+  network with no credential (`docs/rpc-control-surface.md`). So this probe also measures
+  what such a caller can talk the model into, and its verdict bounds that too: it held for
+  *other* learners' data. What it does not bound is the current learner's own data. A
+  network caller speaks as the current learner, and the probe's own control turns show
+  those reach the tools. That is an open exposure, recorded in `rpc-control-surface.md`.
+  The transcript is no longer broadcast on `/rpc` unless a developer opts in, so the caller
+  does not get the reply back as text. The probe reads the transcript through
+  `set_transcript_observer` in-process, so that change does not affect it.
 - A name the model invents out of nothing is not detectable by token matching. H6 catches
   an invented *figure* **written in digits or in number words up to a hundred** — the
   range a lesson count or a percentage score falls in. A figure outside that range, or

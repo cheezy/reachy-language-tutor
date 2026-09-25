@@ -43,8 +43,9 @@ is the whole point. The obvious implementation -- the robot asks "who is practis
 the person says a name, the model passes it to a tool -- is precisely the breach this
 codebase is built to prevent, and no amount of confirmation makes a spoken name into
 authentication. So the selection happens somewhere the conversation cannot reach: an
-instance-local settings file, written by an operator with the device or by the
-settings UI, read once at startup.
+instance-local settings file, written by an operator with a shell on the device (the
+`enrol --serve-when-unrecognised` command), read once at startup. The settings UI does
+not write it -- nothing on /rpc can, and an earlier draft of this paragraph said it did.
 
 WHY THAT IS OUT OF REACH, as a list of facts rather than an assurance. No tool takes
 a learner id or a name; PERMITTED_TOOL_PARAMETERS is an allow-list with nothing
@@ -65,9 +66,12 @@ be mistaken for it. It is a configuration, not a check. It does not establish wh
 present. In a one-person household it is exactly right and gives nothing away, since
 there is no second profile to reach. In a household with more than one learner it is
 WRONG BY CONSTRUCTION -- whoever sits down is served the configured person's lessons
-and progress -- and the app cannot detect that, so such a household needs recognition
-and this setting left unset. That is the honest answer plan.md anticipated, written
-down rather than dressed up as something stronger. _fall_back carries the rest.
+and progress. The app cannot detect that in general, so such a household needs
+recognition and this setting left unset. What it CAN detect it now acts on: when the
+camera saw two faces, or a face it could compare and tie to somebody other than the
+configured learner, the fallback is refused (_FALLBACK_MAY_APPLY). That is the honest
+answer plan.md anticipated, written down rather than dressed up as something
+stronger. _fall_back carries the rest.
 
 IF THE PERSON BEING SERVED IS ERASED MID-SESSION, the decision is to do nothing to
 the running process, and it is a decision rather than an omission. ToolDependencies
@@ -163,6 +167,62 @@ _FROM_MATCH = {
 }
 
 
+# The recognition answers on which a configured fallback MAY be served. An ALLOW-LIST,
+# decided one disposition at a time, and the principle is: the fallback applies only when
+# recognition gathered NO evidence about who is in front of the robot. Where it gathered
+# evidence that points somewhere else, or cannot tell people apart, serving the
+# configured learner would be the confident wrong answer this module exists to refuse.
+# A disposition added upstream is therefore refused until somebody decides here -- the
+# totality test in test_identity_fallback.py fails until they do.
+#
+# Measured before this list existed: with two learners and the fallback set to one of
+# them, recognition matching the OTHER, the camera seeing two faces, and the matcher
+# calling it too close between the two all resolved to the fallback learner.
+#
+# PERMITTED -- nothing about identity was learned:
+#   camera_disabled, no_camera, no_frame -- no image at all; a covered camera and a robot
+#       started with --no-camera are the household this setting exists for.
+#   frame_unreadable -- an image arrived and could not be decoded; nothing was seen.
+#   recognition_unavailable -- the pipeline could not run (unwarmed model, an exception).
+#   nobody_enrolled -- a face may have been seen, but there is no faceprint to compare
+#       it with: the household that declined recognition, which is what this is for.
+#   no_face -- the camera works and nobody is in shot. Recognition runs ONCE, at startup,
+#       and a robot is usually switched on with nobody sitting in front of it, so
+#       refusing here would leave a declined-recognition household served by nobody for
+#       the whole session for no evidence at all. It says as little as a covered camera.
+#   not_confident -- something face-shaped below the detector's floor; no identity was
+#       computed, so it points at nobody. Same reasoning as no_face.
+#
+# REFUSED -- by omission, and each deliberately:
+#   several_faces -- two people are in shot. Serving one person's records to a group is
+#       exactly the harm, and the robot has just seen that it is a group.
+#   too_close_to_call -- a face was compared and resembles more than one enrolled person.
+#   no_one_close_enough -- a face was compared against the household and matched NOBODY
+#       enrolled: positive evidence the person present is not an enrolled learner, so if
+#       the fallback learner is enrolled it is not them.
+#   not_recognised -- a face was captured but the comparison faulted (unusable vector,
+#       mixed models, wrong dimension). Evidence a person is present, none that it is
+#       the configured one; and faults are exactly where a wrong answer hides.
+#   store_unreadable -- the robot cannot tell whether anybody else is enrolled, and the
+#       resolver's own profile check would fail against the same store anyway.
+#   declined_uncalibrated -- REFUSED here, and handled in _fall_back: recognition DID
+#       match somebody and withheld it. The fallback is served only when that withheld
+#       match IS the configured learner, because then both sources agree; a match to
+#       anybody else is the clearest evidence there is that the fallback is wrong.
+_FALLBACK_MAY_APPLY: frozenset[str] = frozenset(
+    {
+        "camera_disabled",
+        "no_camera",
+        "no_frame",
+        "frame_unreadable",
+        "recognition_unavailable",
+        "nobody_enrolled",
+        "no_face",
+        "not_confident",
+    }
+)
+
+
 @dataclass(frozen=True)
 class RecognitionOutcome:
     """Who the app should serve, and why that is the answer.
@@ -217,7 +277,8 @@ def _configured_fallback(instance_path: Any) -> str | None:
     """Return the learner an operator configured to serve when recognition cannot.
 
     WHERE IT COMES FROM, AND WHY THAT IS THE SAFE PLACE. An instance-local settings
-    file, written by an operator at the device or by the app's settings UI. The
+    file, written by an operator with a shell on the device (`enrol
+    --serve-when-unrecognised`); no /rpc method and no settings-UI control writes it. The
     conversation cannot reach it: no tool takes a path, no tool takes an identity,
     PERMITTED_TOOL_PARAMETERS contains nothing identity-shaped, and no tool imports
     this module. The value is read once, at startup, in the resolver -- never at
@@ -255,10 +316,10 @@ def recognise_current_learner(
     change the outcome for the same input rather than switching a feature on.
     """
     try:
-        outcome = _recognise(media=media, camera_enabled=camera_enabled, instance_path=instance_path)
+        outcome, withheld = _recognise(media=media, camera_enabled=camera_enabled, instance_path=instance_path)
         if outcome.learner_id is not None:
             return outcome
-        return _fall_back(outcome, instance_path=instance_path)
+        return _fall_back(outcome, withheld_match=withheld, instance_path=instance_path)
     except Exception as exc:
         # THE CLAIM ABOVE, MADE TRUE. It said "never raises" and the function had no
         # try/except at all -- startup survived only because main's resolver wraps
@@ -268,17 +329,27 @@ def recognise_current_learner(
         # unguarded raise. The type only, never a value: this module handles a
         # person's identity.
         logger.warning("Recognition failed and the app is serving nobody: %s", type(exc).__name__)
-        return _fall_back(RecognitionOutcome(None, "recognition_unavailable"), instance_path=instance_path)
+        return _fall_back(
+            RecognitionOutcome(None, "recognition_unavailable"), withheld_match=None, instance_path=instance_path
+        )
 
 
-def _fall_back(answered_nobody: RecognitionOutcome, *, instance_path: Any) -> RecognitionOutcome:
-    """Serve the configured learner when recognition named nobody, or pass the answer on.
+def _fall_back(
+    answered_nobody: RecognitionOutcome, *, withheld_match: str | None, instance_path: Any
+) -> RecognitionOutcome:
+    """Serve the configured learner when recognition learned nothing, or pass the answer on.
+
+    WHICH "NOBODY" ANSWERS QUALIFY is _FALLBACK_MAY_APPLY, an allow-list with a reason
+    written beside every entry. `withheld_match` is the learner a declined_uncalibrated
+    match named, carried here beside the outcome and never on it, so it cannot reach the
+    outcome's repr, a log line, or a caller -- it is compared and dropped.
 
     ONE SEAM FOR EVERY NOBODY. Recognition has a dozen ways to answer nobody -- no
     camera, no face, several faces, a store it could not read, an exception -- and a
     household whose camera is covered deserves the same answer as one whose robot is
     in shadow. Putting this above _recognise rather than inside it means a branch
-    added there is covered by construction rather than by remembering.
+    added there is decided here by construction rather than by remembering -- and
+    "decided" now means refused unless _FALLBACK_MAY_APPLY names it.
 
     WHAT THIS IS WORTH, STATED PLAINLY BECAUSE IT IS WEAKER THAN WHAT IT REPLACES.
     It is a configuration, not authentication, and no confirmation step could make it
@@ -286,8 +357,10 @@ def _fall_back(answered_nobody: RecognitionOutcome, *, instance_path: Any) -> Re
     decided to serve when the robot cannot tell. In a one-person household that is
     exactly right and costs nothing, because there is no other profile to reach. In a
     household with more than one learner it is WRONG by construction: whoever sits
-    down is served the configured person's lessons and progress, and the app cannot
-    detect that. Such a household needs recognition, and this setting left unset.
+    down is served the configured person's lessons and progress. The app cannot detect
+    that in general -- a covered camera looks the same in every home -- but where the
+    camera DID see two people, or a face it could tie to somebody else, it refuses.
+    Such a household still needs recognition, and this setting left unset.
 
     WHAT IT DOES NOT PROTECT AGAINST, so nobody mistakes the disposition for a check:
     it does not prove presence, it does not prove consent at the moment of use, and
@@ -324,6 +397,20 @@ def _fall_back(answered_nobody: RecognitionOutcome, *, instance_path: Any) -> Re
     if configured is None:
         return answered_nobody
 
+    permitted = answered_nobody.disposition in _FALLBACK_MAY_APPLY or (
+        answered_nobody.disposition == "declined_uncalibrated" and withheld_match == configured
+    )
+    if not permitted:
+        # WARNING, and it names the disposition and nobody. An operator who configured a
+        # fallback and sees the robot serve nobody deserves to be told it was refused on
+        # evidence, not that the setting failed to load.
+        logger.warning(
+            "Recognition answered nobody (%s) with evidence that the configured fallback may "
+            "not be who is present, so the fallback was not served and the app is serving nobody.",
+            answered_nobody.disposition,
+        )
+        return answered_nobody
+
     # WARNING, not INFO, and it says which path won. An operator reading a log must
     # never mistake a configured fallback for a recognition. The disposition carries
     # it too, so the distinction survives into anything that switches on the outcome
@@ -337,8 +424,16 @@ def _fall_back(answered_nobody: RecognitionOutcome, *, instance_path: Any) -> Re
     return RecognitionOutcome(configured, "configured_fallback")
 
 
-def _recognise(*, media: Any | None, camera_enabled: bool, instance_path: Any) -> RecognitionOutcome:
-    """Run the pipeline. Wrapped by recognise_current_learner, which absorbs."""
+def _recognise(
+    *, media: Any | None, camera_enabled: bool, instance_path: Any
+) -> tuple[RecognitionOutcome, str | None]:
+    """Run the pipeline. Wrapped by recognise_current_learner, which absorbs.
+
+    Returns the outcome and, beside it, the learner a match named when the calibration
+    gate withheld it -- None on every other path. A pair rather than a field on the
+    outcome, deliberately: RecognitionOutcome reaches logs and callers, and an id that is
+    not being served has no business travelling with it. Only _fall_back reads it.
+    """
     override = _development_override()
     if override is not None:
         logger.warning(
@@ -346,21 +441,21 @@ def _recognise(*, media: Any | None, camera_enabled: bool, instance_path: Any) -
             "Unset %s to use recognition.",
             DEV_CURRENT_LEARNER_ENV,
         )
-        return RecognitionOutcome(override, "override")
+        return RecognitionOutcome(override, "override"), None
 
     shot = capture_frame(media, camera_enabled=camera_enabled)
     if not shot.usable:
-        return RecognitionOutcome(None, _FROM_CAPTURE.get(shot.reason, "not_recognised"))
+        return RecognitionOutcome(None, _FROM_CAPTURE.get(shot.reason, "not_recognised")), None
 
     described = describe_face(shot.frame)
     if not described.usable:
-        return RecognitionOutcome(None, _FROM_EMBEDDING.get(described.reason, "not_recognised"))
+        return RecognitionOutcome(None, _FROM_EMBEDDING.get(described.reason, "not_recognised")), None
 
     household = get_enrolled_faceprints(instance_path=instance_path)
     if household is None:
-        return RecognitionOutcome(None, "store_unreadable")
+        return RecognitionOutcome(None, "store_unreadable"), None
     if not household:
-        return RecognitionOutcome(None, "nobody_enrolled")
+        return RecognitionOutcome(None, "nobody_enrolled"), None
 
     outcome = match_faceprint(
         described.vector,
@@ -380,7 +475,7 @@ def _recognise(*, media: Any | None, camera_enabled: bool, instance_path: Any) -
         # class let MatchOutcome(matched=True, learner_id="") through as identified
         # with an empty id -- measured. One character closes the family, which is
         # the same inversion this repository has paid for four times.
-        return RecognitionOutcome(None, _FROM_MATCH.get(outcome.reason, "not_recognised"))
+        return RecognitionOutcome(None, _FROM_MATCH.get(outcome.reason, "not_recognised")), None
 
     if not THRESHOLD_CALIBRATED:
         # THE GATE, and it is deliberately below the match rather than above it.
@@ -402,6 +497,6 @@ def _recognise(*, media: Any | None, camera_enabled: bool, instance_path: Any) -
             "threshold has never been measured, so acting on it would be an unmeasured "
             "authorization decision. See faces.THRESHOLD_CALIBRATED."
         )
-        return RecognitionOutcome(None, "declined_uncalibrated")
+        return RecognitionOutcome(None, "declined_uncalibrated"), outcome.learner_id
 
-    return RecognitionOutcome(outcome.learner_id, "identified")
+    return RecognitionOutcome(outcome.learner_id, "identified"), None

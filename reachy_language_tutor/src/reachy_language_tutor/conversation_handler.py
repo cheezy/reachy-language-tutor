@@ -190,7 +190,7 @@ class ConversationHandler(AsyncStreamHandler, ABC):
 
     @abstractmethod
     async def say(self, text: str) -> None:
-        """Make the robot speak ``text`` now (injected turn; not verbatim TTS).
+        """Inject ``text`` as a user turn and have the model respond now (not verbatim TTS).
 
         The backend is speech-to-speech, so ``text`` is an instruction the
         model voices, not a guaranteed-literal string. Raises if no session is

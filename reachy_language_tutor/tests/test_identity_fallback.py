@@ -70,9 +70,7 @@ def _a_learner(instance_path: Path, name: str = SOMEBODY) -> str:
 
 def test_with_no_fallback_configured_the_answer_is_still_nobody(instance: Path) -> None:
     """The default, and it is the safe one: nothing configured invents nobody."""
-    outcome = current_learner.recognise_current_learner(
-        media=None, camera_enabled=False, instance_path=instance
-    )
+    outcome = current_learner.recognise_current_learner(media=None, camera_enabled=False, instance_path=instance)
 
     assert outcome.learner_id is None
     assert outcome.disposition == "camera_disabled", (
@@ -85,9 +83,7 @@ def test_a_configured_fallback_is_served_when_recognition_answers_nobody(instanc
     learner_id = _a_learner(instance)
     set_fallback_learner(instance, learner_id)
 
-    outcome = current_learner.recognise_current_learner(
-        media=None, camera_enabled=False, instance_path=instance
-    )
+    outcome = current_learner.recognise_current_learner(media=None, camera_enabled=False, instance_path=instance)
 
     assert outcome.learner_id == learner_id
     assert outcome.disposition == "configured_fallback"
@@ -103,9 +99,7 @@ def test_the_disposition_says_the_identity_came_from_a_setting(instance: Path) -
     learner_id = _a_learner(instance)
     set_fallback_learner(instance, learner_id)
 
-    outcome = current_learner.recognise_current_learner(
-        media=None, camera_enabled=False, instance_path=instance
-    )
+    outcome = current_learner.recognise_current_learner(media=None, camera_enabled=False, instance_path=instance)
 
     assert outcome.disposition in RECOGNITION_DISPOSITIONS
     assert outcome.disposition != "identified", "a setting must not present itself as a recognition"
@@ -141,43 +135,172 @@ def test_a_recognised_learner_is_never_replaced_by_the_fallback(instance: Path, 
     other = _a_learner(instance)
     set_fallback_learner(instance, other)
     monkeypatch.setattr(
-        current_learner, "_recognise", lambda **_: RecognitionOutcome(recognised, "identified")
+        current_learner, "_recognise", lambda **_: (RecognitionOutcome(recognised, "identified"), None)
     )
 
-    outcome = current_learner.recognise_current_learner(
-        media=None, camera_enabled=False, instance_path=instance
-    )
+    outcome = current_learner.recognise_current_learner(media=None, camera_enabled=False, instance_path=instance)
 
     assert outcome.learner_id == recognised
     assert outcome.disposition == "identified"
 
 
-def test_every_way_of_answering_nobody_reaches_the_fallback(instance: Path, monkeypatch) -> None:
-    """One seam, not a branch per disposition.
+# Every "nobody" answer recognition can give, split by whether the fallback may follow it.
+# Spelled out HERE rather than derived from _FALLBACK_MAY_APPLY, so a disposition moved
+# between the two sets in current_learner.py fails a test until somebody decides it again,
+# and a new disposition upstream fails the totality check below.
+_FALLBACK_SERVED_ON = frozenset(
+    {
+        "camera_disabled",
+        "no_camera",
+        "no_frame",
+        "frame_unreadable",
+        "recognition_unavailable",
+        "nobody_enrolled",
+        "no_face",
+        "not_confident",
+    }
+)
+_FALLBACK_REFUSED_ON = frozenset(
+    {
+        "several_faces",
+        "too_close_to_call",
+        "no_one_close_enough",
+        "not_recognised",
+        "store_unreadable",
+        "declined_uncalibrated",  # served only when the withheld match IS the fallback
+    }
+)
 
-    Recognition has a dozen ways to say nobody. A fallback wired into some of them
-    would be a household whose camera is covered getting a different answer from one
-    whose robot is in shadow, for no reason anybody could explain.
+
+def test_every_nobody_answer_is_decided_one_way_or_the_other() -> None:
+    """Totality: a disposition added upstream must be classified before this passes."""
+    nobody = set(RECOGNITION_DISPOSITIONS) - {"identified", "override", "configured_fallback"}
+
+    assert _FALLBACK_SERVED_ON | _FALLBACK_REFUSED_ON == nobody
+    assert not _FALLBACK_SERVED_ON & _FALLBACK_REFUSED_ON
+    assert current_learner._FALLBACK_MAY_APPLY == _FALLBACK_SERVED_ON
+
+
+def test_the_fallback_is_served_when_recognition_learned_nothing(instance: Path, monkeypatch) -> None:
+    """No image, no usable face, nobody enrolled: the household this setting exists for."""
+    learner_id = _a_learner(instance)
+    set_fallback_learner(instance, learner_id)
+
+    for disposition in sorted(_FALLBACK_SERVED_ON):
+        monkeypatch.setattr(
+            current_learner, "_recognise", lambda _d=disposition, **_: (RecognitionOutcome(None, _d), None)
+        )
+        outcome = current_learner.recognise_current_learner(media=None, camera_enabled=False, instance_path=instance)
+        assert outcome.learner_id == learner_id, f"{disposition} did not reach the fallback"
+        assert outcome.disposition == "configured_fallback"
+
+
+def test_the_fallback_is_refused_on_evidence_of_somebody_else(instance: Path, monkeypatch) -> None:
+    """Two faces, a face tied to nobody or to two people, a faulted comparison: serve nobody.
+
+    Measured before the allow-list: every one of these resolved to the configured learner,
+    so a child the camera had just failed to tell apart from a sibling was served the
+    sibling's records.
     """
     learner_id = _a_learner(instance)
     set_fallback_learner(instance, learner_id)
 
-    nobody_dispositions = [
-        disposition
-        for disposition in RECOGNITION_DISPOSITIONS
-        if disposition not in {"identified", "override", "configured_fallback"}
-    ]
-    assert len(nobody_dispositions) > 5, "too few dispositions swept for this to mean anything"
-
-    for disposition in nobody_dispositions:
+    for disposition in sorted(_FALLBACK_REFUSED_ON):
         monkeypatch.setattr(
-            current_learner, "_recognise", lambda _d=disposition, **_: RecognitionOutcome(None, _d)
+            current_learner, "_recognise", lambda _d=disposition, **_: (RecognitionOutcome(None, _d), None)
         )
+        outcome = current_learner.recognise_current_learner(media=None, camera_enabled=False, instance_path=instance)
+        assert outcome.learner_id is None, f"{disposition} served the fallback"
+        assert outcome.disposition == disposition, "a refused fallback must pass recognition's answer on untouched"
+
+
+def _stub_pipeline(monkeypatch, *, enrolled: tuple[str, ...], match) -> None:
+    """Stub the pipeline at current_learner's own imports, so the REAL _recognise runs."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        current_learner, "capture_frame", lambda media, camera_enabled: SimpleNamespace(usable=True, frame=object())
+    )
+    monkeypatch.setattr(
+        current_learner, "describe_face", lambda frame: SimpleNamespace(usable=True, vector=(0.1, 0.2, 0.3))
+    )
+    monkeypatch.setattr(
+        current_learner,
+        "get_enrolled_faceprints",
+        lambda instance_path: tuple(
+            SimpleNamespace(
+                learner_id=who, embedding_model=current_learner.EMBEDDING_MODEL_ID, dimension=3, vector=(0.1, 0.2, 0.3)
+            )
+            for who in enrolled
+        ),
+    )
+    monkeypatch.setattr(current_learner, "match_faceprint", lambda vector, household, embedding_model: match)
+    monkeypatch.setattr(current_learner, "THRESHOLD_CALIBRATED", False)
+
+
+def test_a_withheld_match_to_somebody_else_refuses_the_fallback(instance: Path, monkeypatch) -> None:
+    """The measured case: recognition matched B, withheld it, and the app served A."""
+    from reachy_language_tutor.faces.matching import MatchOutcome
+
+    configured = _a_learner(instance)
+    somebody_else = _a_learner(instance, "Zebediah Quixotic")
+    set_fallback_learner(instance, configured)
+    _stub_pipeline(
+        monkeypatch, enrolled=(configured, somebody_else), match=MatchOutcome(matched=True, learner_id=somebody_else)
+    )
+
+    outcome = current_learner.recognise_current_learner(media=object(), camera_enabled=True, instance_path=instance)
+    served = main.resolve_current_learner_id(
+        instance, logging.getLogger(__name__), media=object(), camera_enabled=True
+    )
+
+    assert outcome.learner_id is None
+    assert outcome.disposition == "declined_uncalibrated"
+    assert served is None
+
+
+def test_a_withheld_match_to_the_fallback_learner_is_served(instance: Path, monkeypatch) -> None:
+    """Both sources agree, so the setting is served -- and still labelled a setting."""
+    from reachy_language_tutor.faces.matching import MatchOutcome
+
+    configured = _a_learner(instance)
+    somebody_else = _a_learner(instance, "Zebediah Quixotic")
+    set_fallback_learner(instance, configured)
+    _stub_pipeline(
+        monkeypatch, enrolled=(configured, somebody_else), match=MatchOutcome(matched=True, learner_id=configured)
+    )
+
+    outcome = current_learner.recognise_current_learner(media=object(), camera_enabled=True, instance_path=instance)
+
+    assert outcome.learner_id == configured
+    assert outcome.disposition == "configured_fallback"
+
+
+def test_the_withheld_match_reaches_no_log_and_no_repr(
+    instance: Path, monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The withheld id is compared and dropped; it is never on the outcome or in a log."""
+    from reachy_language_tutor.faces.matching import MatchOutcome
+
+    configured = _a_learner(instance)
+    somebody_else = _a_learner(instance, "Zebediah Quixotic")
+    set_fallback_learner(instance, configured)
+    _stub_pipeline(
+        monkeypatch, enrolled=(configured, somebody_else), match=MatchOutcome(matched=True, learner_id=somebody_else)
+    )
+
+    with caplog.at_level(logging.DEBUG):
         outcome = current_learner.recognise_current_learner(
-            media=None, camera_enabled=False, instance_path=instance
+            media=object(), camera_enabled=True, instance_path=instance
         )
-        assert outcome.learner_id == learner_id, f"{disposition} did not reach the fallback"
-        assert outcome.disposition == "configured_fallback"
+
+    assert caplog.records, "nothing was captured, so the assertions below prove nothing"
+    surface = " ".join(f"{record.getMessage()} {record.msg} {record.args}" for record in caplog.records)
+    assert "fallback was not served" in surface, "the refusal was silent"
+    for identifier in (somebody_else, configured):
+        assert identifier not in surface
+        assert identifier not in repr(outcome)
+        assert identifier not in str(vars(outcome))
 
 
 def test_recognition_raising_still_reaches_the_fallback(instance: Path, monkeypatch) -> None:
@@ -190,9 +313,7 @@ def test_recognition_raising_still_reaches_the_fallback(instance: Path, monkeypa
 
     monkeypatch.setattr(current_learner, "_recognise", explode)
 
-    outcome = current_learner.recognise_current_learner(
-        media=None, camera_enabled=False, instance_path=instance
-    )
+    outcome = current_learner.recognise_current_learner(media=None, camera_enabled=False, instance_path=instance)
 
     assert outcome.learner_id == learner_id
     assert outcome.disposition == "configured_fallback"
@@ -226,9 +347,7 @@ def test_an_unreadable_settings_file_serves_nobody_rather_than_raising(instance:
     """A robot in somebody's home must not be bricked by a corrupt settings file."""
     (instance / "startup_settings.json").write_text("{ this is not json", encoding="utf-8")
 
-    outcome = current_learner.recognise_current_learner(
-        media=None, camera_enabled=False, instance_path=instance
-    )
+    outcome = current_learner.recognise_current_learner(media=None, camera_enabled=False, instance_path=instance)
 
     assert outcome.learner_id is None
 
@@ -256,9 +375,7 @@ def test_clearing_the_fallback_returns_the_app_to_serving_nobody(instance: Path)
     set_fallback_learner(instance, None)
 
     assert read_startup_settings(instance).fallback_learner is None
-    outcome = current_learner.recognise_current_learner(
-        media=None, camera_enabled=False, instance_path=instance
-    )
+    outcome = current_learner.recognise_current_learner(media=None, camera_enabled=False, instance_path=instance)
     assert outcome.learner_id is None
 
 
@@ -283,15 +400,12 @@ def test_no_tool_gained_an_identity_shaped_parameter() -> None:
         name for name in PERMITTED_TOOL_PARAMETERS if any(word in name.lower() for word in person_shaped)
     }
 
-    assert identity_shaped == set(), (
-        f"a tool parameter can now carry an identity: {sorted(identity_shaped)}"
-    )
+    assert identity_shaped == set(), f"a tool parameter can now carry an identity: {sorted(identity_shaped)}"
     # The allow-list is the control, so its SIZE is pinned too: this test would pass
     # just as happily against a vocabulary somebody had quietly doubled.
     assert len(PERMITTED_TOOL_PARAMETERS) == 14, (
         f"the permitted parameter vocabulary changed size: {sorted(PERMITTED_TOOL_PARAMETERS)}"
     )
-
 
 
 def _every_module_named(tree: ast.AST) -> set[str]:
@@ -404,8 +518,9 @@ def test_a_local_profile_yes_is_not_a_face_recognition_yes(instance: Path) -> No
     """
     learner_id = _a_learner(instance)
 
-    stored = store.save_faceprint(learner_id, "opencv_sface_2021dec_fp32", tuple(0.5 for _ in range(128)),
-                                  instance_path=instance)
+    stored = store.save_faceprint(
+        learner_id, "opencv_sface_2021dec_fp32", tuple(0.5 for _ in range(128)), instance_path=instance
+    )
 
     assert stored.saved is False
     assert stored.reason == "no_consent"

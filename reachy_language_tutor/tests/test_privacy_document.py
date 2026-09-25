@@ -446,21 +446,27 @@ def test_the_document_lists_exactly_the_methods_reachable_over_the_network() -> 
     )
 
 
-def test_the_document_records_that_the_transcript_is_broadcast() -> None:
-    """The exposure a review proved live, which the first version denied.
+def test_the_document_says_what_the_transcript_broadcast_now_is() -> None:
+    """The exposure a review proved live, and the fix that followed it, stated as the code has it.
 
-    /rpc broadcasts conversation.transcript to every attached websocket, so a peer that
-    calls no method still receives the learner's speech verbatim. The document said "no
-    learner data crosses this surface at all". This pins the correction in place, and
-    pins that the broadcast it describes is still what the code does.
+    /rpc used to broadcast conversation.transcript to every attached websocket, so a peer
+    that called no method received the learner's speech verbatim. It is now withheld unless
+    a developer opts in. This pins three things against the code rather than against a
+    string: that the transcript is not in the default outgoing allow-list, that the opt-in
+    the document names is the variable console.py reads, and that the document no longer
+    says either of the two things that were wrong -- that nothing could prevent the
+    broadcast, or that no learner data crosses the conversation.say surface.
     """
+    from reachy_language_tutor import console
+
     document = _document()
 
-    assert "broadcast" in document.lower(), "the document no longer records the transcript broadcast"
-    assert "conversation.transcript" in document
-
-    console = (Path(store.__file__).resolve().parents[1] / "console.py").read_text(encoding="utf-8")
-    assert "conversation.transcript" in console, (
-        "console.py no longer broadcasts conversation.transcript -- if the exposure is gone, "
-        "update docs/privacy-and-consent.md and delete this test"
+    assert "conversation.transcript" not in console._NOTIFICATIONS_SENT_ON_THE_NETWORK, (
+        "the transcript is broadcast by default again -- the document says it is withheld"
     )
+    assert console.DEV_BROADCAST_TRANSCRIPT_ENV in document, (
+        "the document does not name the opt-in console.py actually reads"
+    )
+    assert "conversation.transcript" in document
+    assert "nothing mitigates it today" not in document
+    assert "no learner data crosses that surface" not in document

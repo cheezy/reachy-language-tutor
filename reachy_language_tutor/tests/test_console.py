@@ -362,6 +362,20 @@ def test_status_reports_direct_hf_ws_url_as_ready(
     assert data["can_proceed_with_hf"] is True
 
 
+def _as_logged(error: BaseException) -> str:
+    """What conversation.status may say about a backend error: what the log line says.
+
+    backend_error reaches every /rpc peer on the household network, so it follows log_safe
+    -- a family log_safe renders in full keeps its message, anything else is its type. This
+    states that rule instead of a literal, so the test follows log_safe when its families
+    change.
+    """
+    from reachy_language_tutor.logging_safety import log_safe
+
+    rendered = log_safe(error)
+    return f"{type(error).__name__}: {error}" if rendered is error else str(rendered)
+
+
 def test_status_reports_backend_connection_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -383,7 +397,7 @@ def test_status_reports_backend_connection_failure(
     assert data["backend"] == "huggingface"
     assert data["backend_connected"] is False
     assert data["backend_connection_state"] == "disconnected"
-    assert data["backend_error"] == "RuntimeError: connect failed"
+    assert data["backend_error"] == _as_logged(RuntimeError("connect failed"))
     assert data["can_proceed"] is True
     assert data["can_proceed_with_hf"] is True
 
@@ -429,7 +443,7 @@ def test_backend_startup_failure_is_recorded_without_raising(
     data = _rpc_call(app, "conversation.status")["result"]
     assert data["backend_connected"] is False
     assert data["backend_connection_state"] == "disconnected"
-    assert data["backend_error"] == "RuntimeError: local server unavailable"
+    assert data["backend_error"] == _as_logged(RuntimeError("local server unavailable"))
 
 
 def test_media_warmup_overlaps_audio_startup_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -829,8 +843,13 @@ def test_rpc_say_requires_active_session() -> None:
     assert resp["error"]["data"]["reason"] == "not_running"
 
 
-def test_rpc_transcript_notification_broadcast() -> None:
-    """The handler's transcript observer pushes conversation.transcript events."""
+def test_rpc_transcript_notification_broadcast(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under the developer opt-in, the transcript observer pushes conversation.transcript.
+
+    Opted in explicitly: without REACHY_MINI_DEV_BROADCAST_TRANSCRIPT=1 the network
+    server withholds transcripts, which test_rpc_control_surface.py pins.
+    """
+    monkeypatch.setenv(console_mod.DEV_BROADCAST_TRANSCRIPT_ENV, "1")
     app = FastAPI()
     stream = LocalStream(MagicMock(), _rpc_robot(), settings_app=app)
     stream._init_settings_ui_if_needed()

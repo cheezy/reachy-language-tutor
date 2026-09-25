@@ -147,7 +147,13 @@ class PersonalityOps:
         # ProfileFormatError branch is the sharper half of it, because a DIFFERENT
         # message comes back when a profile.md really is there. One fixed string
         # for both, so neither the path nor the distinction between them escapes.
-        # The detail still reaches the operator's log, which is where it belongs.
+        #
+        # OSError, not only FileNotFoundError, and that was a live leak: a 300-character
+        # name raised ENAMETOOLONG, which is an OSError but not a FileNotFoundError, so
+        # it escaped this block and the SDK sent its str() -- the full path under the
+        # instance directory -- back to whoever asked. The whole family is the rule.
+        # The log gets log_safe's rendering (type and errno), not the path either: a
+        # path under an instance directory is the thing logging_safety.py exists for.
         try:
             profile = read_profile(name)
         except ProfileNameError as exc:
@@ -156,13 +162,16 @@ class PersonalityOps:
             # same code the save route already returns for the same rule.
             logger.warning("Rejected a profile name that is not a bare segment")
             raise RouteError("invalid_name") from exc
-        except (FileNotFoundError, ProfileFormatError) as exc:
-            logger.warning("Failed to load profile %r: %s", name, exc)
+        except (OSError, ProfileFormatError) as exc:
+            logger.warning("Failed to load a profile: %s", log_safe(exc))
             raise RouteError("profile_unavailable") from exc
         try:
             override = read_profile_tool_override(name, config.INSTANCE_PATH)
         except (OSError, RuntimeError) as exc:
-            logger.warning("Failed to load tools for profile %r: %s", name, exc)
+            # The type only. profile_toolsets words its RuntimeErrors with the settings
+            # file's full path, so log_safe -- which renders RuntimeError in full -- would
+            # put that path in the log.
+            logger.warning("Failed to load tools for a profile: %s", type(exc).__name__)
             raise RouteError("profile_tools_unavailable") from exc
         enabled_tools = list(override) if override is not None else list(profile.default_tools)
         return {

@@ -478,3 +478,237 @@ def test_a_symlink_inside_the_root_cannot_be_read_through(
     # A real directory beside it in the same root still resolves.
     (root / "guide").mkdir()
     assert config.resolve_profile_dir("user_personalities/guide") == root / "guide"
+
+
+# ------------------------------------------------ what the surface SENDS, not only accepts
+#
+# The method allow-list governs what a caller may ask for. Everything below is about what
+# goes back out: notifications, which reach every attached socket whether it calls a method
+# or not, and error responses, which reach whoever asked. Both are read by anyone on the
+# household network, so both are allow-listed.
+
+
+def _next_notification(ws: Any) -> dict[str, Any]:
+    """Receive until a notification arrives, skipping responses."""
+    while True:
+        message = ws.receive_json()
+        if "method" in message:
+            return message
+
+
+def _marker(stream: Any) -> None:
+    """Send a notification that is always permitted, so a withheld one cannot hang a test.
+
+    Broadcasts are scheduled in order on the server's loop, so if the notification sent
+    before this one had been delivered it would arrive first.
+    """
+    stream._rpc.broadcast_threadsafe("conversation.activity", {"reason": "marker"})
+
+
+def _connected(app: FastAPI) -> Any:
+    ws = TestClient(app).websocket_connect("/rpc")
+    return ws
+
+
+def test_a_network_peer_does_not_receive_the_transcript_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exposure this was written for: a peer that calls nothing received the learner's words.
+
+    Measured before the outgoing allow-list: a client dialling the robot's LAN address with
+    no Origin and no credential received {"role": "user", "text": "I'm Zerelda, I'm seven"}.
+    """
+    from reachy_language_tutor.console import DEV_BROADCAST_TRANSCRIPT_ENV
+
+    monkeypatch.delenv(DEV_BROADCAST_TRANSCRIPT_ENV, raising=False)
+    app, stream = _stream(tmp_path, monkeypatch)
+
+    with _connected(app) as ws:
+        ws.send_json({"jsonrpc": "2.0", "id": "1", "method": "conversation.status", "params": {}})
+        ws.receive_json()  # the peer is now attached, so a broadcast would reach it
+        stream._dispatch_transcript("user", "I'm Zerelda, I'm seven", True)
+        _marker(stream)
+        first = _next_notification(ws)
+
+    assert first["method"] == "conversation.activity", f"a transcript reached the network: {first}"
+    assert first["params"] == {"reason": "marker"}
+
+
+@pytest.mark.parametrize("value", ["true", "yes", "on", "0", "", "11", "1 please"])
+def test_only_the_exact_opt_in_value_broadcasts_the_transcript(
+    value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An allow-list of one value: anything a parser might guess at is off."""
+    from reachy_language_tutor.console import DEV_BROADCAST_TRANSCRIPT_ENV
+
+    monkeypatch.setenv(DEV_BROADCAST_TRANSCRIPT_ENV, value)
+    app, stream = _stream(tmp_path, monkeypatch)
+
+    with _connected(app) as ws:
+        ws.send_json({"jsonrpc": "2.0", "id": "1", "method": "conversation.status", "params": {}})
+        ws.receive_json()
+        stream._dispatch_transcript("assistant", "Hola Zerelda", True)
+        _marker(stream)
+        first = _next_notification(ws)
+
+    assert first["method"] == "conversation.activity", f"{value!r} switched transcript broadcasting on"
+
+
+def test_the_developer_opt_in_does_broadcast_the_transcript(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The opt-in is real, so manual-test-script.md's watcher still works when asked for."""
+    from reachy_language_tutor.console import DEV_BROADCAST_TRANSCRIPT_ENV
+
+    monkeypatch.setenv(DEV_BROADCAST_TRANSCRIPT_ENV, "1")
+    app, stream = _stream(tmp_path, monkeypatch)
+
+    with _connected(app) as ws:
+        ws.send_json({"jsonrpc": "2.0", "id": "1", "method": "conversation.status", "params": {}})
+        ws.receive_json()
+        stream._dispatch_transcript("assistant", "Hola", True)
+        first = _next_notification(ws)
+
+    assert first == {
+        "jsonrpc": "2.0",
+        "method": "conversation.transcript",
+        "params": {"role": "assistant", "text": "Hola", "final": True},
+    }
+
+
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("conversation.activity", {"reason": "Zerelda said hello"}),  # free text in a permitted param
+        ("conversation.turn", {"state": "listening", "learner": "zerelda"}),  # a param nobody listed
+        ("conversation.level", {"role": "Zerelda", "rms": 0.5}),  # a value the check refuses
+        ("conversation.learner", {"name": "zerelda"}),  # a notification nobody listed
+    ],
+)
+def test_a_notification_outside_the_outgoing_allow_list_is_withheld(
+    method: str, params: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Names what may be SENT, so a broadcast added later is withheld until someone decides."""
+    app, stream = _stream(tmp_path, monkeypatch)
+
+    with _connected(app) as ws:
+        ws.send_json({"jsonrpc": "2.0", "id": "1", "method": "conversation.status", "params": {}})
+        ws.receive_json()
+        stream._rpc.broadcast_threadsafe(method, params)
+        _marker(stream)
+        first = _next_notification(ws)
+
+    assert first["params"] == {"reason": "marker"}, f"{method} {params!r} reached the network"
+
+
+def test_every_broadcast_site_still_reaches_the_dashboard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The allow-list must not silence what the orb and mobile clients actually use.
+
+    One call per broadcast site in console.py other than the transcript: activity (and the
+    turn it implies), level, phase, and the interrupt's turn. A site whose params the
+    allow-list refused would fail here rather than go quiet in somebody's living room.
+    """
+    import numpy as np
+
+    app, stream = _stream(tmp_path, monkeypatch)
+
+    with _connected(app) as ws:
+        ws.send_json({"jsonrpc": "2.0", "id": "1", "method": "conversation.status", "params": {}})
+        ws.receive_json()
+        stream._dispatch_activity("user_speech_started")
+        stream._emit_level("user", np.full(160, 8000, dtype=np.int16))
+        stream._emit_phase("running")
+        stream._emit_phase("stopped", "backend_unavailable")
+        received = [_next_notification(ws) for _ in range(5)]
+
+    assert [m["method"] for m in received] == [
+        "conversation.activity",
+        "conversation.turn",
+        "conversation.level",
+        "conversation.phase",
+        "conversation.phase",
+    ]
+    assert received[0]["params"] == {"reason": "user_speech_started"}
+    assert received[1]["params"] == {"state": "listening"}
+    assert received[2]["params"]["role"] == "user" and 0.0 <= received[2]["params"]["rms"] <= 1.0
+    assert received[3]["params"] == {"phase": "running", "reason": None}
+    assert received[4]["params"] == {"phase": "stopped", "reason": "backend_unavailable"}
+
+
+def _bare_network_server(handlers: dict[str, Any]) -> FastAPI:
+    """Build the network server on its own, with test handlers under exposed method names."""
+    from reachy_language_tutor.console import _NetworkRestrictedRpcServer, _mount_rpc_with_origin_check
+
+    rpc = _NetworkRestrictedRpcServer()
+    for name, handler in handlers.items():
+        rpc.register(name, handler)
+    app = FastAPI()
+    _mount_rpc_with_origin_check(rpc, app)
+    return app
+
+
+def test_a_failing_method_answers_with_a_reason_and_no_exception_text() -> None:
+    """One wrapper at registration, so no route can hand an exception's text to the network.
+
+    Measured before it: the SDK sends str(exc) for any exception that is not a
+    JsonRpcError, and a JsonRpcError's own message and data went out verbatim.
+    """
+    from reachy_mini.io.jsonrpc import JsonRpcError
+
+    def _raises_os_error(_params: dict[str, Any]) -> Any:
+        raise PermissionError(13, "Permission denied", "/home/pollen/smith-household/instance/memory.v1.json")
+
+    def _raises_rpc_error(_params: dict[str, Any]) -> Any:
+        raise JsonRpcError("no learner called 'Zerelda'", reason="invalid_params", code=-32602, data={"detail": "Zerelda"})
+
+    app = _bare_network_server({"conversation.status": _raises_os_error, "conversation.say": _raises_rpc_error})
+
+    internal = _call(app, "conversation.status")
+    refused = _call(app, "conversation.say")
+
+    assert internal["error"] == {"code": -32603, "message": "internal_error", "data": {"reason": "internal_error"}}
+    assert refused["error"] == {"code": -32602, "message": "invalid_params", "data": {"reason": "invalid_params"}}
+
+
+def test_an_overlong_profile_name_is_answered_without_a_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ENAMETOOLONG is an OSError but not a FileNotFoundError, and it escaped _load_profile.
+
+    Measured before: `[Errno 63] File name too long: '<profiles dir>/<name>/profile.md'`.
+    """
+    import json
+
+    app, _s = _stream(tmp_path, monkeypatch)
+
+    answer = _call(app, "personalities.load", {"name": "a" * 300})
+
+    assert "profile.md" not in json.dumps(answer) and "Errno" not in json.dumps(answer), answer
+    assert answer["error"]["data"]["reason"] == "profile_unavailable"
+
+
+def test_a_corrupt_tool_space_manifest_is_answered_without_a_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tool_spaces.list is exposed, and its error detail was the exception's str()."""
+    import json
+
+    from reachy_language_tutor.tool_spaces import get_installed_tool_spaces_path
+
+    get_installed_tool_spaces_path(tmp_path).write_text("{not json", encoding="utf-8")
+    app, _s = _stream(tmp_path, monkeypatch)
+
+    answer = _call(app, "tool_spaces.list")
+
+    assert answer["error"]["data"]["reason"] == "tool_spaces_unavailable"
+    assert str(tmp_path) not in json.dumps(answer), "the instance directory reached the network"
+
+
+def test_the_backend_error_in_status_is_rendered_like_a_log_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The log line beside it said PermissionError(errno=13); the network got the path."""
+    app, stream = _stream(tmp_path, monkeypatch)
+    stream._set_backend_connection_state(
+        "disconnected", PermissionError(13, "Permission denied", "/home/pollen/smith-household/instance/token")
+    )
+
+    status = _call(app, "conversation.status")["result"]
+
+    assert status["backend_error"] == "PermissionError(errno=13)"

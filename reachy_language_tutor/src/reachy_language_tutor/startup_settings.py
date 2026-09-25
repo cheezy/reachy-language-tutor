@@ -55,14 +55,20 @@ def read_startup_settings(instance_path: str | Path | None) -> StartupSettings:
     if settings_path is None or not settings_path.exists():
         return StartupSettings()
 
+    # The TYPE only, on both lines, and neither the path nor the payload. The path is the
+    # instance directory, which can name a household; the payload is this file's content,
+    # which holds a learner id since fallback_learner landed. Measured before this: a
+    # settings file holding a bare JSON list put `['<learner id>']` into a WARNING, and a
+    # truncated one put the full path under the instance directory there. An OSError's
+    # own str() embeds the path too, which is why the exception is not rendered either.
     try:
         payload = json.loads(settings_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        logger.warning("Failed to read startup settings from %s: %s", settings_path, exc)
+        logger.warning("Failed to read the startup settings: %s", type(exc).__name__)
         return StartupSettings()
 
     if not isinstance(payload, dict):
-        logger.warning("Ignoring invalid startup settings payload from %s: %r", settings_path, payload)
+        logger.warning("Ignoring the startup settings: the file holds a %s, not an object", type(payload).__name__)
         return StartupSettings()
 
     return StartupSettings(

@@ -83,3 +83,28 @@ def test_load_startup_settings_into_runtime_preserves_inherited_env_without_save
 
     assert settings == StartupSettings()
     assert applied_profiles == []
+
+
+def test_an_unreadable_settings_file_logs_neither_its_path_nor_its_content(tmp_path, caplog) -> None:
+    """The settings file can hold a learner id, in an instance directory that can name a household.
+
+    Measured before: a bare JSON list put `['<learner id>']` into a WARNING, and a truncated
+    file put the full path under the instance directory there.
+    """
+    import logging
+
+    household = tmp_path / "smith-household"
+    household.mkdir()
+    learner_id = "3f1c2a9e-7d41-4b8e-9c1a-0e5d2f6b8a77"
+    settings = household / "startup_settings.json"
+    shapes = (f'["{learner_id}"]', f'"{learner_id}"', '{"fallback_learner": "' + learner_id + '",')
+
+    for content in shapes:
+        settings.write_text(content, encoding="utf-8")
+        with caplog.at_level(logging.DEBUG, logger="reachy_language_tutor.startup_settings"):
+            assert read_startup_settings(household) == StartupSettings()
+
+    assert len(caplog.records) == len(shapes), "each malformed shape must still be reported"
+    surface = " ".join(f"{record.getMessage()} {record.args}" for record in caplog.records)
+    assert learner_id not in surface, "a learner id reached the log"
+    assert "smith-household" not in surface, "the instance path reached the log"

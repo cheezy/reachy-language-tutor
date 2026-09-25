@@ -68,8 +68,13 @@ def register_tool_space_methods(
         try:
             manifest = await asyncio.to_thread(read_installed_tool_spaces, instance_path)
         except Exception as exc:
-            logger.exception("Failed to list installed tool Spaces")
-            raise_tool_settings_error("tool_spaces_unavailable", _error_detail(exc))
+            # A fixed detail and a type-only log line. tool_spaces.list is exposed on the
+            # household network, and _error_detail is str(exc): a corrupt manifest answered
+            # "Failed to read installed tool spaces from <instance path>/installed_tool_
+            # spaces.json: ..." to anyone who asked. logger.exception would have put the
+            # same path, and the traceback's message, in the log.
+            logger.warning("Failed to list installed tool Spaces: %s", type(exc).__name__)
+            raise_tool_settings_error("tool_spaces_unavailable", "Could not read the installed Tool Spaces.")
         return _space_settings_payload(manifest)
 
     async def _add_tool_space(params: dict[str, Any]) -> dict[str, object]:

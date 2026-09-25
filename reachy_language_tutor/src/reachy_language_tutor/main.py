@@ -225,6 +225,14 @@ def build_tool_dependencies(
 # This is NOT the address the app binds when the robot daemon launches it. That one is
 # derived by the SDK from ReachyLanguageTutor.custom_app_url below -- see the comment
 # there before changing either.
+#
+# And it is narrower than "--ui" suggests. This server runs only on the path through
+# main(), the `reachy-language-tutor` console script, because it is guarded by
+# `settings_app is None`. `python -m reachy_language_tutor.main --ui` with no subcommand
+# goes through module_main() to wrapped_run(), where the SDK has already built the
+# settings app and binds it from custom_app_url -- every interface. So the documented
+# development command is LAN-reachable exactly as a robot is, and what protects it is
+# what protects a robot: the method and notification allow-lists in console.py.
 UI_BIND_HOST = "127.0.0.1"
 
 
@@ -934,6 +942,11 @@ class ReachyLanguageTutor(ReachyMiniApp):  # type: ignore[misc]
     # docs/rpc-control-surface.md records all of it. So the exposure is answered where it
     # can be -- by what the reachable methods are allowed to DO (D20): the mic is read-only
     # and every writer on that surface -- the backend target included -- is refused outright.
+    # And by what the surface SENDS: notifications are allow-listed too, so the learner's
+    # transcript is withheld unless a developer opts in, and a failing method answers with
+    # a reason code rather than its exception's text. One exposure is still open and is
+    # recorded rather than hidden: conversation.say injects a user turn the model may act
+    # on for the current learner.
     custom_app_url = "http://0.0.0.0:7860/"
     dont_start_webserver = False
 

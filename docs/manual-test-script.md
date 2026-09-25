@@ -39,9 +39,20 @@ the app holds it open is fine — that is what WAL is for.
 
 ### Watch the conversation without reading the log
 
-The app pushes `conversation.transcript` to any `/rpc` WebSocket client, which is how you
-watch turns while leaving the log at its default level. An absent `Origin` is accepted,
-so a plain client connects:
+**Transcripts are off by default and you have to opt in.** Every `/rpc` client on the
+network receives every notification it is sent, so the app does not send
+`conversation.transcript` at all unless it was started with the developer switch
+`REACHY_MINI_DEV_BROADCAST_TRANSCRIPT=1`. Only the exact value `1` turns it on. Set it for
+this session only. Do not put it in a robot's `.env`:
+
+```bash
+REACHY_MINI_DEV_BROADCAST_TRANSCRIPT=1 ~/dev/reachy/reachy_mini_env/bin/python -m reachy_language_tutor.main --ui --no-camera
+```
+
+The startup log then carries a WARNING saying transcripts are being broadcast. If that
+line is missing, the watcher below will connect and print nothing. That is the default
+working as intended, not a deaf microphone. With the switch on, an absent `Origin` is
+accepted, so a plain client connects:
 
 ```python
 import asyncio, json, websockets
@@ -57,6 +68,8 @@ asyncio.run(main())
 
 This is a separate channel from the log on purpose: it lets you read what was said
 *without* turning on the logging that the privacy check is meant to test.
+Restart without the switch before you run the privacy check at the end. Otherwise you
+are testing a configuration no household runs.
 
 ## Know the answer before you ask
 
