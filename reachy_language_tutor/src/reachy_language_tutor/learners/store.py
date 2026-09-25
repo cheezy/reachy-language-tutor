@@ -422,12 +422,31 @@ SEED_RESULTS: tuple[tuple[str, str, str, int | None, int], ...] = (
 # recorded completed by mistake was finished for good, which is exactly what stranded a
 # learner in D38 when they admitted they had not really finished.
 #
-# The tie is broken on id, the same way _ATTEMPTS_SQL breaks it, and that matters
-# rather than being tidiness: with MAX(recorded_at) alone, a completion and a partial
-# written in the same millisecond both matched and the lesson counted as finished --
-# the completion winning a tie that an append-only design means it should lose. Seed
-# data and tests use fixed stamps, so the tie is reachable there even though a voice
-# conversation could never produce two results a millisecond apart.
+# "LATEST" MEANS LAST WRITTEN, decided by the row id alone and never by recorded_at.
+# recorded_at is the robot's wall clock, and that clock can step backwards: a device
+# without a battery-backed clock that boots before network time sync, or anybody
+# changing the time. Ordered by recorded_at first, a completion written on a clock set
+# to 1970 lost to the partial written before it -- measured, get_progress reported the
+# lesson unfinished and offered it again, with the completion silently in the table.
+# The same inversion ignored a redo written after a forward-skewed completion.
+#
+# The id IS insertion order in this table, and that was run rather than assumed.
+# lesson_results is an INTEGER PRIMARY KEY without AUTOINCREMENT, so a new row gets
+# max(id) + 1. The only deletions are cascades, which remove ALL of one learner's rows
+# (an erasure) or all of one lesson's -- so every (learner, lesson) history that
+# survives keeps every row, and a new row is above all of them. Measured with the
+# rows holding the maximum id erased: the next row reused that id, which is still above
+# every row that remains. SQLite abandons max + 1 only when a row already holds
+# 2**63 - 1, and only a writer that sets id explicitly could put one there; nothing in
+# this module does.
+#
+# That also settles the same-millisecond tie, which used to need its own tie-break:
+# with MAX(recorded_at) alone, a completion and a partial written in the same
+# millisecond both matched and the completion won a tie an append-only design means
+# it should lose. Ids never tie.
+#
+# recorded_at is still stored and still returned. It says WHEN, for a person reading
+# the history; it no longer decides WHICH.
 #
 # The behaviour this changes is narrower than it looks: for a lesson whose last word was
 # a completion, the answer is identical. It differs only where a NON-completed row was
@@ -443,7 +462,7 @@ WHERE l.language_code = ?
           AND r.id = (
                 SELECT r2.id FROM lesson_results AS r2
                 WHERE r2.learner_id = ? AND r2.lesson_id = l.id
-                ORDER BY r2.recorded_at DESC, r2.id DESC LIMIT 1
+                ORDER BY r2.id DESC LIMIT 1
               )
       )
 ORDER BY l.position
@@ -877,10 +896,60 @@ def _apply_schema(connection: sqlite3.Connection) -> bool:
         connection.execute("PRAGMA foreign_keys = ON")
 
     connection.executescript(_schema_sql())
+    # AFTER the script, so a database old enough to have no consents table has one to
+    # be read against, and BEFORE user_version moves, so an interruption re-runs it.
+    _remove_faceprints_nobody_agreed_to(connection)
     # Pragmas cannot take bound parameters, so this is the one unavoidable
     # interpolation in the module. int() on a module constant makes it structurally
     # impossible for anything caller-supplied to reach the statement.
     connection.execute(f"PRAGMA user_version = {int(SCHEMA_VERSION)}")
+    return True
+
+
+def _remove_faceprints_nobody_agreed_to(connection: sqlite3.Connection) -> bool:
+    """On upgrade, remove any faceprint whose learner holds no standing face consent.
+
+    Such a row can exist only on a database from schema version 3, which stored
+    faceprints before the consents table existed. Upgrading one kept the faceprint and
+    gave it no consent row -- measured -- and recognition then compared faces against a
+    template nobody had agreed to. The consent gate on _INSERT_FACEPRINT_SQL stops a new
+    one being written; nothing reached the ones already there. True if any went.
+
+    "Standing" means exactly what the insert gate means, and the two are held together
+    by using the same constant and the same two tests: scope is
+    _FACEPRINT_CONSENT_SCOPE and withdrawn_at is NULL. A gate that admits a faceprint
+    this function would then delete, or the reverse, is the D19 shape.
+
+    IT CANNOT REMOVE A CONSENTED FACEPRINT, and that is a property of how it is built
+    rather than of care. Every statement is one this module already scopes to a single
+    learner -- no new cross-learner write exists, and none may -- and the whole pass runs
+    under BEGIN IMMEDIATE, so no consent can be written between reading a learner's
+    consents and deleting their faceprint. A learner with a standing consent row is
+    read as having one, and the delete is never issued for them.
+
+    Runs only on the upgrade path, which is where every version-3 database passes. A
+    version-3 database already upgraded to 5 by an earlier build does not pass it again;
+    no build ever had a caller that wrote faceprints at version 3, so that set is
+    expected to be empty, but it is not measured and this does not reach it.
+    """
+    removed = 0
+    with connection:
+        connection.execute("BEGIN IMMEDIATE")
+        for faceprint in connection.execute(_HOUSEHOLD_FACEPRINTS_SQL).fetchall():
+            learner_id = faceprint["learner_id"]
+            standing = any(
+                consent["scope"] == _FACEPRINT_CONSENT_SCOPE and consent["withdrawn_at"] is None
+                for consent in connection.execute(_CONSENTS_SQL, (learner_id,)).fetchall()
+            )
+            if not standing:
+                removed += connection.execute(_DELETE_FACEPRINT_SQL, (learner_id,)).rowcount
+    if removed == 0:
+        return False
+    # An erasure like the other four, so the freed pages leave the files the same way.
+    _checkpoint_the_log(connection)
+    # A fixed sentence: no count, no id. The count is not personal data, but it is not a
+    # shape the log guard can prove, and whether this happened is what an operator needs.
+    logger.warning("The upgrade removed faceprints that had no standing face-recognition consent")
     return True
 
 
@@ -972,10 +1041,39 @@ def _seeded_learner_ids(connection: sqlite3.Connection) -> set[str]:
     return set()
 
 
+def _refuse_an_unreachable_catalog_row() -> None:
+    """Refuse to seed a language or a lesson the readers would refuse to look up.
+
+    The readers accept one shape of catalog code and one shape of lesson id, and the
+    seed is the only writer of either. A row seeded outside that shape is a lesson that
+    exists and can never be reached -- every lookup answers the silent "no such lesson"
+    a genuine absence gives. So the seed is held to the same guards, by calling them
+    rather than restating them, which is what keeps the two meaning the same thing.
+
+    Counted rather than named in the refusal, like the file-shape refusals above: the
+    message is SafeToLog and is rendered in full.
+    """
+    codes = [code for code, _ in SEED_LANGUAGES]
+    lesson_ids: list[object] = [row[0] for row in SEED_LESSONS]
+    for course in _converted_courses():
+        codes.append(course["language_code"])
+        lesson_ids.extend(lesson["id"] for lesson in course["lessons"])
+
+    bad_codes = sum(_cannot_be_a_catalog_code(code) is not None for code in codes)
+    bad_ids = sum(_cannot_name_a_lesson(lesson_id) is not None for lesson_id in lesson_ids)
+    if bad_codes or bad_ids:
+        raise _StoreRefusal(
+            f"the seed holds {bad_codes} language code(s) and {bad_ids} lesson id(s) that no reader would "
+            f"look up; each must be {_CATALOG_SLUG_DESCRIPTION.removeprefix('not ')}"
+        )
+
+
 def _seed(connection: sqlite3.Connection) -> bool:
     """Insert or converge the seed data when it predates the current seed version."""
     if _seed_version(connection) >= SEED_VERSION:
         return False
+
+    _refuse_an_unreachable_catalog_row()
 
     with connection:
         # Reference data the app owns: converge it, so a corrected lesson title
@@ -1265,6 +1363,9 @@ _SQLITE_INT_MAX = 2**63 - 1
 # raises it while BINDING an int outside the range above -- before the database sees
 # the statement -- and it subclasses ArithmeticError, so it is in none of the other
 # three. It is therefore a CALLER error, where the other three are storage failures.
+# No learner id reaches it any more -- _cannot_name_a_learner refuses an out-of-range
+# int before a connection opens, and names it as the caller error it is -- so this is
+# a backstop for a bind the guards do not cover, not the path those ids take.
 #
 # Collapsing the two into one answer here is not the blurring store_is_available
 # exists to prevent. That distinction matters because a broken store says None about a
@@ -1402,36 +1503,63 @@ def _cannot_be_a_path(value: object) -> str | None:
 def _cannot_name_a_learner(value: object) -> str | None:
     """Say why this value could never equal a stored learner id, or None if it might.
 
-    Not a type check, deliberately. Learner ids are TEXT, and SQLite applies the
-    column's affinity to a bound number, so 42 finds the learner whose id is "42" and
-    an int at the 64-bit boundary finds its own text spelling -- those are real
-    lookups and this task's edge cases require them to keep working.
+    AN ALLOW-LIST OF WHAT MAY BE LOOKED UP, and it replaced a list of what may not. The
+    list named None, NaN, bytes and a lone surrogate, and admitted everything else --
+    so a list, a dict, a Decimal or a complex reached the bind, failed there, and was
+    reported as a broken store: get_progress logged "Could not read learner progress",
+    the prefix its docstring reserves for a store fault, and record_result and
+    save_faceprint answered storage_unavailable. Measured, all of it, on a healthy
+    database. Naming what is permitted closes that family at once.
 
-    What cannot work is a value that can never COMPARE equal to TEXT however the store
-    is filled. A BLOB never equals TEXT and NULL never equals anything, so bytes and
-    None are guaranteed non-matches: get_profile(b"sample-learner") answered a silent
-    None for a learner who exists, and get_progress answered a populated result
-    claiming no lessons completed for a learner with a real history. That second one
-    is the worse failure, because the database is meant to be the source of truth for
-    progress and a quiet zero would have the tutor re-teach finished lessons.
+    What is permitted, and why each one is a real lookup rather than a tolerated one:
 
-    Each reason names a shape, never the value.
+    * a str that encodes as UTF-8 -- the only thing this store ever writes as an id.
+      Its CONTENT is deliberately not judged here: a database written before
+      _cannot_be_a_learner_id existed can hold an id outside today's mint rule, and
+      refusing it would make that person silently unreachable.
+    * an int, not a bool, inside SQLite's 64-bit range. learners.id is TEXT and
+      SQLite applies that affinity to a bound number, so 42 finds the learner whose
+      id is "42", and the boundary ids find their own text spelling. Outside the
+      range the driver cannot bind it at all, so no stored id can be reached with it.
+      A bool is refused: True binding as "1" would be a coincidence of Python's
+      numeric tower, not an identifier anybody chose.
+    * a float that is not NaN. float("inf") binds as REAL and takes TEXT affinity to
+      "Inf", which a test finds. NaN binds as SQL NULL, and NULL equals nothing.
+
+    Each reason names a shape, never the value -- these strings reach a log line.
     """
-    if value is None:
-        return "None, and NULL never compares equal to a stored id"
-    if isinstance(value, float) and math.isnan(value):
-        # Same refusal, one type further out. sqlite3 binds NaN as SQL NULL -- typeof()
-        # says "null" -- so it is the NULL case above wearing a float. float("inf") is
-        # NOT: it binds as REAL and takes TEXT affinity to "Inf", which is a real lookup.
-        return "not a number, and sqlite3 binds NaN as NULL"
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        return f"{type(value).__name__}, and a BLOB never compares equal to TEXT"
     if isinstance(value, str):
         try:
             value.encode("utf-8")
         except UnicodeEncodeError:
             return "not encodable as UTF-8"
-    return None
+        return None
+    if isinstance(value, bool):
+        return "a bool, which is a flag rather than an identifier"
+    if isinstance(value, int):
+        if _SQLITE_INT_MIN <= value <= _SQLITE_INT_MAX:
+            return None
+        return "an int too large for SQLite to bind, so it can reach no stored id"
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "not a number, and sqlite3 binds NaN as NULL"
+        return None
+    return f"{type(value).__name__}, which is not a str, an int or a float"
+
+
+# The one shape a catalog code or a lesson id may take: lowercase ASCII letters and
+# digits in runs joined by single hyphens. Every shipped code and id has it, and a test
+# walks the whole seeded catalog through both guards so that stays true.
+#
+# Stated as what is PERMITTED. The rule it replaced refused whitespace and control
+# characters and admitted everything else, and "everything else" included the
+# invisible format characters -- U+200B ZERO WIDTH SPACE, U+FEFF, U+00AD SOFT HYPHEN.
+# Measured: get_progress(..., "es" + U+200B) answered None with nothing logged, which
+# by its own contract is the silent answer that means "this robot does not teach that
+# language". A shape that names the characters that may appear refuses all of those,
+# and whatever comes next, without anybody having to think of them.
+_CATALOG_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_CATALOG_SLUG_DESCRIPTION = "not lowercase ASCII letters and digits joined by single hyphens"
 
 
 def _cannot_be_a_catalog_code(value: object) -> str | None:
@@ -1440,23 +1568,14 @@ def _cannot_be_a_catalog_code(value: object) -> str | None:
     Tests the property that matters -- can this name a catalog row -- rather than a
     proxy for it. Two earlier attempts tested proxies and both let a class through:
     bindability let every wrong TYPE past, and the type alone let "ES" and " es " past.
-    Each returned a silent None for a language this robot does teach.
+    Each returned a silent None for a language this robot does teach. A third tested
+    for whitespace and control characters and let the invisible format characters
+    past, with the same result; the shape rule above is what replaced it.
 
     Each reason names a shape, never the value.
     """
     if not isinstance(value, str):
         return f"{type(value).__name__} is not a string"
-    if value != value.lower():
-        return "not lowercase, and the catalog's CHECK stores only lowercase codes"
-    if value != value.strip() or any(ch.isspace() or ord(ch) < 0x20 for ch in value):
-        # The class the CHECK cannot close for us. lower(code) rules out "ES"; nothing
-        # rules out " es", "es\n" or "es\x00", which are lowercase, in range, and bind
-        # cleanly -- so each matched nothing and answered a silent None for a language
-        # this robot teaches. Refused rather than stripped: repairing the caller's value
-        # invisibly would leave the tool layer no signal that what it sent was malformed.
-        return "padded or contains a control character"
-    if not _CATALOG_CODE_MIN <= len(value) <= _CATALOG_CODE_MAX:
-        return f"{len(value)} characters, outside the catalog's 2 to 8"
     try:
         value.encode("utf-8")
     except UnicodeEncodeError:
@@ -1464,6 +1583,12 @@ def _cannot_be_a_catalog_code(value: object) -> str | None:
         # error it is; left to the handler below it would be logged as a failed
         # lookup, which is the mirror of the mislabelling this guard replaced.
         return "not encodable as UTF-8"
+    if not _CATALOG_CODE_MIN <= len(value) <= _CATALOG_CODE_MAX:
+        return f"{len(value)} characters, outside the catalog's 2 to 8"
+    if _CATALOG_SLUG.fullmatch(value) is None:
+        # Case, padding, control characters and invisible characters all land here,
+        # because none of them is in the permitted shape.
+        return _CATALOG_SLUG_DESCRIPTION
     return None
 
 
@@ -1476,9 +1601,11 @@ def _cannot_name_a_lesson(value: object) -> str | None:
     binding but that can never match, which comes back as a silent "no such lesson"
     indistinguishable from a genuine absence.
 
-    So this closes that class rather than the two spellings that are easiest to name.
-    Padding and control characters bind cleanly and match nothing, exactly as a bad
-    type does.
+    So this permits one shape -- the catalog slug above -- rather than refusing the
+    spellings that are easiest to name. The rule it replaced refused padding and
+    control characters, and an id carrying a zero-width space passed it and answered a
+    silent None. The seeder refuses to write a lesson whose id this rejects, so the
+    two cannot disagree about which lessons are reachable.
 
     It lives here, rather than inline in one reader, because every reader that takes a
     lesson id has to refuse the same values. Two copies of a rule is how a guard and
@@ -1491,17 +1618,14 @@ def _cannot_name_a_lesson(value: object) -> str | None:
         return f"{type(value).__name__} is not a string"
     if not value:
         return "empty"
-    if value != value.strip() or any(ch.isspace() or ord(ch) < 0x20 for ch in value):
-        return "padded or contains a control character"
     try:
         value.encode("utf-8")
     except UnicodeEncodeError:
-        # Both sibling refusals -- _cannot_name_a_learner and _cannot_be_a_catalog_code
-        # -- already close this, and this one did not, because it was extracted from a
-        # reader written before the rule existed. A lone surrogate is a str the driver
-        # cannot bind: refused HERE it is named as the caller error it is, while left to
-        # the handler below it is logged as a failed lookup or a storage failure.
+        # Checked before the shape so a lone surrogate is still named for what it is:
+        # a str the driver cannot bind, rather than merely a str of the wrong shape.
         return "not encodable as UTF-8"
+    if _CATALOG_SLUG.fullmatch(value) is None:
+        return _CATALOG_SLUG_DESCRIPTION
     return None
 
 
@@ -2346,8 +2470,9 @@ def _learner_scoped(sql: str) -> str:
 
 _PROFILE_SQL = _learner_scoped("SELECT id, display_name, created_at FROM learners WHERE learners.id = ?")
 _LEARNER_EXISTS_SQL = _learner_scoped("SELECT 1 FROM learners WHERE learners.id = ? LIMIT 1")
-# Latest-wins, exactly as NEXT_LESSON_SQL above -- the two state one rule and a test
-# pins them together, so changing one alone is how they drift.
+# Latest-wins, exactly as NEXT_LESSON_SQL above, and "latest" is the highest row id for
+# the reason given there -- the two state one rule and a test pins them together, so
+# changing one alone is how they drift.
 _COMPLETED_IDS_SQL = _learner_scoped(
     "SELECT DISTINCT r.lesson_id FROM lesson_results AS r "
     "JOIN lessons AS l ON l.id = r.lesson_id "
@@ -2355,13 +2480,17 @@ _COMPLETED_IDS_SQL = _learner_scoped(
     "AND r.id = ("
     "SELECT r2.id FROM lesson_results AS r2 "
     "WHERE r2.learner_id = ? AND r2.lesson_id = r.lesson_id "
-    "ORDER BY r2.recorded_at DESC, r2.id DESC LIMIT 1)"
+    "ORDER BY r2.id DESC LIMIT 1)"
 )
+# Newest first by the SAME ordering the rule above uses, so "the first attempt listed
+# for a lesson" and "the attempt that decides whether it is finished" are always the
+# same row. Ordered by recorded_at, the two disagreed whenever the clock had stepped
+# back, and the tools that read attempts[0] as the latest would have said so.
 _ATTEMPTS_SQL = _learner_scoped(
     "SELECT r.learner_id, r.lesson_id, r.outcome, r.score, r.recorded_at "
     "FROM lesson_results AS r JOIN lessons AS l ON l.id = r.lesson_id "
     "WHERE r.learner_id = ? AND l.language_code = ? "
-    "ORDER BY r.recorded_at DESC, r.id DESC"
+    "ORDER BY r.id DESC"
 )
 _INSERT_ATTEMPT_SQL = _learner_scoped(
     "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at) VALUES (?, ?, ?, ?, ?)"
@@ -2374,9 +2503,23 @@ _INSERT_ATTEMPT_SQL = _learner_scoped(
 # language the learner has only ever skipped does not appear here at all. Telling
 # someone they have been working on a language they turned down is worse than saying
 # nothing. Skips stay in the table and still count against the next lesson.
+#
+# `completed` is latest-wins, the rule NEXT_LESSON_SQL states, and it was the one
+# sibling D38 did not reach. Counting "any completed row ever" meant a lesson the
+# learner asked to redo was still counted finished here while get_progress, which
+# get_profile's caller hears beside it, said it was not -- measured, (attempts,
+# completed) came back (2, 1) for a lesson whose last word was a partial. The latest
+# row is looked for among ALL of that lesson's rows, skips included, so a completion
+# followed by a skip is not finished here either, exactly as it is not finished there.
+#
+# The learner is bound twice, as in NEXT_LESSON_SQL: first by the subquery, which sits
+# in the select list and so comes before the WHERE clause in parameter order.
 _PRACTISED_LANGUAGES_SQL = _learner_scoped(
     "SELECT g.code, g.name, COUNT(*) AS attempts, "
-    "COUNT(DISTINCT CASE WHEN r.outcome = 'completed' THEN r.lesson_id END) AS completed "
+    "COUNT(DISTINCT CASE WHEN r.outcome = 'completed' AND r.id = ("
+    "SELECT r2.id FROM lesson_results AS r2 "
+    "WHERE r2.learner_id = ? AND r2.lesson_id = r.lesson_id "
+    "ORDER BY r2.id DESC LIMIT 1) THEN r.lesson_id END) AS completed "
     "FROM lesson_results AS r "
     "JOIN lessons AS l ON l.id = r.lesson_id "
     "JOIN languages AS g ON g.code = l.language_code "
@@ -2817,7 +2960,7 @@ def get_practised_languages(
     connection: sqlite3.Connection | None = None
     try:
         connection = connect(instance_path)
-        rows = connection.execute(_PRACTISED_LANGUAGES_SQL, (learner_id,)).fetchall()
+        rows = connection.execute(_PRACTISED_LANGUAGES_SQL, (learner_id, learner_id)).fetchall()
         return tuple(
             PractisedLanguage(
                 code=str(row["code"]),
@@ -3131,16 +3274,19 @@ def record_result(
     # compare equal to any stored id names no lesson, which is exactly what the reader
     # below would have reported had the value survived to reach it.
     #
-    # learner_id deliberately does NOT get a guard here, and the reason is not that its
-    # ids are safer. It is that the lookup below already answers honestly for them: a
-    # learner id that cannot match anything reaches _LEARNER_EXISTS_SQL, finds nothing,
-    # and comes back as unknown_learner -- which is the accurate code. Its rule also
-    # permits an int, because SQLite applies the column's TEXT affinity to a bound
-    # number and 42 really does find the learner whose id is "42", so it could not
-    # refuse the types this guard refuses even if it ran. The one value that used to
-    # escape that reasoning was a lone surrogate, which failed at bind time and was
-    # reported as storage_unavailable; it is caught below, at the bind, for reasons
-    # given there.
+    # The learner id gets the readers' guard too. It used not to, on the reasoning that
+    # an id that cannot match reaches _LEARNER_EXISTS_SQL, finds nothing and comes back
+    # unknown_learner -- true for a str, and false for everything the driver cannot
+    # bind: a list or a dict failed AT the bind and came back storage_unavailable,
+    # telling a caller the robot was broken when it had been sent nonsense. Measured.
+    # unknown_learner is the honest code for a refusal, exactly as unknown_lesson is for
+    # the lesson id below: a value that cannot be looked up names no learner. The log
+    # line is what separates it from a bindable id that is simply absent, which is
+    # silent.
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not record an attempt: the learner id was %s", refusal)
+        return RecordResultOutcome(recorded=False, reason="unknown_learner")
     refusal = _cannot_name_a_lesson(lesson_id)
     if refusal is not None:
         logger.warning("Could not record an attempt: the lesson id was %s", refusal)
@@ -3181,24 +3327,10 @@ def record_result(
     connection: sqlite3.Connection | None = None
     try:
         connection = connect(instance_path)
-        try:
-            exists = connection.execute(_LEARNER_EXISTS_SQL, (learner_id,)).fetchone()
-        except UnicodeEncodeError as exc:
-            # The other half of the class the lesson-id guard above closes, reached the
-            # only way it still can. A lone surrogate is a str the driver cannot bind,
-            # and it named no learner -- storage_unavailable said the robot was broken
-            # when it had been sent nonsense.
-            #
-            # Caught HERE rather than refused at the top, and that placement is the
-            # whole of it. connect() has already succeeded, so this can only be the
-            # bind, which means a surrogate in the instance PATH cannot be mislabelled
-            # as a learner problem by this arm. And the refusal still goes through the
-            # handler, so _log_safe is still what stops UnicodeEncodeError naming the
-            # offending character and its index -- a fragment of a learner's id in a
-            # log file. A test pins this function as one of the two sinks where that
-            # matters; refusing before the bind would have quietly retired it.
-            logger.warning("Could not record a lesson attempt: %s", _log_safe(exc))
-            return RecordResultOutcome(recorded=False, reason="unknown_learner")
+        # A lone surrogate used to fail right here, at the bind, and needed an arm of its
+        # own. The guard above refuses it before a connection is opened now; anything
+        # that still fails here falls to the handlers below, which log through _log_safe.
+        exists = connection.execute(_LEARNER_EXISTS_SQL, (learner_id,)).fetchone()
         if exists is None:
             return RecordResultOutcome(recorded=False, reason="unknown_learner")
         if connection.execute(_LESSON_EXISTS_SQL, (lesson_id,)).fetchone() is None:
@@ -3339,18 +3471,21 @@ def save_faceprint(
         return SaveFaceprintOutcome(saved=False, reason="invalid_vector")
     dimension = len(blob) // _VECTOR_BYTES_PER_ELEMENT
 
+    # The readers' guard, for the reason record_result now carries it: a value the
+    # driver cannot bind -- a list, a dict -- failed at the bind and came back
+    # storage_unavailable, which says the robot is broken. It names no learner, so the
+    # honest code is unknown_learner, and it is refused before anything is opened. This
+    # also retired the arm that caught a lone surrogate at the bind.
+    refusal = _cannot_name_a_learner(learner_id)
+    if refusal is not None:
+        logger.warning("Could not store a faceprint: the learner id was %s", refusal)
+        return SaveFaceprintOutcome(saved=False, reason="unknown_learner")
+
     when = utc_now_ms()
     connection: sqlite3.Connection | None = None
     try:
         connection = connect(instance_path)
-        try:
-            exists = connection.execute(_LEARNER_EXISTS_SQL, (learner_id,)).fetchone()
-        except UnicodeEncodeError as exc:
-            # The same arm record_result carries, for the same reason: a lone surrogate
-            # is a str the driver cannot bind and it names no learner, so unknown_learner
-            # is the honest code and storage_unavailable would say the robot is broken.
-            logger.warning("Could not store a faceprint: %s", _log_safe(exc))
-            return SaveFaceprintOutcome(saved=False, reason="unknown_learner")
+        exists = connection.execute(_LEARNER_EXISTS_SQL, (learner_id,)).fetchone()
         if exists is None:
             return SaveFaceprintOutcome(saved=False, reason="unknown_learner")
 

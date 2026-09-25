@@ -3542,7 +3542,20 @@ def test_silence_is_what_separates_a_real_absence_from_every_other_none(
         ("a language we really do not teach", "sample-learner", UNTAUGHT_CODE, ""),
         ("a legal-shaped code that is simply absent", "sample-learner", UNTAUGHT_CODE_ABSENT, ""),
         ("an unbindable language code", "sample-learner", 10**30, "Could not read a language code"),
-        ("an unbindable learner id", 10**30, "es", "Could not read learner progress"),
+        # The fourth class, and the one a list of refusals could not close: a character
+        # that renders as nothing. Each of these used to bind, match nothing and answer
+        # the SILENT None that means "not taught here". They are outside the permitted
+        # shape, so they are refused by not being in it rather than by being spotted.
+        ("a zero-width space", "sample-learner", "es\u200b", "Could not read a language code"),
+        ("a byte-order mark", "sample-learner", "\ufeffes", "Could not read a language code"),
+        ("a soft hyphen", "sample-learner", "e\u00ads", "Could not read a language code"),
+        # An out-of-range id is refused by the learner-id guard before the bind now, so
+        # it is named as the caller error it is. It used to reach the bind and be logged
+        # as "Could not read learner progress" -- the store-fault prefix, on a healthy
+        # store, which is the mislabel this table exists to catch.
+        ("an unbindable learner id", 10**30, "es", "Could not read a learner id"),
+        ("a list as a learner id", ["sample-learner"], "es", "Could not read a learner id"),
+        ("a dict as a learner id", {"id": "sample-learner"}, "es", "Could not read a learner id"),
     ]
 
     for label, learner_id, language_code, expected in quiet_then_loud:
@@ -3665,25 +3678,50 @@ def test_store_is_available_still_separates_absence_from_breakage(instance: Path
     assert store.store_is_available(broken) is False
 
 
-def test_record_result_still_answers_with_a_reason_code(instance: Path) -> None:
-    """D5's fix is a different shape and must not be pulled into this one.
+def test_record_result_still_answers_with_a_reason_code(instance: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A learner id nothing can look up is refused, and refused as a caller error.
 
-    record_result returns a reason rather than None, and it catches OverflowError one
-    handler earlier than the tuple this task widened.
+    record_result returns a reason rather than None. An unbindable id used to reach the
+    driver and come back rejected_by_database; a list or a dict failed at the bind and
+    came back storage_unavailable, telling a caller the robot was broken when it had
+    been sent nonsense. Both are refused before anything is opened now, with the code a
+    value naming no learner earns -- unknown_learner, as the lesson id's guard answers
+    unknown_lesson.
+
+    The two unknown_learner answers still differ, and the difference is pinned: a
+    refused id logs why, a bindable id that is simply absent is silent.
     """
-    outcome = store.record_result(10**30, "es-01-greetings", "completed", instance_path=instance)
+    for refused in (10**30, ["sample-learner"], {"id": "sample-learner"}, True, float("nan"), None):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            outcome = store.record_result(refused, "es-01-greetings", "completed", instance_path=instance)
+        assert outcome.recorded is False, refused
+        assert outcome.reason == "unknown_learner", refused
+        assert "Could not record an attempt: the learner id was" in caplog.text, refused
+        assert "sample-learner" not in caplog.text, "the shape, never the value"
 
-    assert outcome.recorded is False
-    # The exact bucket, not merely "some published reason". An unbindable id is
-    # refused by the driver, which is rejected_by_database -- distinct from
-    # unknown_learner, the answer for an id that is bindable and simply absent.
-    # Asserting membership in RECORD_REASONS alone would pass either way, and the
-    # difference is what a tutor says out loud.
-    assert outcome.reason == "rejected_by_database"
-    assert outcome.reason in learners.RECORD_REASONS
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        absent = store.record_result("nobody", "es-01-greetings", "completed", instance_path=instance)
+    assert absent.reason == "unknown_learner"
+    assert caplog.text == "", "a bindable id that is simply absent is a real answer, not a refusal"
 
-    absent = store.record_result("nobody", "es-01-greetings", "completed", instance_path=instance)
-    assert absent.reason == "unknown_learner", "the two must not collapse into one bucket"
+
+def test_save_faceprint_refuses_a_learner_id_nothing_can_look_up(
+    instance: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The sibling writer, held to the same guard and the same code.
+
+    Measured before the guard: a list or a dict as the learner id came back
+    storage_unavailable from a healthy store.
+    """
+    for refused in (["sample-learner"], {"id": "sample-learner"}, 10**30, True):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            outcome = store.save_faceprint(refused, "arcface", [0.5] * 4, instance_path=instance)
+        assert outcome.saved is False, refused
+        assert outcome.reason == "unknown_learner", refused
+        assert "Could not store a faceprint: the learner id was" in caplog.text, refused
 
 
 # -------------------------------- values that can never match, and a bad instance path
@@ -3870,15 +3908,18 @@ def test_no_entry_point_logs_a_fragment_of_a_surrogate_id(instance: Path, caplog
     """The two sinks _log_safe did not originally cover.
 
     UnicodeEncodeError names the offending character and its INDEX, so an unencodable
-    learner id leaves a fragment of itself in the log. The readers refuse it before the
-    bind; these two reach the handler, which is why the helper has to be applied there
-    too rather than only where the rule was first written down.
+    learner id leaves a fragment of itself in the log. record_result used to reach the
+    handler with one; it now refuses it before the bind, as the readers do, and says
+    so by shape. store_is_available still reaches its handler through the PATH, which
+    is why the helper has to be applied there too rather than only where the rule was
+    first written down.
     """
     with caplog.at_level(logging.WARNING):
         store.record_result("alice\ud800bob", "es-01-greetings", "completed", instance_path=instance)
         store.store_is_available(str(instance) + "/\ud800")
 
     assert "ud800" not in caplog.text and "position" not in caplog.text
+    assert "Could not record an attempt: the learner id was not encodable as UTF-8" in caplog.text
     assert "UnicodeEncodeError" in caplog.text, "still diagnosable: the class, not the value"
 
 
@@ -4758,7 +4799,10 @@ def test_the_consent_migration_rebuilds_consents_and_nothing_else() -> None:
     # ALL-OR-NOTHING, pinned by position rather than by presence: a BEGIN that is not
     # first, or a COMMIT that is not last, leaves part of the rebuild outside the
     # transaction and is exactly the failure this is here to stop.
-    assert statements[0].upper() == "BEGIN", "the rebuild must open a transaction first"
+    # IMMEDIATE, pinned exactly: a deferred BEGIN let a second process starting at the
+    # same moment fail the upgrade with "database is locked" -- see
+    # test_concurrent_upgrades_of_a_version_4_database_all_succeed.
+    assert statements[0].upper() == "BEGIN IMMEDIATE", "the rebuild must take the write lock first"
     assert statements[-1].upper() == "COMMIT", "the rebuild must commit last"
     # And it names no other personal table, so the copy cannot reach anybody else's
     # data. Checked over the STATEMENTS rather than the file, so the prose explaining

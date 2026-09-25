@@ -34,7 +34,18 @@
 --
 -- The DROP IF EXISTS recovers a database already wedged by an interrupted run of the
 -- version of this file that had no transaction.
-BEGIN;
+--
+-- IMMEDIATE, not a plain BEGIN, because two processes can run this at once: the app
+-- starting and the enrol command both call ensure_learner_database, and the lock
+-- store.py holds around it serialises threads, not processes. A plain BEGIN is
+-- deferred -- the DROP IF EXISTS below takes a read snapshot, and when the CREATE then
+-- needs to write after another process has committed, SQLite answers "database is
+-- locked" at once rather than waiting out the busy timeout, because waiting cannot
+-- make a stale snapshot current. Measured: six concurrent upgrades of a version-4
+-- database, twelve times over, failed 5 of 72 with a plain BEGIN and 0 of 72 with this.
+-- The failure rolled back cleanly, so nothing was lost -- but the start reported the
+-- store unusable, and taking the write lock first is what the rebuild needed anyway.
+BEGIN IMMEDIATE;
 
 DROP TABLE IF EXISTS consents_migrated;
 

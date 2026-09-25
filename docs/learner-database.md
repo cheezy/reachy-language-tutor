@@ -170,9 +170,9 @@ to anything that does without a liveness check arriving first.
 ### The lesson-content tables — what a lesson is made of
 
 Five tables hold the material a lesson is actually taught from. All of it is **optional**,
-and most lessons still have none: twelve of the forty-two seeded lessons are converted
-units carrying dialogue, notes and drills, and the other thirty are title-and-objective
-placeholders. A lesson with nothing in these tables reads back as empty rather than as an
+and many lessons still have none: twenty-three of the fifty-three seeded lessons are
+converted units carrying dialogue, notes and drills, and the other thirty are
+title-and-objective placeholders (counted on a freshly seeded database). A lesson with nothing in these tables reads back as empty rather than as an
 error, because the corpus is converted a unit at a time.
 
 None of it is personal data. These rows are identical in every household, nothing in them
@@ -292,17 +292,20 @@ languages ──1:N──> lessons ──1:N──> lesson_dialogue_turns
                      ▲      └──1:N──> lesson_drills
                      │
                      └──1:N──> lesson_results <──N:1── learners ──1:1──> faceprints
-                                 lesson_id             id                  learner_id
-                                 learner_id
+                                 lesson_id             id     │            learner_id
+                                 learner_id                   └──1:N──> consents
+                                                                          learner_id
 ```
 
 Every foreign key is `ON DELETE CASCADE`. Deleting a learner removes their results;
 retiring a language removes its lessons, their content and their results.
 
 **Every content table hangs off `lessons`, and the only things hanging off `learners`
-are `lesson_results` and `faceprints`.** That is what keeps deleting a household a single
-statement: the five content tables were never that household's to delete, and the two
-that were both cascade.
+are `lesson_results`, `faceprints` and `consents`.** That is what keeps deleting a
+household a single statement: the five content tables were never that household's to
+delete, and the three that were all cascade. (Read from the schema itself:
+`pragma_foreign_key_list` names those three tables, and only those, as referencing
+`learners`.)
 
 > **Foreign keys only work because the code turns them on.** SQLite ignores foreign key
 > constraints unless a connection issues `PRAGMA foreign_keys = ON`, and it is a silent
@@ -312,9 +315,10 @@ that were both cascade.
 
 ## How "next lesson" is decided
 
-**The lowest-positioned lesson in that language with no `completed` result for that
-learner.** A `partial` or `skipped` attempt does *not* advance them — they get the same
-lesson again.
+**The lowest-positioned lesson in that language whose latest result, for that learner,
+is not a completion.** A `partial` or `skipped` attempt does *not* advance them — they
+get the same lesson again — and a `partial` recorded after a completion (a redo) puts
+the lesson back in front of them.
 
 This is unambiguous rather than merely ordered because `lessons` carries
 `UNIQUE (language_code, position)`: two lessons cannot tie for the same slot, so
@@ -330,9 +334,10 @@ WHERE l.language_code = ?
   AND NOT EXISTS (
         SELECT 1 FROM lesson_results AS r
         WHERE r.lesson_id = l.id AND r.learner_id = ? AND r.outcome = 'completed'
-          AND r.recorded_at = (
-                SELECT MAX(r2.recorded_at) FROM lesson_results AS r2
+          AND r.id = (
+                SELECT r2.id FROM lesson_results AS r2
                 WHERE r2.learner_id = ? AND r2.lesson_id = l.id
+                ORDER BY r2.id DESC LIMIT 1
               )
       )
 ORDER BY l.position
@@ -344,11 +349,36 @@ unknown.
 
 **"Finished" means the LATEST result for a lesson is a completion**, not that a
 completion appears anywhere in its history — and D38 is why. `lesson_results` is
-append-only, with no `UPDATE` and no `DELETE` anywhere in the module, because a
-learner's history is the record; under the older "any completed row ever" reading, a
-lesson recorded finished by mistake was finished for good and there was no way back.
-Reading the last word instead makes a correction possible by adding to the history
-rather than editing it.
+append-only: no statement in the module updates or deletes one of its rows, and the only
+thing that removes them is the cascade when a learner is erased, because a learner's
+history is the record. Under the older "any completed row ever" reading, a lesson
+recorded finished by mistake was finished for good and there was no way back. Reading
+the last word instead makes a correction possible by adding to the history rather than
+editing it.
+
+**"Latest" means last written — the highest row `id` — and never the latest
+`recorded_at`.** `recorded_at` is the robot's wall clock, and that clock can step
+backwards: a device with no battery-backed clock that boots before network time sync,
+or somebody changing the time. When the rule ordered by `recorded_at`, a completion
+written on a clock reading 1970 lost to the partial written before it, and the lesson
+was offered again with the completion sitting in the table — measured, through
+`record_result` with the clock set back. Ordering by `id` is also what settles a
+same-millisecond tie, which used to need a tie-break of its own.
+
+The `id` is insertion order because `lesson_results` is an `INTEGER PRIMARY KEY`
+without `AUTOINCREMENT`: a new row gets `max(id) + 1`. The only deletions are cascades,
+which remove all of one learner's rows or all of one lesson's, so every history that
+survives keeps every row and a new row lands above all of them. Measured with the rows
+holding the maximum id erased: the next row reused that id, which was still above
+every surviving row. SQLite abandons `max + 1` only once a row holds `2**63 - 1`, which
+only a writer setting `id` explicitly could cause, and none does.
+
+`recorded_at` is still stored and still returned: it says *when*, for a person reading
+the history. It no longer decides *which*. `get_progress`'s `completed` list, its
+`attempts` order (newest written first), and `get_practised_languages`' `completed`
+count all use the same rule — the last of these counted "any completion ever" until it
+was fixed, so the profile and the progress tool disagreed about a lesson the learner had
+asked to redo.
 
 The learner is bound **twice** — once to scope the results, once inside the
 latest-result subquery — because the SQL guard requires every personal relation a
@@ -499,22 +529,28 @@ came from:
 - **Lessons converted from a published course** carry `origin = 'converted_from_course'`
   and all four parts, so a suspect line can be found on the page it was read off.
 
-### Converted lessons (6 rows, Italian)
+### Converted lessons (23 rows, four courses)
 
-Italian's first six lessons are units of *FSI Italian FAST*, Volume 1, converted in W24.
-They are the only lessons in the catalog that carry content — a dialogue, numbered usage
-notes and typed drills — and they live in
-`src/reachy_language_tutor/learners/converted_lessons.json`, shipped as package data and
-written by `_seed_converted_lessons()` inside the same transaction as the rest of the
-seed.
+Twenty-three lessons are units converted from published courses, and they are the only
+lessons in the catalog that carry content — a dialogue, numbered usage notes and typed
+drills. They live in `src/reachy_language_tutor/learners/converted_lessons.json`,
+shipped as package data and written by `_seed_converted_lessons()` inside the same
+transaction as the rest of the seed. Italian's six, from *FSI Italian FAST*, Volume 1,
+were the first, converted in W24; the table below lists them.
 
 That file holds a **list of courses**, each owning its own lessons and carrying its own
-name, language, rights position and source SHA-256. It holds three courses today —
-Italian, Spanish and Brazilian Portuguese — and the seeder walks the list and takes each
-lesson's language and course name from the course that owns it, so adding a language is
-an appended entry rather than a change to the ones already there. (This paragraph said
-"Italian is the only course in it so far" through both later conversions, while the
-table below it was kept current; the table is pinned by a test and the prose is not.)
+name, language, rights position and source SHA-256. It holds four courses today —
+Italian, Spanish, Brazilian Portuguese and Metropolitan French, with six, six, six and
+five lessons — and the seeder walks the list and takes each lesson's language and course
+name from the course that owns it, so adding a language is an appended entry rather than
+a change to the ones already there. (This paragraph said "Italian is the only course in
+it so far" through two later conversions, and "three courses" through the fourth; the
+lesson table further up is pinned by a test and this prose is not.)
+
+**A lesson id and a language code must have the shape the readers look up** — lowercase
+ASCII letters and digits joined by single hyphens, like every id above. The seed refuses
+to write a row outside it, because a lesson the readers refuse to look up exists and can
+never be reached.
 
 | Position | Lesson | Source unit |
 |---|---|---|
@@ -560,7 +596,7 @@ Re-seeding is safe because the two kinds of row are treated differently:
 - **App-owned reference data** (`languages`, `lessons`, `lesson_sources`) is *converged*
   on a version bump, so a corrected lesson title — or a corrected page reference —
   reaches installations that already seeded.
-- **Learner-owned rows** (`learners`, `lesson_results`, `faceprints`) are never
+- **Learner-owned rows** (`learners`, `lesson_results`, `faceprints`, `consents`) are never
   overwritten. A household may have renamed the sample learner or practised against it —
   and nothing seeds a faceprint at all, because a shipped faceprint would be fabricated
   biometric data for a person who does not exist.
@@ -622,11 +658,25 @@ To ship a catalog change: edit the `SEED_*` constants in `store.py` and bump
 shipped it, so a catalog edit without a bump fails rather than silently reaching no
 installed robot.
 
-**To change the schema: edit `schema.sql` and bump `SCHEMA_VERSION`.** There is no
-migration-branch mechanism and never has been; the previous sentence here described one
-that does not exist. What actually happens is that `_apply_schema` re-runs the whole
-script whenever the database's own `user_version` is behind, and every statement in it
-is `CREATE ... IF NOT EXISTS` — so re-running it is a no-op for what is already there.
+**To change the schema: edit `schema.sql` and bump `SCHEMA_VERSION`.** What happens
+then is that `_apply_schema` re-runs the whole script whenever the database's own
+`user_version` is behind, and every statement in `schema.sql` is
+`CREATE ... IF NOT EXISTS` — so re-running it is a no-op for what is already there.
+
+**There is one migration beside the script, and a second step on the same path.**
+Version 5 widened the `consents` scope CHECK, which re-running the script cannot do, so
+`_widen_consent_scopes` runs `consent_scopes.v5.sql` first: a table rebuild (create the
+replacement, copy, drop, rename, recreate the index) inside one `BEGIN IMMEDIATE`
+transaction, driven by what the table's own SQL says rather than by the version number.
+IMMEDIATE because the app and the enrol command can both upgrade at the same moment:
+with a deferred `BEGIN`, 5 of 72 concurrent upgrades of a version-4 database failed with
+"database is locked", and 0 of 72 with `IMMEDIATE`. After the script,
+`_remove_faceprints_nobody_agreed_to` deletes any faceprint whose learner holds no
+standing face-recognition consent — possible only on a database from version 3, which
+stored faceprints before consents existed — using the insert gate's own meaning of
+"standing" and only statements already scoped to one learner. It runs on the upgrade path
+only, so a version-3 database that an earlier build already took to version 5 does not
+pass through it; no build had a caller that wrote faceprints at version 3.
 
 That mechanism has a sharp edge worth stating plainly:
 
@@ -650,7 +700,12 @@ tables is the migratable case.
 A missing directory is created. A corrupt or unreadable database is **logged and
 reported, never deleted** — it may hold real progress that a human can still recover.
 `ensure_learner_database()` returns `ready=False` with the error rather than raising,
-so the app starts and can say learner data is unavailable instead of crashing.
+so the app starts instead of crashing. What the app does with that result, today: it
+discards it. `main.py` calls `ensure_learner_database()` at startup and again before
+`enrol` registers somebody, and neither call reads the returned `EnsureResult`. What
+does speak up is the store: the function logs "The learner database is unavailable" at
+WARNING, and the tools that need learner data call `store_is_available()` before telling
+a person anything that depends on it.
 
 ## The query interface
 
@@ -903,6 +958,9 @@ becoming an empty lesson.
 
 **Measured on 2026-09-14**: Italian and Spanish have material; French, German and
 Portuguese do not. The catalog advertises five languages and can teach two.
+**Measured again on 2026-09-24**, on a freshly seeded database: French, Italian,
+Portuguese and Spanish have material and German does not — four of five, since the
+Portuguese and French conversions landed. The observation below is from the earlier date.
 
 **What this does NOT fix, observed live on 2026-09-14.** Driven through
 `tests/language_availability_session.py`, the refusal works and holds under pressure:
@@ -976,7 +1034,7 @@ companions matter most on that upgrade path — a faceprint can sit in a world-r
 
 | `reason` | Cause |
 |---|---|
-| `unknown_learner` | No such learner. Nothing is written. |
+| `unknown_learner` | No such learner, or a learner id no lookup could match: anything but a string, an integer (not a `bool`) inside SQLite's 64-bit range, or a float that is not NaN. The second case is logged with the shape it was refused for, the first is silent. It used to reach the database and come back `storage_unavailable` for a list or a dict. Nothing is written. |
 | `invalid_model` | The embedding model name was not a non-empty string of at most 128 characters, made only of letters, digits, dot, underscore and hyphen, that encodes as UTF-8. Anything path-shaped lands here. Refused before the bind, so it is reported as the caller error it is. |
 | `invalid_vector` | The vector was not a non-empty sequence of at most 1024 numbers that `struct` can represent as float32. A sequence of `bool` lands here too, deliberately: `struct.pack("<f", True)` does not raise — it silently packs `1.0` — so without an explicit exclusion a vector of flags would be stored as a face. |
 | `no_consent` | Nobody has agreed to face recognition for this learner, or the consent they gave has been withdrawn. Not a check `save_faceprint` performs: the INSERT selects its row **from** the `consents` table, so an unconsented learner produces nothing to insert. A refusal changes nothing — an existing faceprint survives it byte for byte. |
@@ -1327,7 +1385,7 @@ so every failure comes back as a code:
 | `invalid_outcome` | Not one of `completed`, `partial`, `skipped`. Case-sensitive — silently lowercasing a guess would record something the model did not mean. |
 | `invalid_score` | A score outside 0–100, or one that is not a whole number. Checked by type before it is compared, so a value of any shape lands here rather than raising. A `bool` lands here too, deliberately: Python's `bool` is a subclass of `int`, so without an explicit exclusion `True` would be accepted as a score of 1. |
 | `invalid_recorded_at` | An explicit timestamp that is not a whole number of milliseconds, or one outside the 64-bit range a SQLite `INTEGER` can hold. No judgement is made about the date itself: `0`, a negative value and a far-future value are all accepted, because the schema puts no range on this column. |
-| `unknown_learner` | No such learner. Nothing is written. |
+| `unknown_learner` | No such learner, or a learner id no lookup could match: anything but a string, an integer (not a `bool`) inside SQLite's 64-bit range, or a float that is not NaN. The second case is logged with the shape it was refused for, the first is silent. It used to reach the database and come back `storage_unavailable` for a list or a dict. Nothing is written. |
 | `unknown_lesson` | No such lesson. Nothing is written. |
 | `rejected_by_database` | A constraint refused the row — a backstop behind the checks above. |
 | `storage_unavailable` | The database could not be opened or written. |
@@ -1561,8 +1619,15 @@ are shared reference data, and treating them as personal would be a false positi
 One connection per call, opened and closed inside that call, never stored, cached, or
 carried across an `await`. Because nothing is shared, SQLite's same-thread check can
 never fire, and a tool that later wants to move a call off the event loop can wrap it
-without this module changing. WAL mode means readers never block the writer; two
-writers serialise on the busy timeout rather than failing.
+without this module changing. WAL mode means readers never block the writer, and two
+writers serialise on the busy timeout: measured, eight processes making 1,280 writes and
+erasures between them produced no failure. The exception is a transaction that READS
+before it writes — a stale read snapshot cannot be waited out, so SQLite answers
+"database is locked" at once. The consent rebuild was that shape under a deferred
+`BEGIN` and failed 5 of 72 concurrent upgrades; it opens with `BEGIN IMMEDIATE` now, as
+`record_consent` and `forget_learner_entirely` already did. (The erasure checkpoint is
+the other thing a reader can hold up; see
+[Is the data actually gone?](#is-the-data-actually-gone-measured-and-the-answer-is-not-the-obvious-one).)
 
 There is deliberately no connection pool and no cached handle: a pool is exactly the
 thing that lets a connection escape into another thread.
@@ -1571,11 +1636,12 @@ thing that lets a connection escape into another thread.
 
 | Stays | Goes |
 |---|---|
-| The five exported functions' signatures | The SQLite bodies behind them |
+| The exported functions' signatures (`learners.__all__`, seventeen today) | The SQLite bodies behind them |
 | Every type in `models.py` | `connect`, `ensure_learner_database`, the seed constants |
 | The reason-code vocabulary | The local database file |
 
-A hosted backend implements the same five exported functions over HTTPS and returns the
+A hosted backend implements the same exported functions over HTTPS — less the
+device-local faceprint ones, which `store.py`'s docstring keeps on the robot — and returns the
 same types built from JSON. `storage_unavailable` already exists for the failure mode the
 network introduces, so callers written today need no change when a request times out.
 Callers that import from the package rather than the storage module do not move at all.
