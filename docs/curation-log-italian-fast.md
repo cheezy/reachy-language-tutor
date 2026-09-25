@@ -217,18 +217,21 @@ Every shipped line was checked against a page image, but "checked against the pa
 "printed on the page" are not the same claim, and the difference is worth setting out
 rather than leaving for a reader to discover.
 
-**Printed verbatim:** all six dialogues, every repetition drill, and the cue-response
+**Printed verbatim:** all six dialogues, every repetition drill except the two named
+under the next heading, and the cue-response
 drills taken straight from the units' printed models — the time-telling pairs in unit IV,
 the `Dove metto...` pairs in unit VI.
 
-**Recomposed from the unit's own printed sentences.** A few cue-response answers are
-formed the way the exercise asks the learner to form them, out of words printed in the
-same unit, but do not themselves appear on the page. For instance
-`Preferisce una tinta unita o fantasia?` is printed, and the answer
-`Preferisco una tinta unita.` is the learner's half of that exchange. Unit IV's
-`meno` pairs are the same case: the course prints Model 3 as an instruction to continue
-Model 2's sentences with `meno`, so `No, sono le tre meno cinque.` is the exercise being
-done rather than a line lifted from it.
+**Recomposed from the unit's own printed sentences.** A few drill lines are formed the
+way the exercise asks the learner to form them, out of words printed in the same unit,
+but do not themselves appear on the page. For instance
+`Preferisce una tinta unita o fantasia?` is printed, and `Preferisco una tinta unita.`
+is the learner's half of that exchange. Unit IV's `meno` pairs are the same case: the
+course prints Model 3 as an instruction to continue Model 2's sentences with `meno`, so
+`Sono le tre meno cinque.` is the exercise being done rather than a line lifted from it.
+Both ship as **repetition** drills, not cue-response answers — an earlier version of this
+paragraph called them answers and quoted the second as `No, sono le tre meno cinque.`,
+a string that is not in the shipped file.
 
 **Invented outright, and this is the whole list:** the two taxi fares in unit IX
 (`dodici euro`, `quindici euro`), and the caller's surname in unit XVII (`il signor

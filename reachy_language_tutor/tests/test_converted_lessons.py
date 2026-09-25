@@ -1732,7 +1732,7 @@ async def test_a_learner_is_offered_a_converted_lesson_and_can_finish_it(instanc
 
     progress = await call("get_progress", {"language": language})
     assert "error" not in progress
-    assert progress["next_lesson"]["id"] == expected_id, (
+    assert progress["next_lesson"]["position"] == expected[0], (
         f"the first thing a {language} learner is offered is a converted unit"
     )
 

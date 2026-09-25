@@ -24,7 +24,7 @@ def _most_recently_completed(progress: Any) -> str | None:
     because that placeholder sits at a higher position. The tutor says this field out loud, so the
     learner would have been congratulated on the wrong lesson.
 
-    ``attempts`` is ordered ``recorded_at DESC, id DESC`` by the store, so the first
+    ``attempts`` is ordered newest-written first (``id DESC``) by the store, so the first
     completed attempt in it is the most recent one. Only lessons in ``completed`` are
     consulted, so a lesson that was later un-completed cannot be named.
     """
@@ -169,9 +169,12 @@ class GetProgress(Tool):
             "remaining_count": len(progress.remaining),
             "total_lessons": len(progress.completed) + len(progress.remaining),
             "last_completed": _most_recently_completed(progress),
+            # No id, on the same rule start_lesson and redo_lesson follow: no tool
+            # accepts a lesson id, so handing one to the model only invites it to
+            # repeat one back. Position is unique within a language and is what the
+            # tests compare against the store.
             "next_lesson": (
                 {
-                    "id": next_lesson.id,
                     "position": next_lesson.position,
                     "title": next_lesson.title,
                     "objective": next_lesson.objective,

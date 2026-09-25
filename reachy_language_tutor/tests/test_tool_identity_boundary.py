@@ -262,6 +262,21 @@ def instance(tmp_path: Path) -> Path:
     # landing, the forbidden-token set would keep its name half and silently lose its
     # progress half, and every test here would still pass.
     assert len(_housemate_snapshot(tmp_path)[2]) == 2
+
+    # The primary learner's most recent completion must be a lesson with material, or
+    # redo_lesson never reaches its body. The seed's Spanish history is placeholders
+    # only, and redo_lesson now refuses those (lesson_not_written_yet) before pinning
+    # anything -- correctly, but that left the attack below hitting only the refusal,
+    # which this suite rightly counts as "reached only the validator". Before that fix
+    # the suite reached redo_lesson's body solely through the defect.
+    redo_target = store.get_progress(PRIMARY_LEARNER, PINNED_LANGUAGE, instance_path=tmp_path)
+    assert redo_target is not None and redo_target.next_lesson is not None
+    redo_content = store.get_lesson_content(redo_target.next_lesson.id, instance_path=tmp_path)
+    assert redo_content is not None and (redo_content.drills or redo_content.notes)
+    assert (
+        store.record_result(PRIMARY_LEARNER, redo_target.next_lesson.id, "completed", instance_path=tmp_path).recorded
+        is True
+    )
     return tmp_path
 
 
@@ -270,7 +285,7 @@ def instance(tmp_path: Path) -> Path:
 # store really accepts rather than one it refuses as unknown_lesson -- which would leave
 # the write-direction control looking green while nothing was ever written. A test below
 # asserts both constants are still in the seeded catalog, so they cannot go stale.
-PINNED_LESSON = "es-01-greetings"
+PINNED_LESSON = "es-fast-01-getting-started-in-class"
 PINNED_LANGUAGE = "es"
 
 
@@ -1281,15 +1296,23 @@ def test_a_tool_that_declares_an_identity_fails_the_schema_check() -> None:
         _assert_declares_no_identity_parameter(_DeclaredIdentityTool())
 
 
-def test_the_pinned_lesson_the_harness_uses_is_in_the_seeded_catalog() -> None:
+def test_the_pinned_lesson_the_harness_uses_is_in_the_seeded_catalog(tmp_path: Path) -> None:
     """A stale constant would turn a real write into a silent unknown_lesson refusal.
 
     _run pins PINNED_LESSON before every dispatch so a write tool is attacked in its
     body rather than at its "nothing is running" guard. If that id stopped naming a
     real lesson, every such dispatch would be refused by the store and the
     write-direction control would pass while writing nothing -- green, and vacuous.
-    """
-    lessons = {lesson_id: language_code for lesson_id, language_code, *_ in store.SEED_LESSONS}
 
-    assert PINNED_LESSON in lessons, sorted(lessons)
-    assert lessons[PINNED_LESSON] == PINNED_LANGUAGE
+    It must also be a lesson WITH MATERIAL. finish_lesson completes it during the
+    sweep, which makes it the primary learner's latest completion, and redo_lesson
+    refuses a lesson with nothing written in it -- so a placeholder here leaves
+    redo_lesson attacked only at that refusal. Read from a seeded database rather than
+    SEED_LESSONS, because converted lessons are seeded from JSON and are not in it.
+    """
+    assert store.ensure_learner_database(tmp_path).ready is True
+    lesson = store.get_lesson(PINNED_LESSON, instance_path=tmp_path)
+    assert lesson is not None, f"{PINNED_LESSON} is not in the seeded catalog"
+    assert lesson.language_code == PINNED_LANGUAGE
+    content = store.get_lesson_content(PINNED_LESSON, instance_path=tmp_path)
+    assert content is not None and (content.drills or content.notes), f"{PINNED_LESSON} has nothing written in it"

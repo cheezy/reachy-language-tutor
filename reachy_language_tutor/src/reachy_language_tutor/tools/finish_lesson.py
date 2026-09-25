@@ -1,9 +1,10 @@
 import logging
 from typing import Any
 
-from reachy_language_tutor.learners import OUTCOMES, get_lesson, get_progress, record_result
+from reachy_language_tutor.learners import OUTCOMES, get_lesson, get_progress, record_result, get_lesson_content
 from reachy_language_tutor.lesson_feedback import react_to_lesson_event, event_for_recorded_result
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
+from reachy_language_tutor.tools.get_lesson_content import lesson_has_nothing_to_teach
 
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,11 @@ _REFUSALS: dict[str, str] = {
     "unknown_learner": "I cannot find your records, so I have not saved that.",
     "unknown_lesson": "I do not know that lesson any more, so I have not saved anything.",
     "invalid_outcome": "I did not understand how that lesson went, so I have not saved it.",
-    "invalid_score": "I could not save that just now, so it is not recorded.",
+    # Not the storage sentence it used to share. That one says "just now", which is a
+    # fault in the robot and invites trying again later; this is a score the store will
+    # not take, and the lesson saves at once without it. The description tells the
+    # model so; this sentence is what the learner hears if it says anything at all.
+    "invalid_score": "I could not use that score, so nothing was saved.",
     # Unreachable from this tool, which never passes recorded_at -- and kept anyway, so
     # that a future caller which does pass one cannot fall into the generic string.
     "invalid_recorded_at": "I could not save that just now, so it is not recorded.",
@@ -45,11 +50,15 @@ class FinishLesson(Tool):
     name = "finish_lesson"
     description = (
         "Save how the lesson that is running went, once the person has finished practising it. Say only whether "
-        "they completed it, got part way through it, or skipped it, and a score out of a hundred if you judged "
-        "one. You cannot choose WHICH lesson is saved or whose it is: it saves the lesson start_lesson began, "
-        "for the person you are talking to. If it says no lesson is running, say so rather than guessing which "
-        "one they meant. Save how it went and nothing about the person, never a remark of your own, and never "
-        "tell someone a lesson is saved when it is not."
+        "they completed it, got part way through it, or skipped it. A score is optional: give one only if you "
+        "judged one, as a whole number from 0 to 100, and leave it out otherwise. If the answer's reason is "
+        "'invalid_score', nothing was saved -- call this again with the same outcome and no score. You cannot "
+        "choose WHICH lesson is saved or whose it is: it saves the lesson that is running -- the one start_lesson "
+        "or redo_lesson opened -- for the person you are talking to. If it says no lesson is running, say so "
+        "rather than guessing which one they meant. 'next_lesson' is the next lesson with something written in "
+        "it; when it is null, they have finished every lesson you can teach in that language, even if "
+        "'remaining_count' still counts lessons that are planned but not written. Save how it went and nothing "
+        "about the person, never a remark of your own, and never tell someone a lesson is saved when it is not."
     )
     # Two properties, and nothing identity-shaped or lesson-shaped may ever join them.
     # The learner comes from application state and the lesson comes from the pinned
@@ -185,7 +194,7 @@ class FinishLesson(Tool):
         # pinned and recordable a second time.
         deps.lesson_session.clear()
 
-        standing = self._standing(learner_id, session.lesson_id, deps)
+        standing, more_lessons_remain = self._standing(learner_id, session.lesson_id, deps)
         logger.info(
             "Tool call: finish_lesson recorded=1 completed=%s remaining=%s",
             standing["completed_count"],
@@ -202,13 +211,10 @@ class FinishLesson(Tool):
         # reach a reaction -- enforced by where this sits rather than by a flag somebody
         # has to remember to check.
         #
-        # _standing returns an all-None dict when the read-back after the write fails, and
-        # that is NOT a finished language -- it is a fault in the robot. `language is
-        # None` is what tells the two apart, so a failed read-back is passed as "unknown"
-        # and can only produce the ordinary recorded-result reaction. Derived here rather
-        # than inside the policy because a helper taking `standing` would be handed
-        # lesson_title, which the policy is not allowed to see.
-        more_lessons_remain = None if standing["language"] is None else standing["next_lesson"] is not None
+        # more_lessons_remain is three-valued and comes from _standing beside the dict,
+        # never derived from it: a read-back that failed part way is "unknown" (None),
+        # and None can only produce the ordinary recorded-result reaction. It is handed
+        # to the policy as a bare bool so the policy never sees lesson_title.
         react_to_lesson_event(
             event_for_recorded_result(outcome, more_lessons_remain=more_lessons_remain),
             movement_manager=deps.movement_manager,
@@ -224,8 +230,8 @@ class FinishLesson(Tool):
         return recorded_as
 
     @staticmethod
-    def _standing(learner_id: str, lesson_id: str, deps: ToolDependencies) -> dict[str, Any]:
-        """Read back where the learner now stands in the language this lesson belongs to.
+    def _standing(learner_id: str, lesson_id: str, deps: ToolDependencies) -> tuple[dict[str, Any], bool | None]:
+        """Read back where the learner now stands, and whether a lesson they can be taught remains.
 
         Read AFTER the write, so the figures are the ones the tutor should speak, and the
         database rather than this tool decides what counts as done. It is also what makes
@@ -234,6 +240,20 @@ class FinishLesson(Tool):
 
         A language whose lookup fails leaves the counts None rather than guessing: the row
         is already saved by then, so a failed read must not turn into a failed write.
+
+        next_lesson is the next lesson that has something written in it, NOT the
+        store's next lesson. They differ once a learner finishes the last converted
+        lesson in a language: the store's next is a title-and-objective placeholder that
+        start_lesson refuses (lesson_has_nothing_to_teach), and naming it here had the
+        tutor promise a lesson the robot then declines to teach, while the
+        language-finished reaction could never fire because a placeholder always
+        "remained". The same predicate start_lesson gates on decides it here, so the
+        two cannot disagree about which lessons are teachable.
+
+        The second value is three-valued. True: a teachable lesson remains. False: every
+        remaining lesson was read and none has anything written in it. None: something
+        could not be read, so nothing is claimed -- celebrating a finished language
+        because a lookup broke would tell a learner they are done when they are not.
         """
         empty: dict[str, Any] = {
             "language": None,
@@ -247,13 +267,27 @@ class FinishLesson(Tool):
         # grew with the catalog and that the conversation path should not pay for.
         lesson = get_lesson(lesson_id, instance_path=deps.instance_path)
         if lesson is None:
-            return empty
+            return empty, None
 
         progress = get_progress(learner_id, lesson.language_code, instance_path=deps.instance_path)
         if progress is None:
-            return empty
+            return empty, None
 
-        nxt = progress.next_lesson
+        # In position order, stopping at the first lesson with material -- one read in
+        # the ordinary case, and one per remaining lesson only when none has any.
+        nxt = None
+        more_lessons_remain = False
+        for candidate in progress.remaining:
+            content = get_lesson_content(candidate.id, instance_path=deps.instance_path)
+            if content is None:
+                # Not "nothing remains": unknown. The whole read-back is withheld, the
+                # way a failed progress read withholds it above, so the model is never
+                # handed a null next_lesson it has been told means "all finished".
+                return empty, None
+            if not lesson_has_nothing_to_teach(content):
+                nxt, more_lessons_remain = candidate, True
+                break
+
         return {
             "language": progress.language_name,
             "lesson_title": lesson.title,
@@ -263,4 +297,4 @@ class FinishLesson(Tool):
             "next_lesson": (
                 {"position": nxt.position, "title": nxt.title, "objective": nxt.objective} if nxt else None
             ),
-        }
+        }, more_lessons_remain

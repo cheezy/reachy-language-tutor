@@ -66,7 +66,7 @@ IDENTITY_KEYS = (
 
 @pytest.fixture
 def instance(tmp_path: Path) -> Path:
-    """A prepared learner database at a temporary instance path."""
+    """Return a prepared learner database at a temporary instance path."""
     assert store.ensure_learner_database(tmp_path).ready is True
     return tmp_path
 
@@ -111,7 +111,10 @@ async def test_the_next_lesson_is_the_one_the_store_says_it_is(instance: Path) -
 
     result = await _call({"language": "Spanish"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
 
-    assert result["next_lesson"]["id"] == expected.next_lesson.id
+    assert result["next_lesson"]["position"] == expected.next_lesson.position
+    assert result["next_lesson"]["title"] == expected.next_lesson.title
+    # The model is never handed a lesson id: no tool accepts one.
+    assert set(result["next_lesson"]) == {"position", "title", "objective"}
     assert result["completed_count"] == len(expected.completed)
     assert result["remaining_count"] == len(expected.remaining)
 
@@ -514,12 +517,16 @@ async def test_it_leaves_the_running_lesson_exactly_where_it_found_it(instance: 
 
 
 def _fake_progress(completed: list[tuple[str, str]], attempts: list[tuple[str, str]]) -> Any:
-    """A progress object with just the two fields the helper reads."""
-    lesson = lambda lid, title: type("L", (), {"id": lid, "title": title})()
-    attempt = lambda lid, outcome: type("A", (), {"lesson_id": lid, "outcome": outcome})()
+    """Build a progress object with just the two fields the helper reads."""
+
+    def lesson(lid: str, title: str) -> Any:
+        return type("L", (), {"id": lid, "title": title})()
+
+    def attempt(lid: str, outcome: str) -> Any:
+        return type("A", (), {"lesson_id": lid, "outcome": outcome})()
+
     return type(
-        "P", (), {"completed": tuple(lesson(*c) for c in completed),
-                  "attempts": tuple(attempt(*a) for a in attempts)}
+        "P", (), {"completed": tuple(lesson(*c) for c in completed), "attempts": tuple(attempt(*a) for a in attempts)}
     )()
 
 

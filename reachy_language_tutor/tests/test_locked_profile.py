@@ -819,7 +819,7 @@ def test_the_prompt_describes_the_pin_as_last_one_wins() -> None:
     )
 
     text = _prompt()
-    assert "whichever lesson start_lesson began last" in text
+    assert "whichever lesson start_lesson or redo_lesson opened last" in text
     assert "starting the new one replaces the old one" in text
 
 
@@ -860,3 +860,11 @@ def test_the_prompt_does_not_promise_an_identity_the_app_may_not_have() -> None:
     text = _prompt()
     assert "The app tells you who you are talking to; when it has not, the tools say so" in text
     assert "always told who you are talking to" not in text
+
+
+def test_the_prompt_names_both_tools_that_open_a_lesson_and_the_offer_list() -> None:
+    """redo_lesson opens a lesson as well, and start_lesson's refusal offers a narrower list."""
+    text = _prompt()
+    assert "After start_lesson or redo_lesson opens one, call get_lesson_content" in text
+    assert "whichever lesson start_lesson began last" not in text
+    assert "languages_to_offer_instead: offer those" in text

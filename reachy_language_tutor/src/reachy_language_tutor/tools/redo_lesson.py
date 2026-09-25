@@ -26,11 +26,14 @@ from reachy_language_tutor.learners import (
     get_progress,
     get_lesson_content,
     get_language_catalog,
+    split_catalog_by_material,
 )
 from reachy_language_tutor.lesson_session import LessonSessionRefusedError
+from reachy_language_tutor.lesson_feedback import LessonEvent, react_to_lesson_event
 from reachy_language_tutor.tools.core_tools import Tool, ToolDependencies
 from reachy_language_tutor.tools.start_lesson import _lines_worth_hearing
 from reachy_language_tutor.tools._language_choice import resolve_language
+from reachy_language_tutor.tools.get_lesson_content import lesson_has_nothing_to_teach
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,12 @@ _REFUSALS: dict[str, str] = {
     # go back to, and saying so plainly is kinder than implying they did something wrong.
     "nothing_finished_yet": "You have not finished a lesson in that language yet, so there is none to go back to.",
     "could_not_reopen": "I could not reopen that lesson just now, so nothing has changed.",
+    # start_lesson's sentence for the same fact, word for word: the last lesson they
+    # finished is one with nothing written in it -- a lesson finished before its
+    # content existed -- and reopening it could only mean improvising it.
+    "lesson_not_written_yet": (
+        "I have that lesson in the plan but nothing written to teach from, so I would only be making it up."
+    ),
 }
 
 
@@ -63,9 +72,12 @@ class RedoLesson(Tool):
         "you it was marked finished when it was not. Name the language they asked about. You cannot choose "
         "WHICH lesson this is -- it is the last one their records show they finished -- and you must not ask "
         "anyone for a name or an id in order to call it. It reopens that lesson and starts it, so teach it "
-        "from the beginning. Read 'reopened': when it is false, 'reason' says why, and a reason of "
-        "'nothing_finished_yet' simply means there is no finished lesson to go back to. Never tell someone a "
-        "lesson has been reopened when it has not, and never invent a lesson or a title."
+        "from the beginning: call get_lesson_content to read it, exactly as after start_lesson. Read 'reopened': "
+        "when it is false, 'reason' says why, and a reason of 'nothing_finished_yet' simply means there is no "
+        "finished lesson to go back to. A reason of 'lesson_not_written_yet' means the last lesson they finished "
+        "has nothing written in it, so there is nothing to teach it from: say so plainly, name the languages in "
+        "'languages_with_material' as the ones you can teach, and do not offer to make it up. Never tell someone "
+        "a lesson has been reopened when it has not, and never invent a lesson or a title."
     )
     # One property, and nothing identity-shaped or lesson-shaped may ever join it. A
     # lesson id here would hand back the write path this whole boundary exists to keep
@@ -143,6 +155,23 @@ class RedoLesson(Tool):
             # learner a second way.
             logger.error("redo_lesson: the finished lesson could not be read back, so nothing was reopened")
             return _refused("could_not_reopen")
+        if lesson_has_nothing_to_teach(content):
+            # start_lesson's gate, and for start_lesson's reason: a lesson with nothing
+            # written in it can only be improvised. It is reachable HERE in a way it is
+            # not there, because a learner can have finished a lesson before its content
+            # existed -- the title-and-objective placeholders were taught that way
+            # before any course was converted. Without this, the lesson was pinned with
+            # no lines, its completion could not be measured, and a second "completed"
+            # was written with nothing taught. LessonSessionHolder.open refuses such a
+            # pin as well; this answers first so the learner hears why.
+            logger.info("redo_lesson: the last finished lesson has nothing written in it, so it was not reopened")
+            with_material, _without_material = split_catalog_by_material(catalog)
+            return _refused(
+                "lesson_not_written_yet",
+                language=matched.name,
+                language_code=matched.code,
+                languages_with_material=with_material,
+            )
 
         # THIS TOOL WRITES NOTHING, and that is a deliberate second thought rather
         # than an omission. The first version appended a "partial" row here to stop the
@@ -172,10 +201,17 @@ class RedoLesson(Tool):
             return _refused("could_not_reopen")
 
         logger.info("Tool call: redo_lesson reopened=1 language=%s", matched.code)
+        # The same reaction start_lesson gives, for the same event: a lesson the app has
+        # just pinned and is about to be taught. Below the pin and every refusal, so a
+        # lesson that was not reopened is never nodded at; handed the event and the
+        # movement sink only, never deps, exactly as start_lesson does.
+        react_to_lesson_event(LessonEvent.LESSON_STARTED, movement_manager=deps.movement_manager)
         return {
             "reopened": True,
             "language": matched.name,
             "language_code": matched.code,
-            # The title, never the id -- the same rule every other lesson tool follows.
+            # The title, never the id -- the rule start_lesson, get_lesson_content and
+            # finish_lesson follow. get_progress still returns next_lesson.id; no tool
+            # accepts a lesson id, so it opens no write path, but it is the exception.
             "lesson": {"title": lesson.title, "objective": lesson.objective},
         }

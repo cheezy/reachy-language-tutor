@@ -6,7 +6,7 @@ accepts an identity parameter. The lesson being practised is the same kind of fa
 the model can name the lesson, it can record a result against a lesson nobody ran --
 a write path back in the model's hands, which is the boundary put back one layer up.
 
-So the app holds the running lesson too. start_lesson pins it here; finish_lesson reads
+So the app holds the running lesson too. start_lesson (or redo_lesson) pins it here; finish_lesson reads
 it back. Neither takes a lesson id from the conversation, exactly as neither takes a
 learner id -- and a holder takes no learner id either: it is BOUND to one learner when
 the app builds it, beside the current_learner_id it was built from. open() therefore has
@@ -31,8 +31,10 @@ package boundary.
 """
 
 from __future__ import annotations
+import re
 import time
 import logging
+from typing import Iterable
 from dataclasses import dataclass
 
 
@@ -159,6 +161,10 @@ class LessonSessionHolder:
         # clear(), so coverage can never outlive the lesson it describes and be read
         # against the next one.
         self._teachable: tuple[str, ...] = ()
+        # The same lines, longest first -- the order note_spoken consumes them in. Kept
+        # beside _teachable rather than instead of it so coverage_for and the floor keep
+        # reading one plain tuple.
+        self._longest_first: tuple[str, ...] = ()
         self._spoken: set[str] = set()
         self._learner_turns: int = 0
 
@@ -167,7 +173,7 @@ class LessonSessionHolder:
         lesson_id: str,
         language_code: str,
         opened_at: int | None = None,
-        teachable_lines: tuple[str, ...] | list[str] = (),
+        teachable_lines: Iterable[str] | None = None,
     ) -> LessonSession:
         """Pin a lesson as the one running, replacing any earlier one.
 
@@ -175,8 +181,25 @@ class LessonSessionHolder:
         was built for, so no caller -- and therefore nothing the caller read out of a
         conversation -- can pin a lesson against a different household member.
 
-        Last open wins: when somebody starts another lesson, the previous one is gone
-        rather than lingering where a later read could find it.
+        Last open wins: when somebody starts ANOTHER lesson, the previous one is gone
+        rather than lingering where a later read could find it. Opening the lesson that
+        is ALREADY running is not another lesson, and it changes nothing: the running
+        session and everything noted against it stand. Without that, a model calling
+        start_lesson a second time mid-lesson erased every line already taught, and a
+        lesson worked through end to end was then downgraded to partial on finishing.
+
+        teachable_lines has two meanings and they are deliberately not the same:
+
+        * None -- the caller supplied no lines, so coverage cannot be measured and
+          worked_through_for answers None. This is the fallback for a caller that does
+          not know the lesson's content; no tool in this package takes it, and a test
+          scans the package to keep it that way.
+        * Anything else -- the caller DID read the lesson, and these are its lines. If
+          none survives normalisation the lesson has nothing to teach, and pinning it
+          would make its completion unmeasurable -- so the pin is refused. That is the
+          rule start_lesson's gate applies, stated here once so that every tool that
+          pins a lesson inherits it rather than each remembering to (redo_lesson did
+          not, and reopened an empty lesson whose completion then went unchecked).
 
         Raises LessonSessionRefusedError rather than returning None, because a caller
         must be able to tell "refused" from "nothing running" -- confusing the two is
@@ -192,10 +215,25 @@ class LessonSessionHolder:
         # shapes that are permitted covers the whole family, which a list of rejected
         # shapes never does -- see CLAUDE.md, where inverting a deny-list is the fix
         # that closed four separate defects.
-        if not _is_storable_id(lesson_id) or not _is_catalog_code(language_code):
+        if not _is_lesson_id(lesson_id) or not _is_catalog_code(language_code):
             raise LessonSessionRefusedError(_REFUSAL)
         if opened_at is not None and not _is_storable_timestamp(opened_at):
             raise LessonSessionRefusedError(_REFUSAL)
+
+        teachable: tuple[str, ...] = ()
+        if teachable_lines is not None:
+            teachable = tuple(dict.fromkeys(filter(None, (_for_matching(line) for line in teachable_lines))))
+            if not teachable:
+                raise LessonSessionRefusedError(_REFUSAL)
+
+        running = self._session
+        if running is not None and running.lesson_id == lesson_id and running.language_code == language_code:
+            # The same lesson, for the same learner (the holder is bound to one). Keep
+            # it, and keep what has been said in it. Deliberately checked AFTER the
+            # argument checks, so a malformed re-open is still refused rather than
+            # waved through on the strength of matching something already pinned.
+            logger.debug("Kept the running lesson, which was opened again")
+            return running
 
         session = LessonSession(
             lesson_id=lesson_id,
@@ -209,7 +247,8 @@ class LessonSessionHolder:
         # leaves coverage unmeasurable, which worked_through_for reports as "unknown"
         # rather than as "not worked through" -- see that method for why the difference
         # has to survive.
-        self._teachable = tuple(dict.fromkeys(filter(None, (_for_matching(line) for line in teachable_lines))))
+        self._teachable = teachable
+        self._longest_first = tuple(sorted(teachable, key=len, reverse=True))
         self._spoken = set()
         self._learner_turns = 0
         # One constant and no interpolation, like every other log line in this module.
@@ -242,13 +281,28 @@ class LessonSessionHolder:
         if not spoken:
             return
         # Padded on both sides so a match has to fall on word boundaries. Unpadded
-        # containment marked "uno" as said inside "un desayuno", and because drills are
-        # drawn from the dialogue that let one utterance tick off several lines at once
-        # -- which made the real floor a fraction of the advertised third.
-        padded = f" {spoken} "
-        for line in self._teachable:
-            if line not in self._spoken and f" {line} " in padded:
+        # containment marked "uno" as said inside "un desayuno".
+        #
+        # And each spoken word is evidence for ONE line, never several. Word boundaries
+        # alone did not stop one utterance ticking off many lines, because drills are
+        # drawn from the dialogue: saying one Portuguese dialogue turn also "said" up to
+        # eight single-word drills lifted out of it, and two turns of a twelve-turn
+        # lesson cleared the floor. So lines are matched longest first, and the words a
+        # match used are taken out of the utterance before shorter lines are looked for.
+        # A drill lifted from a turn therefore counts only when it is said on its own --
+        # which is what drilling it is. Already-spoken lines consume their words too,
+        # or repeating a turn would tick off the drills inside it the second time.
+        remaining = f" {spoken} "
+        for line in self._longest_first:
+            padded_line = f" {line} "
+            if padded_line in remaining:
                 self._spoken.add(line)
+            # "|" can never be part of a line: _for_matching keeps only letters, digits
+            # and single spaces, so the gap it leaves matches nothing. One occurrence at
+            # a time, because two back-to-back occurrences share the space between them
+            # and a single replace() pass would leave the second one standing.
+            while padded_line in remaining:
+                remaining = remaining.replace(padded_line, " | ", 1)
 
     def note_learner_turn(self, learner_id: str | None) -> None:
         """Record that the learner said something while this lesson was running.
@@ -336,6 +390,7 @@ class LessonSessionHolder:
         # and count somebody's finished work towards a lesson they have not started --
         # which is the same class of fault as handing one learner's session to another.
         self._teachable = ()
+        self._longest_first = ()
         self._spoken = set()
         self._learner_turns = 0
         logger.debug("Forgot the running lesson")
@@ -351,8 +406,8 @@ class LessonSessionHolder:
 _REFUSAL = (
     "A lesson session needs a learner this holder was built for, a lesson and a lowercase language code -- "
     "each a string the store can store and match, with no padding, whitespace or control characters -- and "
-    "an optional whole-number timestamp in range. Nothing was pinned and any lesson already running is "
-    "untouched. The lesson being practised is application state, decided by the app rather than named in "
+    "an optional whole-number timestamp in range -- and, when the lesson's lines are given, at least one line to "
+    "teach from. Nothing was pinned and any lesson already running is untouched. The lesson being practised is application state, decided by the app rather than named in "
     "the conversation, which is what stops a result being recorded against a lesson nobody ran."
 )
 
@@ -379,19 +434,24 @@ def _is_storable_id(value: object) -> bool:
     )
 
 
+# The store's permitted shape for a lesson id and a language code, restated rather
+# than imported (see the module docstring). Restating is how this drifted once: the
+# store inverted its rule to this allow-list and the copy here kept the old deny-list,
+# so a zero-width space could be pinned here and refused at finish_lesson instead.
+# test_lesson_session.py now runs both rules over every seeded id and a set of hostile
+# values and fails if they disagree, so a change on either side cannot go unnoticed.
+_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_CATALOG_CODE_LENGTHS = range(2, 9)
+
+
+def _is_lesson_id(value: object) -> bool:
+    """Say whether the store would accept this as a lesson id (learners/store.py, _cannot_name_a_lesson)."""
+    return isinstance(value, str) and _SLUG.fullmatch(value) is not None
+
+
 def _is_catalog_code(value: object) -> bool:
-    """Say whether this could name a language row in the catalog.
-
-    Everything an id must be, and lowercase besides: the catalog's CHECK stores only
-    lowercase codes, so "ES" binds cleanly and matches nothing exactly as " es" does.
-
-    The catalog's 2-to-8 length bound is deliberately NOT restated here. It is a
-    store-private constant, and a number copied across a package boundary is a number
-    that drifts; the code is validated again by the store when it is actually used to
-    look something up. What is duplicated here is the shape class -- padding, control
-    characters, case -- which is a property rather than a figure.
-    """
-    return _is_storable_id(value) and isinstance(value, str) and value == value.lower()
+    """Say whether the store would accept this as a language code (learners/store.py, _cannot_be_a_catalog_code)."""
+    return isinstance(value, str) and len(value) in _CATALOG_CODE_LENGTHS and _SLUG.fullmatch(value) is not None
 
 
 def _is_storable_timestamp(value: object) -> bool:

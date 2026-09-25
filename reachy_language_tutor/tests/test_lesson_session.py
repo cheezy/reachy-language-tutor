@@ -86,7 +86,7 @@ def _holder_for(learner_id: str | None = LEARNER_A) -> LessonSessionHolder:
     return LessonSessionHolder(learner_id)
 
 
-def _opened(holder: LessonSessionHolder, teachable_lines: tuple[str, ...] = ()) -> LessonSession:
+def _opened(holder: LessonSessionHolder, teachable_lines: tuple[str, ...] | None = None) -> LessonSession:
     """Open the standard lesson, the starting point of most cases below."""
     return holder.open(lesson_id=LESSON, language_code=LANGUAGE, teachable_lines=teachable_lines)
 
@@ -718,3 +718,233 @@ def test_the_one_permitted_writer_really_does_write_it() -> None:
     source = Path(main.__file__).read_text()
 
     assert "lesson_session=LessonSessionHolder(current_learner_id)" in source
+
+
+# --- Opening the lesson that is already running changes nothing -----------------------
+#
+# Measured before the fix: start_lesson called a second time mid-lesson re-pinned the
+# same lesson and emptied its coverage, so a lesson taught end to end -- coverage
+# (29, 42, 33), worked through -- read (0, 42, 0) afterwards and finish_lesson wrote it
+# down as partial. The code's own comments call blocking a real completion the worse of
+# the two failures this gate can make.
+
+
+def test_opening_the_running_lesson_again_keeps_everything_said_in_it() -> None:
+    """The same lesson re-opened is the same lesson, not a fresh start at it."""
+    holder = _holder_for()
+    first = _opened(holder, teachable_lines=("uma frase", "outra frase"))
+    holder.note_spoken(LEARNER_A, "uma frase")
+    holder.note_learner_turn(LEARNER_A)
+    assert holder.coverage_for(LEARNER_A) == (1, 2, 1)
+
+    again = _opened(holder, teachable_lines=("uma frase", "outra frase"))
+
+    assert again is first, "re-opening the running lesson replaced its session"
+    assert holder.coverage_for(LEARNER_A) == (1, 2, 1), "re-opening the running lesson erased what was taught in it"
+
+
+def test_opening_a_different_lesson_still_starts_it_from_nothing() -> None:
+    """The other half: last-open-wins is untouched for a lesson that is not running."""
+    holder = _holder_for()
+    _opened(holder, teachable_lines=("uma frase",))
+    holder.note_spoken(LEARNER_A, "uma frase")
+    holder.note_learner_turn(LEARNER_A)
+
+    holder.open(lesson_id="fr-02-introductions", language_code=LANGUAGE, teachable_lines=("uma frase",))
+
+    assert holder.coverage_for(LEARNER_A) == (0, 1, 0), "coverage from one lesson was counted towards another"
+
+
+def test_a_malformed_reopen_of_the_running_lesson_is_still_refused() -> None:
+    """Keeping the running lesson must not become a way round the argument checks."""
+    holder = _holder_for()
+    _opened(holder, teachable_lines=("uma frase",))
+
+    with pytest.raises(LessonSessionRefusedError):
+        holder.open(lesson_id=LESSON, language_code=LANGUAGE, opened_at=True)
+
+
+# --- A lesson with nothing to teach cannot be pinned, whoever pins it ------------------
+#
+# redo_lesson pinned an empty placeholder with no lines, so worked_through_for answered
+# None and a second "completed" was written with nothing taught. start_lesson had a gate
+# for this and redo_lesson did not: the fix-one-member shape. The rule now lives in
+# open(), so any caller that reads a lesson and hands over its lines inherits it.
+
+
+@pytest.mark.parametrize("lines", [(), [], ("",), ("¿?", "...", "  ")])
+def test_lines_that_hold_nothing_to_teach_are_refused_and_leave_the_running_lesson_alone(lines: Any) -> None:
+    """Given lines, and none of them is a line: there is nothing to measure, so no pin."""
+    holder = _holder_for()
+    running = holder.open(lesson_id="fr-02-introductions", language_code=LANGUAGE, teachable_lines=("uma frase",))
+
+    with pytest.raises(LessonSessionRefusedError):
+        holder.open(lesson_id=LESSON, language_code=LANGUAGE, teachable_lines=lines)
+
+    assert holder.read_for(LEARNER_A) is running, "a refused pin moved the running lesson"
+
+
+def test_supplying_no_lines_at_all_is_still_the_unmeasurable_fallback() -> None:
+    """None is "the caller did not read the lesson", which is not the same as empty."""
+    holder = _holder_for()
+
+    holder.open(lesson_id=LESSON, language_code=LANGUAGE)
+
+    assert holder.read_for(LEARNER_A) is not None
+    assert holder.worked_through_for(LEARNER_A) is None
+
+
+def test_every_tool_that_pins_a_lesson_hands_over_its_lines() -> None:
+    """The fallback above must stay a fallback: no tool may pin without the lines.
+
+    Parsed rather than grepped, over every module in the package, so a third tool that
+    pins a lesson is caught the day it is written. A call without teachable_lines would
+    pin a lesson whose completion nothing can check.
+    """
+    package = Path(lesson_session.__file__).parent
+    pinning_calls = []
+    for path in sorted(package.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "open"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "lesson_session"
+            ):
+                keywords = {keyword.arg for keyword in node.keywords}
+                pinning_calls.append((path.name, "teachable_lines" in keywords))
+
+    assert {name for name, _ in pinning_calls} == {"start_lesson.py", "redo_lesson.py"}, pinning_calls
+    assert all(has_lines for _, has_lines in pinning_calls), pinning_calls
+
+
+# --- Each spoken word is evidence for one line ------------------------------------------
+#
+# Measured before the fix: drills are lifted out of the dialogue, so saying one dialogue
+# turn also "said" every drill inside it. One Portuguese turn ticked off nine lines, and
+# two turns of a twelve-turn lesson plus five replies recorded a completion.
+
+
+def test_a_turn_said_once_counts_as_that_turn_and_not_as_the_drills_inside_it() -> None:
+    """The measured case in miniature: a turn, and two drills lifted out of it."""
+    holder = _holder_for()
+    _opened(holder, teachable_lines=("umas três quadras mais ou menos", "mais ou menos", "quadras"))
+
+    holder.note_spoken(LEARNER_A, "Umas três quadras, mais ou menos.")
+
+    assert holder.coverage_for(LEARNER_A) == (1, 3, 0), "one utterance was counted as several lines"
+
+
+def test_a_drill_said_on_its_own_counts_and_repeating_the_turn_does_not_count_it() -> None:
+    """Drilling it is what counts it; hearing the turn again does not."""
+    holder = _holder_for()
+    _opened(holder, teachable_lines=("umas três quadras mais ou menos", "mais ou menos", "quadras"))
+    holder.note_spoken(LEARNER_A, "Umas três quadras, mais ou menos.")
+    holder.note_spoken(LEARNER_A, "Umas três quadras, mais ou menos.")
+    assert holder.coverage_for(LEARNER_A) == (1, 3, 0), "the second telling of a turn ticked off its drills"
+
+    holder.note_spoken(LEARNER_A, "Repita: mais ou menos.")
+
+    assert holder.coverage_for(LEARNER_A) == (2, 3, 0)
+
+
+def test_two_separate_lines_in_one_utterance_both_count() -> None:
+    """Consuming words is not the same as counting one line per utterance."""
+    holder = _holder_for()
+    _opened(holder, teachable_lines=("bom dia", "muito obrigada"))
+
+    holder.note_spoken(LEARNER_A, "Bom dia! E depois: muito obrigada.")
+
+    assert holder.coverage_for(LEARNER_A) == (2, 2, 0)
+
+
+def test_a_line_said_twice_back_to_back_uses_both_occurrences_up() -> None:
+    """Two adjacent occurrences share a space; both must be taken out, not just the first."""
+    holder = _holder_for()
+    _opened(holder, teachable_lines=("sim sim", "sim"))
+
+    holder.note_spoken(LEARNER_A, "sim sim sim sim")
+
+    assert holder.coverage_for(LEARNER_A) == (1, 2, 0), "a word already used by one line was counted again"
+
+
+@pytest.mark.parametrize(
+    ("lesson_id", "language_code"),
+    [
+        ("es-fast-01-getting-started-in-class​", "es"),
+        ("es-fast-01-getting-started-in-class", "es​"),
+        ("es-fast-01-getting-started-in-class", "espanolxx"),
+        ("﻿es-fast-01-getting-started-in-class", "es"),
+    ],
+)
+def test_the_holder_refuses_exactly_what_the_store_would_refuse(lesson_id: str, language_code: str) -> None:
+    """A pin the store would reject must be refused at the pin, not at finish_lesson.
+
+    The holder once carried its own copy of the store's id rule. The store moved to an
+    allow-list and the copy did not, so a zero-width space or an over-long code passed
+    here and was refused only later, as an unexplained "no such lesson". These are
+    values the store refuses; each must be refused here too.
+    """
+    assert (
+        store._cannot_name_a_lesson(lesson_id) is not None
+        or store._cannot_be_a_catalog_code(language_code) is not None
+    ), "the case is only meaningful if the store refuses it"
+    holder = LessonSessionHolder("sample-learner")
+    with pytest.raises(LessonSessionRefusedError):
+        holder.open(lesson_id, language_code, teachable_lines=("hola",))
+
+
+_HOSTILE_IDS = (
+    "",
+    " es",
+    "ES",
+    "es ",
+    "es\u200b",
+    "\ufeffes",
+    "es\u00ad",
+    "es--x",
+    "-es",
+    "es-",
+    "e",
+    "espanolxx",
+    "espanol",
+    "es_01",
+    "es/01",
+    "\ud800",
+    "é",
+    "es-fast-01-getting-started-in-class\u200b",
+    None,
+    7,
+    b"es",
+    ["es"],
+)
+
+
+def test_the_holders_id_rules_agree_with_the_stores_on_every_seeded_id_and_hostile_value(tmp_path: Path) -> None:
+    """lesson_session restates the store's id rules; this is what keeps the copy honest.
+
+    Both rules run over every lesson id and language code a real seed produces, plus
+    values chosen to sit on each edge of the store's allow-list. Any disagreement is a
+    pin the store would refuse later, or a real lesson the holder would refuse now.
+    """
+    assert store.ensure_learner_database(tmp_path).ready is True
+    connection = store.connect(tmp_path)
+    try:
+        seeded = connection.execute("SELECT id, language_code FROM lessons").fetchall()
+    finally:
+        connection.close()
+    assert len(seeded) >= 50, "the seed produced too few lessons for this to prove much"
+
+    lesson_ids = [row[0] for row in seeded] + list(_HOSTILE_IDS)
+    codes = sorted({row[1] for row in seeded}) + list(_HOSTILE_IDS)
+    disagreements = [
+        ("lesson id", value)
+        for value in lesson_ids
+        if lesson_session._is_lesson_id(value) != (store._cannot_name_a_lesson(value) is None)
+    ] + [
+        ("language code", value)
+        for value in codes
+        if lesson_session._is_catalog_code(value) != (store._cannot_be_a_catalog_code(value) is None)
+    ]
+    assert disagreements == [], disagreements

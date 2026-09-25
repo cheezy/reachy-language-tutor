@@ -103,8 +103,9 @@ class StartLesson(Tool):
         "'reason' says why. A reason of 'all_lessons_finished' is good news, not a failure -- say they have "
         "finished everything you have in that language. A reason of 'lesson_not_written_yet' is different and "
         "is not good news: that lesson is in the plan with nothing written in it, so say plainly that you "
-        "cannot teach it yet, name the languages in 'languages_with_material' as the ones you can, and do "
-        "not offer to make one up. Never invent a lesson, a title or a figure."
+        "cannot teach it yet, name the languages in 'languages_to_offer_instead' as the ones you can teach "
+        "instead -- those, and no others: the language just refused is left out because its next lesson is the "
+        "one with nothing written -- and do not offer to make one up. Never invent a lesson, a title or a figure."
     )
     # One property, and nothing identity-shaped may ever join it -- not a learner, and
     # not a lesson either. The learner's identity comes from application state, and the
@@ -245,7 +246,17 @@ class StartLesson(Tool):
                 "lesson_not_written_yet",
                 language=matched.name,
                 language_code=matched.code,
+                # The catalog fact, unchanged, so every tool that returns this field
+                # means the same list by it (the locked profile relies on that).
                 languages_with_material=with_material,
+                # And what to OFFER, which is not the same list here. The language just
+                # refused has material, but its next lesson has none, so offering it
+                # would have the tutor propose exactly the lesson it has just declined
+                # -- and the same call would refuse again. A separate field rather than
+                # a filtered languages_with_material, because a field that means two
+                # different things in two tools is the drift split_catalog_by_material
+                # exists to prevent.
+                languages_to_offer_instead=[name for name in with_material if name != matched.name],
             )
 
         try:

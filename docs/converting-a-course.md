@@ -294,11 +294,14 @@ lessons nobody has converted still read back cleanly beside the converted ones.
 The approved-unit allow-list itself lives in `tests/approved_units.py`, beside the
 function that applies it, so the list and the meaning of "approved" cannot drift apart.
 
-**The two screens hold Italian and English terms only.** The excluded-vocabulary screen
-and the model-directed-phrasing screen run over every course that ships, but their word
-lists do not follow you into a new language -- `policía` does not contain `police` and
-`pasaporte` does not contain `passport`. Add your language'''s terms, or they will pass
-green having inspected nothing. Step 3 makes the same point about the human screen, and
+**The two screens hold only the languages somebody added.** The excluded-vocabulary
+screen and the model-directed-phrasing screen run over every course that ships, but their
+word lists do not follow you into a new language -- `policía` does not contain `police`
+and `pasaporte` does not contain `passport`. Today the excluded-vocabulary screen in
+`tests/test_converted_lessons.py` carries Italian, English, Spanish, Portuguese and French
+terms; the model-directed-phrasing screen is
+English phrases only. Add your language's terms, or they will pass green having
+inspected nothing. Step 3 makes the same point about the human screen, and
 the human screen is the control; these are the backstop behind it.
 
 Add your course to `APPROVED_UNITS`, which is keyed **by course name** and then by unit:

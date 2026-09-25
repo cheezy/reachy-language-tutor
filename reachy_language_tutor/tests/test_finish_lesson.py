@@ -843,3 +843,168 @@ def test_matching_keeps_letters_and_digits_and_drops_everything_else() -> None:
     # Inverted punctuation goes, the accent stays -- so an unaccented rendering of the
     # same words is NOT the same line.
     assert _for_matching("¿Qué es esto?") != _for_matching("Que es esto?")
+
+
+# --- The floor, measured over every converted lesson (each word counts once) -----------
+#
+# Before each spoken word counted towards one line only, a dialogue turn also ticked off
+# every drill lifted out of it: one Portuguese turn counted as nine lines, and two turns
+# of pt-fast-03 plus five replies of any content recorded a completion. Tightening that
+# is only safe if a lesson really taught end to end still completes, so both directions
+# are asserted over the whole converted catalog rather than one example.
+
+
+def _converted_lessons(instance: Path) -> list[tuple[str, str, Any]]:
+    """Every converted lesson in the seeded catalog, with its language and content."""
+    from reachy_language_tutor.learners import get_language_catalog
+
+    found = []
+    for language in get_language_catalog(instance_path=instance):
+        progress = get_progress(SEEDED_LEARNER, language.code, instance_path=instance)
+        assert progress is not None
+        for lesson in progress.completed + progress.remaining:
+            source = store.get_lesson_content(lesson.id, instance_path=instance)
+            assert source is not None
+            if source.source is not None and source.source.origin == "converted_from_course":
+                found.append((lesson.id, language.code, source))
+    return found
+
+
+def _measured(lesson_id: str, code: str, content: Any, utterances: list[str]) -> LessonSessionHolder:
+    from reachy_language_tutor.tools.start_lesson import _lines_worth_hearing
+
+    holder = LessonSessionHolder(SEEDED_LEARNER)
+    holder.open(lesson_id=lesson_id, language_code=code, teachable_lines=_lines_worth_hearing(content))
+    for utterance in utterances:
+        holder.note_spoken(SEEDED_LEARNER, utterance)
+        holder.note_learner_turn(SEEDED_LEARNER)
+    return holder
+
+
+def test_every_converted_lesson_taught_end_to_end_still_counts_as_worked_through(instance: Path) -> None:
+    """Teach every converted lesson end to end, and every one must count.
+
+    Every dialogue turn and every drill cue said once, nothing else -- not the notes,
+    not a cue-response's expected answer -- with the learner replying to each.
+    """
+    lessons = _converted_lessons(instance)
+    assert len(lessons) == 23, f"expected the 23 converted lessons, found {len(lessons)}"
+
+    for lesson_id, code, content in lessons:
+        taught = [turn.text for turn in content.turns] + [
+            f"Repeat after me: {drill.target_text or drill.cue}" for drill in content.drills
+        ]
+        holder = _measured(lesson_id, code, content, taught)
+        assert holder.worked_through_for(SEEDED_LEARNER) is True, (
+            f"{lesson_id} was taught end to end and still does not count: {holder.coverage_for(SEEDED_LEARNER)}"
+        )
+
+
+def test_no_converted_lesson_counts_as_worked_through_on_two_dialogue_turns(instance: Path) -> None:
+    """The measured bypass, checked against the two turns that clear the most of each lesson."""
+    for lesson_id, code, content in _converted_lessons(instance):
+        turns = [turn.text for turn in content.turns]
+        pairs = [(a, b) for index, a in enumerate(turns) for b in turns[index + 1 :]]
+        for first, second in pairs:
+            holder = _measured(lesson_id, code, content, [first, second, "", "", ""])
+            assert holder.worked_through_for(SEEDED_LEARNER) is not True, (
+                f"{lesson_id} counts as worked through after two dialogue turns: {holder.coverage_for(SEEDED_LEARNER)}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_two_turns_of_the_measured_lesson_no_longer_record_a_completion(instance: Path) -> None:
+    """The exact repro, through the tool: pt-fast-03 turns 6 and 4, then five replies."""
+    from reachy_language_tutor.tools.start_lesson import _lines_worth_hearing
+
+    content = store.get_lesson_content("pt-fast-03-asking-for-directions", instance_path=instance)
+    assert content is not None
+    deps = _deps(current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    deps.lesson_session.open(
+        lesson_id="pt-fast-03-asking-for-directions", language_code="pt", teachable_lines=_lines_worth_hearing(content)
+    )
+    for text in (content.turns[5].text, content.turns[3].text):
+        deps.lesson_session.note_spoken(SEEDED_LEARNER, text)
+    for _ in range(5):
+        deps.lesson_session.note_learner_turn(SEEDED_LEARNER)
+    coverage = deps.lesson_session.coverage_for(SEEDED_LEARNER)
+
+    result = await FinishLesson()(deps, outcome="completed")
+
+    assert result["outcome"] == "partial", f"two turns were a completion: {coverage}"
+
+
+# --- next_lesson names a lesson that can actually be taught ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_next_lesson_names_the_next_lesson_with_something_written_in_it(instance: Path) -> None:
+    """Mid-course, the next converted unit -- the ordinary case, unchanged."""
+    from reachy_language_tutor.tools.start_lesson import _lines_worth_hearing
+
+    content = store.get_lesson_content("it-fast-01-what-time-is-it", instance_path=instance)
+    deps = _deps(current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    deps.lesson_session.open(
+        lesson_id="it-fast-01-what-time-is-it", language_code="it", teachable_lines=_lines_worth_hearing(content)
+    )
+
+    result = await FinishLesson()(deps, outcome="skipped")
+
+    assert result["next_lesson"]["title"] == "What time is it?", "a skipped lesson stays next"
+
+
+@pytest.mark.asyncio
+async def test_after_the_last_written_lesson_next_lesson_is_null_not_a_placeholder(instance: Path) -> None:
+    """Name no placeholder as next once every written lesson is finished.
+
+    Measured before the fix: next_lesson named 'Greetings and goodbyes', which
+    start_lesson then refused as lesson_not_written_yet.
+    """
+    for lesson_id in [f"it-fast-0{n}" for n in range(1, 6)]:
+        full = next(
+            lesson.id
+            for lesson in get_progress(SEEDED_LEARNER, "it", instance_path=instance).remaining
+            if lesson.id.startswith(lesson_id)
+        )
+        assert record_result(SEEDED_LEARNER, full, "completed", instance_path=instance).recorded
+    deps = _deps(current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    deps.lesson_session.open(lesson_id="it-fast-06-phone-call-about-a-flat", language_code="it")
+
+    result = await FinishLesson()(deps, outcome="completed")
+
+    assert result["recorded"] is True
+    assert result["next_lesson"] is None, f"it named a lesson nobody wrote: {result['next_lesson']}"
+    # The store's own count is still reported, unchanged: six placeholders remain.
+    assert result["remaining_count"] == 6
+
+
+# --- An unusable score is not a fault in the robot ---------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("score", [90.0, "90", 101])
+async def test_an_unusable_score_is_not_described_as_a_storage_fault(score: Any, instance: Path) -> None:
+    """Say a bad score is the score's fault, not a passing fault in the robot.
+
+    It used to share "I could not save that just now" with a store that was down,
+    which invites trying again later rather than at once without the score.
+    """
+    deps = _pinned_deps(instance)
+
+    refused = await FinishLesson()(deps, outcome="skipped", score=score)
+
+    assert refused["reason"] == "invalid_score"
+    assert refused["error"] != module._REFUSALS["storage_unavailable"]
+    assert refused["error"] != module._REFUSALS["rejected_by_database"]
+    assert "just now" not in refused["error"], "the sentence still reads as a passing fault"
+    # And what the description tells the model to do next really works.
+    retried = await FinishLesson()(deps, outcome="skipped")
+    assert retried["recorded"] is True
+
+
+def test_the_description_says_the_score_is_optional_and_what_to_do_when_it_is_refused() -> None:
+    """The retry is guidance to the model, so it lives in the description."""
+    description = FinishLesson.description
+    assert "A score is optional" in description
+    assert "'invalid_score'" in description and "no score" in description
+    assert "redo_lesson" in description, "the description still says only start_lesson opens a lesson"

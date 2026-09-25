@@ -138,7 +138,7 @@ async def test_the_whole_lesson_flow_runs_through_the_real_dispatch_path(instanc
     assert after["remaining_count"] == before["remaining_count"] - 1
     assert after["last_completed"] == lesson["title"]
     # It moved on rather than offering the same lesson again.
-    assert (after["next_lesson"] or {}).get("id") != lesson["id"]
+    assert (after["next_lesson"] or {}).get("position") != lesson["position"]
     # And the session is clear, so the tutor cannot save the same lesson twice.
     assert deps.lesson_session.read_for(SEEDED_LEARNER) is None
 
@@ -270,7 +270,10 @@ async def test_start_lesson_and_get_progress_agree_on_which_lesson_is_next(insta
     # store named, not one the model was told about and could repeat back differently.
     pinned = deps.lesson_session.read_for(SEEDED_LEARNER)
     assert pinned is not None
-    assert pinned.lesson_id == progress["next_lesson"]["id"]
+    named = store.get_progress(SEEDED_LEARNER, "es", instance_path=deps.instance_path)
+    assert named is not None and named.next_lesson is not None
+    assert named.next_lesson.position == progress["next_lesson"]["position"]
+    assert pinned.lesson_id == named.next_lesson.id
 
 
 @pytest.mark.asyncio

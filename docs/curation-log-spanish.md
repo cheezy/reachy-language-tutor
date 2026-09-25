@@ -854,7 +854,8 @@ Six Cycles, at catalog positions 1-6, which pushed the six Spanish placeholders 
 Two printed exchanges merged: the sample greeting conversation and the pen exchange
 (*¿Qué es esto?* — *Es una pluma* — *¿Cómo?* — *Por favor. Repita.*). The best beginner
 material in the volume and entirely neutral; the only substitution is the speaker
-naming. 11 turns, 8 notes, 18 drills (15 repetition, 3 cue-response).
+naming. 11 turns, 8 notes, 17 drills (15 repetition, 2 cue-response) — 18 and 3 when it
+shipped; D37, below, withdrew the self-answering cue-response.
 
 > **A near-miss worth recording.** A first draft of this lesson bridged the two printed
 > exchanges with an invented pair — *¿Cómo se dice "my name is" en español?* / *Se dice
@@ -990,7 +991,8 @@ each answer survives as a **repetition** drill, which does not pretend the answe
 unique. Where the source offered alternatives the drills now teach them: `Jugoso.`,
 `Medio hecho.`, `No, estoy sola.`, `Muy bien, gracias.`, `Bastante bien, gracias.`
 
-Spanish now ships 78 repetition and 13 cue-response drills. **The suite did not catch
+Spanish then shipped 78 repetition and 13 cue-response drills; after D37 (below) it ships
+78 and 12. **The suite did not catch
 any of this and still would not**: the alternatives live on the printed page, not in
 the shipped string, so no test over the shipped text can see them. The control is
 reading the page beside the drill, and this log is the record that it was done.
@@ -1188,8 +1190,10 @@ from nothing, a Spanish learner can now:
 That is **six of twelve** Spanish lessons carrying content, the same proportion Italian
 has. The remaining six are the title-and-objective placeholders at positions 7-12.
 
-The gap that remains is the other three languages: French, German and Portuguese still
-have six placeholders each and no material at all.
+The gap that remained when this was written was the other three languages: French,
+German and Portuguese had six placeholders each and no material at all. Portuguese (six
+units) and French (five) have since been converted; German is the one language left with
+no material.
 
 ## What a reviewer should look at first
 

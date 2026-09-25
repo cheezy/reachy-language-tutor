@@ -500,14 +500,20 @@ async def test_nothing_personal_reaches_a_log(instance: Path, caplog: pytest.Log
 
 
 def _language_with_lessons_but_no_material(instance: Path, code: str = "nl", name: str = "Dutch") -> None:
-    """A catalogued language with a full syllabus and not a word written in it."""
+    """Catalogue a language with a full syllabus and not a word written in it."""
     connection = sqlite3.connect(store.learner_db_path_for_instance(instance))
     try:
         connection.execute("INSERT INTO languages (code, name) VALUES (?, ?)", (code, name))
         for position in (1, 2):
             connection.execute(
                 "INSERT INTO lessons (id, language_code, position, title, objective) VALUES (?, ?, ?, ?, ?)",
-                (f"{code}-0{position}-placeholder", code, position, f"Lesson {position}", "An objective, and nothing else."),
+                (
+                    f"{code}-0{position}-placeholder",
+                    code,
+                    position,
+                    f"Lesson {position}",
+                    "An objective, and nothing else.",
+                ),
             )
         connection.commit()
     finally:
@@ -726,3 +732,89 @@ async def test_a_lesson_whose_content_cannot_be_read_is_not_started(instance: Pa
     assert result["started"] is False, "an unreadable lesson must not start"
     assert result["reason"] == "could_not_start"
     assert deps.lesson_session.read_for(SEEDED_LEARNER) is None, "and nothing was pinned"
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_offers_other_languages_and_not_the_one_it_just_refused(instance: Path) -> None:
+    """Measured before the fix: Italian refused, and Italian offered in the same answer.
+
+    languages_with_material stays the catalog fact -- the profile relies on every tool
+    meaning the same list by that name -- so what to OFFER is a separate field.
+    """
+    connection = sqlite3.connect(store.learner_db_path_for_instance(instance))
+    for (lesson_id,) in connection.execute(
+        "SELECT id FROM lessons WHERE language_code = 'it' AND position <= 6 ORDER BY position"
+    ).fetchall():
+        connection.execute(
+            "INSERT INTO lesson_results (learner_id, lesson_id, outcome, score, recorded_at)"
+            " VALUES (?, ?, 'completed', 90, 1)",
+            (SEEDED_LEARNER, lesson_id),
+        )
+    connection.commit()
+    connection.close()
+
+    result = await _call({"language": "Italian"}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+
+    assert result["reason"] == "lesson_not_written_yet"
+    assert set(result["languages_to_offer_instead"]) == {"French", "Portuguese", "Spanish"}
+    assert "languages_to_offer_instead" in StartLesson.description
+
+
+# --- A language's own name for itself is an allow-listed spelling -----------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spoken", "code"),
+    [
+        ("Español", "es"),
+        ("Italiano", "it"),
+        ("Français", "fr"),
+        ("Português", "pt"),
+        ("DEUTSCH", "de"),
+        ("  italiano ", "it"),
+    ],
+)
+async def test_a_language_named_in_itself_is_the_language_it_names(spoken: str, code: str, instance: Path) -> None:
+    """Measured before the fix: each of these got "I do not teach that language"."""
+    from reachy_language_tutor.learners import get_language_catalog
+    from reachy_language_tutor.tools._language_choice import resolve_language
+
+    catalog = get_language_catalog(instance_path=instance)
+    matched = resolve_language(catalog, spoken)
+
+    assert matched is not None and matched.code == code
+    result = await _call({"language": spoken}, current_learner_id=SEEDED_LEARNER, instance_path=instance)
+    assert result.get("reason") != "language_not_taught", f"{spoken!r} was refused as a language not taught"
+
+
+@pytest.mark.parametrize("near_miss", ["Espanol", "Francais", "Portugues", "Italian language", "Brazilian Portuguese"])
+def test_nothing_is_matched_by_resemblance(near_miss: str, instance: Path) -> None:
+    """An allow-list of exact spellings: close is not the same, and nothing is guessed."""
+    from reachy_language_tutor.learners import get_language_catalog
+    from reachy_language_tutor.tools._language_choice import resolve_language
+
+    assert resolve_language(get_language_catalog(instance_path=instance), near_miss) is None
+
+
+def test_an_endonym_names_only_a_row_the_catalog_really_has() -> None:
+    """Keyed by code, so a language missing from the catalog stays missing under any name."""
+    from reachy_language_tutor.learners import CatalogLanguage
+    from reachy_language_tutor.tools._language_choice import resolve_language
+
+    only_spanish = (CatalogLanguage(code="es", name="Spanish", has_material=True),)
+
+    assert resolve_language(only_spanish, "Italiano") is None
+    assert resolve_language(only_spanish, "Español") == only_spanish[0]
+
+
+def test_a_decomposed_accent_is_the_same_letter_as_a_composed_one() -> None:
+    """ç typed as c plus a combining cedilla is still ç: composition, not folding."""
+    import unicodedata
+
+    from reachy_language_tutor.learners import CatalogLanguage
+    from reachy_language_tutor.tools._language_choice import resolve_language
+
+    french = (CatalogLanguage(code="fr", name="French", has_material=True),)
+
+    assert resolve_language(french, unicodedata.normalize("NFD", "Français")) == french[0]

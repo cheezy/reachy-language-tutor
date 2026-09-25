@@ -13,39 +13,41 @@ tool reads SQLite. This is the single constraint the rest of the page elaborates
 ## The path, layer by layer
 
 Five layers, read in this order to understand the whole flow. The tool layer is one
-layer but five files, so "five modules" undercounts it if taken literally.
+layer but six files, so "five modules" undercounts it if taken literally.
 
 | # | Layer | File |
 |---|---|---|
 | 1 | Identity and wiring | `main.py` |
 | 2 | The running-lesson pin (in memory) | `lesson_session.py` |
 | 3 | Tool dispatch and registry | `tools/core_tools.py` |
-| 4 | The five learner tools | `tools/get_profile.py`, `get_progress.py`, `start_lesson.py`, `get_lesson_content.py`, `finish_lesson.py` |
+| 4 | The six learner tools | `tools/get_profile.py`, `get_progress.py`, `start_lesson.py`, `get_lesson_content.py`, `finish_lesson.py`, `redo_lesson.py` |
 | 5 | Persistence | `learners/store.py` + `learners/schema.sql` |
 
 A spoken turn travels: microphone → `HuggingFaceRealtimeHandler`
 (`huggingface_realtime.py`, the LLM session) → a tool call routed through
-`tools/background_tool_manager.py` → `_dispatch_tool_call` (`core_tools.py:631`) →
-one of the five tools → `store.py` → SQLite. The result dict returns the same way and
+`tools/background_tool_manager.py` → `_dispatch_tool_call` (in `core_tools.py`) →
+one of the six tools → `store.py` → SQLite. The result dict returns the same way and
 the model speaks from it.
 
 The model never speaks a value a tool did not return. That is a contract carried in the
 tools' own descriptions rather than a mechanism, and each is worded for what its tool
-can fabricate: `start_lesson` says "never invent a lesson, a title or a figure"
-(`start_lesson.py:49`), `get_lesson_content` "do not invent vocabulary, examples or
-drills" (`get_lesson_content.py:89`), and `finish_lesson` -- which has nothing to invent
--- "never tell someone a lesson is saved when it is not" (`finish_lesson.py:51-52`).
+can fabricate: `start_lesson` says "Never invent a lesson, a title or a figure",
+`get_lesson_content` "Never invent vocabulary, an example or a drill", and
+`finish_lesson` -- which has nothing to invent -- "never tell someone a lesson is saved
+when it is not". Each is in that tool's `description`; line numbers are left out on
+purpose, because they were cited here once and went stale.
 The section on lessons without material below is where they earn their keep.
 
 ## Where identity comes from
 
-`main.py:35` holds `HARDCODED_CURRENT_LEARNER_ID`, and its comment says it is "the only
-place in the application package that chooses an identity: the LLM cannot reach it, and
-no tool or conversation may change it." Milestone 4 replaces that constant with face
-recognition; nothing else on this path changes when it does, which is the point of
-sealing it in one place.
+`main.resolve_current_learner_id` decides it. Milestone 4 replaced the hard-coded
+learner id that used to live in `main.py` with face recognition: one camera frame is
+compared at startup, and the id it yields is checked against the learner database
+before it is served. When nobody is recognised, the answer is None and every learner
+tool refuses rather than guessing. Nothing else on this path changed when recognition
+arrived, which is the point of deciding identity in one place.
 
-`build_tool_dependencies` (`main.py:110-146`) resolves it exactly once and seals it into
+`build_tool_dependencies` (in `main.py`) resolves it exactly once and seals it into
 two places at the same moment: `ToolDependencies.current_learner_id` and the
 `LessonSessionHolder`. They are set together so they cannot disagree about who is
 practising.
@@ -61,9 +63,10 @@ properties it genuinely needs, so an identity is not rejected — it is unrepres
 | `get_progress` | `language` |
 | `start_lesson` | `language` |
 | `finish_lesson` | `outcome`, `score` |
+| `redo_lesson` | `language` |
 
-`get_profile.py:26` is `{"type": "object", "properties": {}, "required": []}`, with the
-comment above it reading "No properties, and none may ever be added." A test parses
+`get_profile`'s schema is `{"type": "object", "properties": {}, "required": []}`, with
+the comment above it reading "No properties, and none may ever be added." A test parses
 these modules and asserts no other key is read from them, so the schema and the code
 cannot drift apart silently.
 
@@ -73,7 +76,7 @@ household with two.
 
 ## Where the lesson comes from
 
-`NEXT_LESSON_SQL` (`learners/store.py:364`) is the single source of truth:
+`NEXT_LESSON_SQL` (in `learners/store.py`) is the single source of truth:
 
 > the lowest-positioned lesson in that language whose LATEST result for that learner
 > is not a `completed` one.
@@ -90,17 +93,32 @@ learner takes it again, and the outcome `finish_lesson` writes at the end supers
 old completion. Nothing is deleted to do that, and `redo_lesson` itself writes nothing —
 `finish_lesson` remains the only conversation-reachable writer of `lesson_results`.
 
-Three different empty answers, kept distinct because they mean different things to the
-person listening:
+Four different empty answers from `start_lesson`, kept distinct because they mean
+different things to the person listening:
 
 | Situation | Reason code | What the learner should hear |
 |---|---|---|
 | Language not in the catalog | `language_not_taught` | It is not available; here are the ones that are |
 | Every lesson completed | `all_lessons_finished` | Congratulations — this is good news, not a failure |
 | Catalog has the language, no lessons | `no_lessons_yet` | A content gap, not an achievement |
+| The next lesson has nothing written in it | `lesson_not_written_yet` | It cannot be taught yet; here are other languages that can (`languages_to_offer_instead`, which leaves out the language just refused) |
 
-Collapsing the last two would tell a learner they had finished a course that was never
+Collapsing the middle two would tell a learner they had finished a course that was never
 written.
+
+`redo_lesson` refuses a lesson with nothing written in it too, with the same code and
+the same sentence. A learner can have finished such a lesson before any content existed
+for it — the seeded learner has two Spanish ones — and until the gate was added
+`redo_lesson` reopened it, pinned it with no lines, and let a second "completed" be
+written with nothing taught. `LessonSessionHolder.open` now refuses any pin whose lines
+were supplied and hold nothing, so every tool that pins a lesson inherits the rule.
+
+**What `finish_lesson` names as next.** Its `next_lesson` is the next lesson that has
+something written in it, not the store's next lesson. After the last converted lesson in
+a language those differ: the store's next is a placeholder `start_lesson` refuses, and
+naming it had the tutor promise a lesson the robot would then decline. Once no written
+lesson remains, `next_lesson` is null and the robot's language-finished reaction fires;
+`remaining_count` still reports the store's count, placeholders included.
 
 ## What survives a restart, and what does not
 
@@ -111,6 +129,12 @@ written.
 object, rebuilt on every run. Restart the app mid-lesson and no lesson is running:
 `finish_lesson` answers `no_lesson_running`, and asking to "carry on where we left off"
 starts the lesson again rather than resuming it.
+
+**Within one run, opening the lesson that is already running changes nothing.** A second
+`start_lesson` (or `redo_lesson`) for the pinned lesson keeps the session and every line
+already noted against it. It used to replace them: a lesson taught end to end read as
+nothing taught after a repeated `start_lesson`, and its completion was downgraded to
+partial. Opening a *different* lesson still replaces the running one.
 
 This is a real trust boundary rather than a bug to be fixed in passing. The results
 table is deliberately the only durable state, so there is exactly one thing to reason
@@ -124,6 +148,9 @@ person, because there is no other way in — see "What was not verified" below.
 
 Transcripts were read from the `/rpc` `conversation.transcript` broadcast rather than
 from the log, so that the log could stay at its default level for the privacy check.
+That broadcast is now off by default, because it sent a learner's words to anyone on the
+network. Repeating this needs `REACHY_MINI_DEV_BROADCAST_TRANSCRIPT=1`, as
+`manual-test-script.md` describes.
 
 **The offered lesson matched the database, including the hard case.** Before the
 session, `lesson_results` held `es-03-numbers` as `partial`. The prediction from
@@ -314,9 +341,14 @@ the tool directly and asserts against the result dict the model would have recei
 **And not only on that path.** W39's gate calls `lesson_has_nothing_to_teach` on the
 lesson that would actually start, not on the language, so the empty placeholder at
 position 7 is refused exactly as French is — the two guards use the same predicate on
-the same rendered content. There is therefore no ordinary conversation that reaches the
-`no_material` branch at all: `start_lesson` turns every such lesson away one call
-earlier. What is left for that branch is the case the two calls disagree about, which is
+the same rendered content. `start_lesson` therefore turns every such lesson away one call earlier.
+
+That sentence once went on to say that no ordinary conversation reaches the
+`no_material` branch at all, and it was false: `redo_lesson` reopened a finished lesson
+without that gate, and a learner whose last finished Spanish lesson was an empty
+placeholder reached `no_material` with one request. `redo_lesson` now applies the same
+gate, and `LessonSessionHolder.open` refuses a pin whose supplied lines hold nothing, so
+neither pinning tool can open such a lesson. What is left for that branch is the case the two calls disagree about, which is
 the lesson whose content changes between the gate and the read. Keeping it correct is
 defence in depth rather than a live path, and that is the honest description of its
 coverage — a unit test against the result dict, and no live run behind it.
@@ -427,26 +459,27 @@ no invention; this paragraph records the state at the time of W38, not today's.
 
 ## A content gap worth knowing about
 
-Two of five languages have written lesson material. Re-measured from a freshly seeded
-database on 2026-09-14, after the Spanish conversion landed:
+Four of five languages have written lesson material. Re-measured from a freshly seeded
+database (SEED_VERSION 9), counting rows in the content tables per language:
 
 | Language | Lessons | Lessons with material | Turns | Notes | Drills |
 |---|---|---|---|---|---|
-| French | 6 | 0 | 0 | 0 | 0 |
+| French | 11 | 5 | 47 | 26 | 60 |
 | German | 6 | 0 | 0 | 0 | 0 |
 | Italian | 12 | 6 | 82 | 42 | 113 |
-| Portuguese | 6 | 0 | 0 | 0 | 0 |
-| Spanish | 12 | 6 | 58 | 47 | 91 |
+| Portuguese | 12 | 6 | 78 | 40 | 144 |
+| Spanish | 12 | 6 | 58 | 47 | 90 |
 
-The twelve converted lessons -- six `it-fast-*` and six `es-fast-*` -- each take a
-position at the FRONT of their language, so the six title-and-objective placeholders
-behind them sit at 7-12. French, German and Portuguese are untouched at 1-6 because
-nothing has been converted for them. `docs/curation-log-italian-fast.md` and
-`docs/curation-log-spanish.md` record where every line came from.
+The twenty-three converted lessons -- `it-fast-*`, `es-fast-*` and `pt-fast-*` six each,
+`fr-fast-*` five -- take positions at the FRONT of their language, so the six
+title-and-objective placeholders behind them sit at 7-12 (6-11 in French). German is
+untouched at 1-6 because nothing has been converted for it. The four
+`docs/curation-log-*.md` files record where every line came from.
 
-So a French, German or Portuguese lesson today is still a tutor working from a one-line
-objective, and it will say so rather than fill the gap. **The catalog promises five
-languages and can now teach two.**
+So a German lesson today is still a tutor working from a one-line objective, and it will
+say so rather than fill the gap. So is lesson seven onwards in the other four, which
+`start_lesson` refuses as `lesson_not_written_yet`. **The catalog promises five
+languages and can teach four.**
 
 ## Driving this flow without a microphone
 
@@ -460,9 +493,11 @@ twelve methods, pinned as an allow-list in `_RPC_METHODS_EXPOSED_ON_THE_NETWORK`
 (`console.py:156-171`): `conversation.status`, `.say`, `.interrupt`, `.mic`, four
 `personalities.*`, two `voices.*`, `tool_spaces.list` and `profile_tools.get`. **Not**
 `backend.config`, which is registered but deliberately refused over the network by D20.
-`conversation.say` makes the *robot* speak. **None of the twelve injects a learner
-utterance**, and the transcript broadcast is outbound only — so over the network there is
-no inbound text path.
+`conversation.say` **does** inject a turn: it creates a `"role": "user"` message item and
+asks the model to respond (`HuggingFaceRealtimeHandler.say`), so over the network there
+*is* an inbound text path, and the model may act on it for the current learner. An earlier
+version of this paragraph said the opposite. That exposure is recorded as open in
+`docs/privacy-and-consent.md`.
 
 **In process, you can.** `tests/conversation_probe.py` holds the session in memory and its
 `say()` creates a user message item directly, which is a learner turn the model answers.

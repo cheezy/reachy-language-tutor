@@ -863,25 +863,30 @@ list of exceptions is only ever as complete as the last person to check it:
    them, which is the argument for listing the strings rather than trusting the rules.
 
 **Every shipped string that is not a whole printed sentence, listed rather than
-counted.** Of the 107 shipped French strings — 47 turns and 60 drill targets — **76 are
-whole sentences exactly as printed in a dialogue line**: all 47 turns, plus 29 drill
-targets that repeat one of those sentences entire. The other **31 drill targets are
-shorter than a sentence**, and here they all are:
+counted.** Of the 107 shipped French strings — 47 turns and 60 drill targets — **79 are
+whole sentences exactly as printed in a dialogue line**: all 47 turns, plus 32 drill
+targets that repeat one of those sentences, or a run of them, entire. The other **28 drill
+targets are shorter than a sentence**, and here they all are:
 
 | Lesson | Shorter-than-a-sentence drill targets |
 |---|---|
 | 1 | `Qu'est-ce que vous avez?`, `J'ai ces deux costumes.`, `le vêtement`, `le costume`, `la cravate`, `la chemise` |
 | 2 | `Je n'ai pas assez d'argent.`, `et avec ça?`, `la boulangerie`, `le pain de campagne` |
-| 3 | `Combien de tomates?`, `Vous en voulez?`, `Je ne mange jamais d'ail.`, `Hum! Et un kilo de raisins et deux pamplemousses.`, `la laitue`, `le pamplemousse` |
-| 4 | `Ah, oui! Entrez.`, `Je voudrais la mettre ici, dans ce coin.`, `l'armoire`, `l'ascenseur`, `le bon de livraison` |
-| 5 | `Allô, oui. Je vous écoute.`, `Je ne peux pas rentrer.`, `J'ai besoin d'un serrurier.`, `Votre adresse, s'il vous plaît?`, `première porte à droite`, `On vous envoie une voiture dans 45 minutes environ.`, `la clef`, `le serrurier`, `l'appel`, `la porte` |
+| 3 | `Combien de tomates?`, `Vous en voulez?`, `Je ne mange jamais d'ail.`, `la laitue`, `le pamplemousse` |
+| 4 | `Je voudrais la mettre ici, dans ce coin.`, `l'armoire`, `l'ascenseur`, `le bon de livraison` |
+| 5 | `Je ne peux pas rentrer.`, `J'ai besoin d'un serrurier.`, `Votre adresse, s'il vous plaît?`, `première porte à droite`, `On vous envoie une voiture dans 45 minutes environ.`, `la clef`, `le serrurier`, `l'appel`, `la porte` |
 
 Each one is a clause or phrase taken whole out of a dialogue line under rule 7, or a
 vocabulary entry under rule 2, or — for `la boulangerie` — the SETTING under rule 3, or
 the one expansion under rule 6. **The list is given rather than a tally because a tally
 is what went wrong here twice**: an earlier version of this paragraph named four such
 strings when there were far more, and the version after it said sixteen because it
-classified by final punctuation, which counts `et avec ça?` as a sentence.
+classified by final punctuation, which counts `et avec ça?` as a sentence. The version
+after that said 76 and 31 and listed three drill targets here that are whole dialogue
+lines — `Hum! Et un kilo de raisins et deux pamplemousses.`, `Ah, oui! Entrez.` and
+`Allô, oui. Je vous écoute.` The figures above were counted by a script over the shipped
+file: a target counts as whole when it equals one sentence of a turn, or a run of
+consecutive sentences of one turn, splitting after `.`, `?` or `!`.
 
 Rule 6 is that Lesson 5 drill, `Votre adresse, s'il vous plaît?`: a tutor says the
 phrase rather than the letters, and usage note 25 tells the learner that S.V.P. is how it

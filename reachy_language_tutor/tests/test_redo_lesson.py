@@ -48,13 +48,20 @@ async def _call(deps: ToolDependencies, name: str, args: dict[str, Any] | None =
 
 
 def _teach(deps: ToolDependencies, instance: Path) -> None:
-    """Say the pinned lesson's own lines, standing in for the conversation handler."""
+    """Say the pinned lesson's own lines, standing in for the conversation handler.
+
+    The dialogue AND the drills, each said on its own, which is what the profile tells
+    the tutor to do. Dialogue alone used to be enough only because a spoken turn also
+    ticked off every drill lifted out of it; each spoken word now counts towards one
+    line, so a drill has to be drilled to count.
+    """
     session = deps.lesson_session.read_for(SEEDED_LEARNER)
     assert session is not None
     content = store.get_lesson_content(session.lesson_id, instance_path=instance)
     assert content is not None
-    for turn in content.turns:
-        deps.lesson_session.note_spoken(SEEDED_LEARNER, turn.text)
+    said = [turn.text for turn in content.turns] + [drill.target_text or drill.cue for drill in content.drills]
+    for line in said:
+        deps.lesson_session.note_spoken(SEEDED_LEARNER, line)
         deps.lesson_session.note_learner_turn(SEEDED_LEARNER)
 
 
@@ -242,3 +249,48 @@ def test_finish_lesson_is_still_the_only_tool_that_writes_a_result() -> None:
         "second place that boundary has to be got right. If a new writer is genuinely wanted, that "
         "is a decision about the security boundary rather than housekeeping."
     )
+
+
+@pytest.mark.asyncio
+async def test_a_last_finished_lesson_with_nothing_written_in_it_is_not_reopened(instance: Path) -> None:
+    """The measured defect: the seeded learner finished two Spanish placeholders.
+
+    Before the fix this reopened 'Introducing yourself' -- a title and an objective with
+    no dialogue, notes or drills -- pinned it with no lines, and a "completed" was then
+    written for it with nothing taught, because an unmeasurable lesson is not downgraded.
+    start_lesson refuses such a lesson with lesson_not_written_yet; this now does too.
+    """
+    deps = _deps(instance)
+    placeholders = ["es-01-greetings", "es-02-introductions"]
+    before = {lesson_id: _rows(instance, lesson_id) for lesson_id in placeholders}
+    assert before == {"es-01-greetings": ["completed"], "es-02-introductions": ["completed"]}, (
+        "the seed no longer gives this learner finished placeholders, so this proves nothing"
+    )
+
+    answer = await _call(deps, "redo_lesson", {"language": "Spanish"})
+
+    assert answer["reopened"] is False
+    assert answer["reason"] == "lesson_not_written_yet"
+    assert set(answer["languages_with_material"]) == {"French", "Italian", "Portuguese", "Spanish"}
+    assert deps.lesson_session.read_for(SEEDED_LEARNER) is None, "an empty lesson was pinned anyway"
+    # And so there is nothing for a "completed" to be written against.
+    saved = await _call(deps, "finish_lesson", {"outcome": "completed"})
+    assert saved["reason"] == "no_lesson_running"
+    assert {lesson_id: _rows(instance, lesson_id) for lesson_id in placeholders} == before
+
+
+@pytest.mark.asyncio
+async def test_a_reopened_lesson_opened_again_keeps_what_was_already_taught(instance: Path) -> None:
+    """The idempotent re-open reaches redo_lesson too: asking twice is not starting over."""
+    deps = _deps(instance)
+    await _call(deps, "start_lesson", {"language": "Italian"})
+    _teach(deps, instance)
+    await _call(deps, "finish_lesson", {"outcome": "completed"})
+    await _call(deps, "redo_lesson", {"language": "Italian"})
+    _teach(deps, instance)
+    taught = deps.lesson_session.coverage_for(SEEDED_LEARNER)
+
+    await _call(deps, "redo_lesson", {"language": "Italian"})
+
+    assert deps.lesson_session.coverage_for(SEEDED_LEARNER) == taught
+    assert (await _call(deps, "finish_lesson", {"outcome": "completed"}))["outcome"] == "completed"

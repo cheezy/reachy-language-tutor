@@ -611,3 +611,95 @@ async def test_a_warmed_robot_really_reacts_to_a_recorded_result(
 
     assert warmed["recorded"] is True
     assert _queued(warmed_manager) == ["success1"], "a warmed robot still did not react to a recorded result"
+
+
+# --- redo_lesson starts a lesson, so it reacts the way start_lesson does ----------------
+
+
+async def _finish_every_converted_italian_lesson_but_the_last(instance: Path) -> ToolDependencies:
+    """Record completions for Italian positions 1-5 directly, and pin position 6.
+
+    Written straight to the store rather than taught, because what is under test is the
+    reaction to the LAST one; the lesson pinned is really taught below so the evidence
+    gate lets its completion stand.
+    """
+    progress = store.get_progress(SEEDED_LEARNER, "it", instance_path=instance)
+    assert progress is not None
+    converted = [lesson for lesson in progress.remaining if lesson.position <= 6]
+    assert len(converted) == 6, "the six converted Italian units, or this is about something else"
+    for lesson in converted[:5]:
+        assert store.record_result(SEEDED_LEARNER, lesson.id, "completed", instance_path=instance).recorded
+    return converted[5]
+
+
+@pytest.mark.asyncio
+async def test_redo_lesson_queues_the_lesson_started_move_only_when_it_reopened_one(
+    instance: Path, loaded: MagicMock
+) -> None:
+    """A reopened lesson is a lesson the app just pinned; a refused one is not."""
+    from reachy_language_tutor.tools.redo_lesson import RedoLesson
+
+    refused = await RedoLesson()(
+        _deps(current_learner_id=SEEDED_LEARNER, instance_path=instance, movement_manager=loaded), language="Spanish"
+    )
+    assert refused["reopened"] is False, "the seeded learner's last Spanish lesson is an empty placeholder"
+    assert loaded.queue_move.call_count == 0, "a lesson that was not reopened was nodded at"
+
+    assert store.record_result(
+        SEEDED_LEARNER, "it-fast-01-what-time-is-it", "completed", instance_path=instance
+    ).recorded
+    reopened_manager = MagicMock()
+    reopened = await RedoLesson()(
+        _deps(current_learner_id=SEEDED_LEARNER, instance_path=instance, movement_manager=reopened_manager),
+        language="Italian",
+    )
+    assert reopened["reopened"] is True
+    assert _queued(reopened_manager) == ["attentive1"]
+
+
+# --- The language-finished reaction is reachable, and only when it is true --------------
+
+
+@pytest.mark.asyncio
+async def test_finishing_the_last_written_lesson_in_a_language_celebrates_it(
+    instance: Path, loaded: MagicMock
+) -> None:
+    """Measured before the fix: RESULT_RECORDED_COMPLETE, because a placeholder "remained".
+
+    Italian has six converted units in front of six title-and-objective placeholders,
+    which start_lesson refuses. So the language-finished event could never fire in any
+    language with material, and the answer named "Greetings and goodbyes" as next -- a
+    lesson the very next call declines to teach.
+    """
+    from reachy_language_tutor.tools.start_lesson import _lines_worth_hearing
+
+    last = await _finish_every_converted_italian_lesson_but_the_last(instance)
+    deps = _deps(current_learner_id=SEEDED_LEARNER, instance_path=instance, movement_manager=loaded)
+    content = store.get_lesson_content(last.id, instance_path=instance)
+    deps.lesson_session.open(lesson_id=last.id, language_code="it", teachable_lines=_lines_worth_hearing(content))
+    for line in [turn.text for turn in content.turns] + [drill.target_text or drill.cue for drill in content.drills]:
+        deps.lesson_session.note_spoken(SEEDED_LEARNER, line)
+        deps.lesson_session.note_learner_turn(SEEDED_LEARNER)
+
+    result = await FinishLesson()(deps, outcome="completed")
+
+    assert result["outcome"] == "completed"
+    assert result["next_lesson"] is None, f"it named a lesson with nothing written in it: {result['next_lesson']}"
+    assert _queued(loaded) == ["dance3"], "finishing every written lesson was not celebrated"
+
+
+@pytest.mark.asyncio
+async def test_a_lesson_that_could_not_be_read_back_is_not_celebrated_as_the_last(
+    instance: Path, loaded: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unknown is not finished: a failed read while looking ahead gets the ordinary nod."""
+    from reachy_language_tutor.tools import finish_lesson as finish_module
+
+    monkeypatch.setattr(finish_module, "get_lesson_content", lambda *_args, **_kwargs: None)
+    deps = _pinned_deps(instance, movement_manager=loaded)
+
+    result = await FinishLesson()(deps, outcome="completed")
+
+    assert result["recorded"] is True
+    assert result["language"] is None and result["next_lesson"] is None, "a partial read-back was handed on"
+    assert _queued(loaded) == ["success1"], "a lookup failure was celebrated as a finished language"

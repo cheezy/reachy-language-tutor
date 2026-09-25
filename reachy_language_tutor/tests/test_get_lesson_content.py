@@ -660,3 +660,13 @@ async def test_a_lesson_whose_every_drill_was_dropped_reads_as_having_no_materia
     assert result["reason"] == "no_material"
     assert "error" not in result
     assert result["lesson"]["title"] == real.lesson.title, "the tutor cannot even name the lesson it is declining"
+
+
+def test_the_description_does_not_say_only_start_lesson_opens_a_lesson() -> None:
+    """redo_lesson pins a lesson too, and after it this tool reads that one."""
+    from reachy_language_tutor.tools.get_lesson_content import GetLessonContent
+
+    description = " ".join(GetLessonContent.description.split())
+    assert "start_lesson began" not in description
+    assert "the one start_lesson or redo_lesson opened" in description
+    assert "after start_lesson or redo_lesson opens a lesson" in description
